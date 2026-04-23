@@ -331,9 +331,20 @@ function matchesCategory(page, cat) {
     if (/too (long|short)|imgs missing alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     return 'info';
   };
-  if (cat === '__err') return issues.some(i => sev(i) === 'error');
-  if (cat === '__warn') return issues.some(i => sev(i) === 'warn');
-  if (cat === '__info') return issues.some(i => sev(i) === 'info');
+  // Severity filters use the page's TOP severity so a page shows in exactly one
+  // bucket — a page with both an error and a warning counts as "error", not both.
+  if (cat === '__err' || cat === '__warn' || cat === '__info') {
+    let top = null;
+    for (const i of issues) {
+      const s = sev(i);
+      if (s === 'error') { top = 'error'; break; }
+      if (s === 'warn') top = 'warn';
+      else if (!top) top = 'info';
+    }
+    return (cat === '__err'  && top === 'error')
+        || (cat === '__warn' && top === 'warn')
+        || (cat === '__info' && top === 'info');
+  }
   if (cat === 'HTTP') return (page.status_code >= 400 && page.status_code < 600);
   if (cat === 'Redirect') return !!page.redirect_url;
   if (cat === 'noindex') return issues.some(i => i.toLowerCase() === 'noindex' || i.toLowerCase().startsWith('page set to noindex'));
