@@ -752,11 +752,47 @@ def _crawl_page(url, session, domain, pw_page=None):
             result['indexable'] = False
             result['issues'].append('noindex')
 
-        # Word count (strip nav/footer/script/style)
+        # Word count — strip nav/footer/script/style + class-based nav for
+        # non-semantic sites (Elementor/Divi/WP themes that render nav inside
+        # <div class="elementor-nav-menu">). Also prefer <main>/<article>
+        # content when present so the body word count reflects actual content,
+        # not menu/footer boilerplate (otherwise thin-content detection misfires).
         soup_body = BeautifulSoup(raw_html, 'html.parser')
-        for tag in soup_body(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'noscript']):
+        for tag in soup_body(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'noscript', 'form', 'svg']):
             tag.decompose()
-        body_text = soup_body.get_text(separator=' ', strip=True)
+        try:
+            nav_like_re = _re.compile(
+                r'(main[-_]?menu|primary[-_]?menu|site[-_]?nav|header[-_]?nav|'
+                r'mega[-_]?menu|nav[-_]?menu|top[-_]?menu|mobile[-_]?menu|sub[-_]?menu|'
+                r'breadcrumb|footer[-_]?menu|site[-_]?header|site[-_]?footer|'
+                r'menu[-_]?wrap|navbar|navigation|'
+                r'elementor-nav-menu|elementor-menu|elementor-widget-nav-menu|'
+                r'et_pb_menu|divi-menu|menu-item-has-children|\bmenu\b|'
+                r'offcanvas|hamburger|dropdown-menu)',
+                _re.I,
+            )
+            role_nav_re = _re.compile(r'^(navigation|menubar|menu)$', _re.I)
+            for el in list(soup_body.find_all(['div', 'section', 'ul', 'aside'])):
+                if not el.parent:
+                    continue
+                classes = ' '.join(el.get('class') or [])
+                ident = el.get('id') or ''
+                role = el.get('role') or ''
+                aria = el.get('aria-label') or ''
+                if (nav_like_re.search(classes) or nav_like_re.search(ident)
+                        or role_nav_re.match(role) or nav_like_re.search(aria)):
+                    el.decompose()
+        except Exception:
+            pass
+        main_container = (
+            soup_body.find('main')
+            or soup_body.find(attrs={'role': 'main'})
+            or soup_body.find('article')
+            or soup_body.find(id=_re.compile(r'^(main|content|primary|page-content)$', _re.I))
+            or soup_body.find(attrs={'class': _re.compile(r'(^|\s)(main-content|page-content|entry-content|post-content|article-content|site-main)(\s|$)', _re.I)})
+        )
+        text_root = main_container if main_container else soup_body
+        body_text = text_root.get_text(separator=' ', strip=True)
         result['word_count'] = len(body_text.split()) if body_text else 0
 
         # Body hash for exact-duplicate detection — normalize whitespace first
