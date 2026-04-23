@@ -1336,10 +1336,16 @@ def crawl_site():
         from collections import defaultdict as _dd
 
         # Duplicate titles / metas / H1s / body
+        # Skip redirected URLs (http/https/www variants that 301 to the canonical)
+        # and non-200 responses — those aren't unique content, just transit stops.
         def _group_by(field_getter):
             g = _dd(list)
             for r in results:
                 if not r.get('indexable', True):
+                    continue
+                if r.get('redirect_url'):
+                    continue
+                if r.get('status_code') and r['status_code'] >= 300:
                     continue
                 v = field_getter(r)
                 if v:
