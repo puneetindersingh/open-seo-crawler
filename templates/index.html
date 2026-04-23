@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Site Crawler</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ v }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Site Crawler</div>
+    <div class="sub">Fast concurrent crawl · CMS-aware · severity-tagged issues</div>
+  </header>
+
+  <main class="wrap">
+    <aside class="sidebar">
+      <label>Website URL
+        <input type="url" id="crawler-url" placeholder="https://example.com" />
+      </label>
+
+      <div class="slider-row">
+        <label>Max pages: <strong id="crawler-max-label">200</strong></label>
+        <input type="range" id="crawler-max" min="10" max="5000" value="200" step="10"
+               oninput="document.getElementById('crawler-max-label').textContent=this.value>=5000?'Unlimited':this.value" />
+      </div>
+      <div class="slider-row">
+        <label>Workers: <strong id="crawler-workers-label">5</strong> concurrent</label>
+        <input type="range" id="crawler-workers" min="1" max="20" value="5" step="1"
+               oninput="document.getElementById('crawler-workers-label').textContent=this.value" />
+      </div>
+      <div class="slider-row">
+        <label>Per-host delay: <strong id="crawler-speed-label">0.1s</strong></label>
+        <input type="range" id="crawler-speed" min="0" max="3" value="0.1" step="0.1"
+               oninput="document.getElementById('crawler-speed-label').textContent=this.value+'s'" />
+      </div>
+      <div class="slider-row">
+        <label>Max depth: <strong id="crawler-depth-label">10</strong></label>
+        <input type="range" id="crawler-depth" min="1" max="20" value="10" step="1"
+               oninput="document.getElementById('crawler-depth-label').textContent=this.value" />
+      </div>
+
+      <label class="check"><input type="checkbox" id="crawler-render-js" /> Render JS (Playwright, slower)</label>
+      <label class="check"><input type="checkbox" id="crawler-ignore-robots" /> Ignore robots.txt</label>
+
+      <details class="filters">
+        <summary>URL filters (include / exclude)</summary>
+        <label>Exclude patterns<br><small>One per line, * wildcard</small>
+          <textarea id="crawler-exclude" rows="5" placeholder="*/cart&#10;*?variant=*"></textarea>
+        </label>
+        <label>Include patterns<br><small>If set, URLs must match at least one</small>
+          <textarea id="crawler-include" rows="3"></textarea>
+        </label>
+      </details>
+
+      <div class="actions">
+        <button id="crawler-start-btn" onclick="startCrawl()">Start crawl</button>
+        <button id="crawler-stop-btn" onclick="stopCrawl()" style="display:none">Stop</button>
+      </div>
+
+      <div class="stats" id="crawler-stats" style="display:none">
+        <div><span>Crawled</span><strong id="cs-crawled">0</strong></div>
+        <div><span>Queued</span><strong id="cs-queued">0</strong></div>
+        <div><span>Errors</span><strong id="cs-errors">0</strong></div>
+        <div><span>Elapsed</span><strong id="cs-elapsed">0s</strong></div>
+      </div>
+    </aside>
+
+    <!-- Issues sidebar (middle column, shown after crawl starts) -->
+    <aside class="issues-sidebar" id="issues-sidebar" style="display:none">
+      <div class="ci-cat active" data-cat="all" onclick="selectCategory('all')">
+        <span>All Pages</span><span class="ci-count" data-count="all">0</span>
+      </div>
+
+      <div class="sev-grid">
+        <div class="sev-cell" data-cat="__err" onclick="selectCategory('__err')" title="Must-fix">
+          <div class="sev-lbl err">Errors</div><div class="sev-num err" data-count="__err">0</div>
+        </div>
+        <div class="sev-cell" data-cat="__warn" onclick="selectCategory('__warn')" title="Should-fix">
+          <div class="sev-lbl warn">Warnings</div><div class="sev-num warn" data-count="__warn">0</div>
+        </div>
+        <div class="sev-cell" data-cat="__info" onclick="selectCategory('__info')" title="Optional">
+          <div class="sev-lbl info">Info</div><div class="sev-num info" data-count="__info">0</div>
+        </div>
+      </div>
+
+      <div class="cat-label">Issues</div>
+      <div class="ci-cat" data-cat="Missing meta description" onclick="selectCategory('Missing meta description')"><span>Missing Meta Desc</span><span class="ci-count err" data-count="Missing meta description">0</span></div>
+      <div class="ci-cat" data-cat="Meta desc too long" onclick="selectCategory('Meta desc too long')"><span>Meta Too Long</span><span class="ci-count warn" data-count="Meta desc too long">0</span></div>
+      <div class="ci-cat" data-cat="Meta desc too short" onclick="selectCategory('Meta desc too short')"><span>Meta Too Short</span><span class="ci-count warn" data-count="Meta desc too short">0</span></div>
+      <div class="ci-cat" data-cat="Missing title" onclick="selectCategory('Missing title')"><span>Missing Title</span><span class="ci-count err" data-count="Missing title">0</span></div>
+      <div class="ci-cat" data-cat="Title too long" onclick="selectCategory('Title too long')"><span>Title Too Long</span><span class="ci-count warn" data-count="Title too long">0</span></div>
+      <div class="ci-cat" data-cat="Title too short" onclick="selectCategory('Title too short')"><span>Title Too Short</span><span class="ci-count warn" data-count="Title too short">0</span></div>
+      <div class="ci-cat" data-cat="Missing H1" onclick="selectCategory('Missing H1')"><span>Missing H1</span><span class="ci-count err" data-count="Missing H1">0</span></div>
+      <div class="ci-cat" data-cat="Multiple H1s" onclick="selectCategory('Multiple H1s')"><span>Multiple H1s</span><span class="ci-count warn" data-count="Multiple H1s">0</span></div>
+      <div class="ci-cat" data-cat="H1 same as title" onclick="selectCategory('H1 same as title')"><span>H1 Same as Title</span><span class="ci-count warn" data-count="H1 same as title">0</span></div>
+      <div class="ci-cat" data-cat="Missing canonical" onclick="selectCategory('Missing canonical')"><span>Missing Canonical</span><span class="ci-count err" data-count="Missing canonical">0</span></div>
+      <div class="ci-cat" data-cat="imgs missing alt" onclick="selectCategory('imgs missing alt')"><span>Images Missing Alt</span><span class="ci-count warn" data-count="imgs missing alt">0</span></div>
+      <div class="ci-cat" data-cat="No schema" onclick="selectCategory('No schema')"><span>No Schema Markup</span><span class="ci-count warn" data-count="No schema">0</span></div>
+      <div class="ci-cat" data-cat="Thin content" onclick="selectCategory('Thin content')"><span>Thin Content</span><span class="ci-count warn" data-count="Thin content">0</span></div>
+      <div class="ci-cat" data-cat="Slow" onclick="selectCategory('Slow')"><span>Slow Response</span><span class="ci-count warn" data-count="Slow">0</span></div>
+
+      <div class="cat-label">Redirects & Status</div>
+      <div class="ci-cat" data-cat="Redirect" onclick="selectCategory('Redirect')"><span>Redirects</span><span class="ci-count warn" data-count="Redirect">0</span></div>
+      <div class="ci-cat" data-cat="HTTP" onclick="selectCategory('HTTP')"><span>HTTP Errors (4xx/5xx)</span><span class="ci-count err" data-count="HTTP">0</span></div>
+      <div class="ci-cat" data-cat="noindex" onclick="selectCategory('noindex')"><span>Noindex Pages</span><span class="ci-count warn" data-count="noindex">0</span></div>
+      <div class="ci-cat" data-cat="Canonicalised" onclick="selectCategory('Canonicalised')"><span>Canonicalised</span><span class="ci-count warn" data-count="Canonicalised">0</span></div>
+
+      <div class="cat-label">Social & Security</div>
+      <div class="ci-cat" data-cat="Missing Open Graph" onclick="selectCategory('Missing Open Graph')"><span>Missing Open Graph</span><span class="ci-count warn" data-count="Missing Open Graph">0</span></div>
+      <div class="ci-cat" data-cat="Missing og:image" onclick="selectCategory('Missing og:image')"><span>Missing og:image</span><span class="ci-count warn" data-count="Missing og:image">0</span></div>
+      <div class="ci-cat" data-cat="Missing Twitter Card" onclick="selectCategory('Missing Twitter Card')"><span>Missing Twitter Card</span><span class="ci-count" data-count="Missing Twitter Card">0</span></div>
+      <div class="ci-cat" data-cat="Missing viewport" onclick="selectCategory('Missing viewport')"><span>Missing Viewport</span><span class="ci-count warn" data-count="Missing viewport">0</span></div>
+      <div class="ci-cat" data-cat="Mixed content" onclick="selectCategory('Mixed content')"><span>Mixed Content</span><span class="ci-count err" data-count="Mixed content">0</span></div>
+      <div class="ci-cat" data-cat="URL:" onclick="selectCategory('URL:')"><span>URL Hygiene</span><span class="ci-count warn" data-count="URL:">0</span></div>
+    </aside>
+
+    <section class="main">
+      <div id="crawler-cms-banner"></div>
+      <div id="issue-info-box" style="display:none"></div>
+      <div id="crawler-empty" class="empty">Enter a URL and click Start crawl.</div>
+      <div id="crawler-results" style="display:none" class="results-panel">
+        <div class="detail-title" id="detail-title">All Pages</div>
+        <div class="table-wrap">
+          <table id="crawler-table">
+            <thead>
+              <tr>
+                <th>URL</th>
+                <th>Status</th>
+                <th>Title</th>
+                <th>TLen</th>
+                <th>Meta</th>
+                <th>H1</th>
+                <th>Words</th>
+                <th>Time</th>
+                <th>Issues</th>
+              </tr>
+            </thead>
+            <tbody id="crawler-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Bottom dock — opens when you click a URL in the table. Part of the flex column
+           so it doesn't overlay content; the table area shrinks when the dock is open. -->
+      <div id="crawler-dock" hidden>
+        <div class="dock-header">
+          <div class="dock-url" id="dock-url"></div>
+          <div class="dock-tabs">
+            <button class="dock-tab active" data-tab="details" onclick="dockSwitchTab('details')">Details</button>
+            <button class="dock-tab" data-tab="issues" onclick="dockSwitchTab('issues')">Issues</button>
+            <button class="dock-tab" data-tab="inlinks" onclick="dockSwitchTab('inlinks')">Inlinks (<span id="dock-in-count">0</span>)</button>
+            <button class="dock-tab" data-tab="outlinks" onclick="dockSwitchTab('outlinks')">Outlinks (<span id="dock-out-count">0</span>)</button>
+          </div>
+          <button class="dock-close" onclick="closeDock()" title="Close">✕</button>
+        </div>
+        <div class="dock-body">
+          <div class="dock-pane" data-tab="details" id="dock-pane-details"></div>
+          <div class="dock-pane" data-tab="issues" id="dock-pane-issues" style="display:none"></div>
+          <div class="dock-pane" data-tab="inlinks" id="dock-pane-inlinks" style="display:none"></div>
+          <div class="dock-pane" data-tab="outlinks" id="dock-pane-outlinks" style="display:none"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/script.js?v={{ v }}"></script>
+</body>
+</html>
