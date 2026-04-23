@@ -1,5 +1,5 @@
 """
-Site Crawler — a fast, concurrent SEO-focused web crawler.
+Open SEO Crawler — a fast, concurrent SEO-focused web crawler.
 
 Single-file Flask app. Run with:
     python3 app.py

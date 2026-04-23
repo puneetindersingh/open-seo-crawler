@@ -1,4 +1,4 @@
-// Site Crawler — client.
+// Open SEO Crawler — client.
 let crawlerAbort = null;
 let crawlerTimer = null;
 let crawlerStart = 0;
