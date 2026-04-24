@@ -449,7 +449,7 @@ def _crawl_page(url, session, domain, pw_page=None):
         'canonical': '', 'canonical_match': False, 'canonical_kind': None,
         'word_count': 0, 'internal_links': 0, 'external_links': 0,
         'internal_link_urls': [], 'images_total': 0, 'images_no_alt': 0,
-        'schema_types': [], 'indexable': True, 'issues': [], 'error': None,
+        'schema_types': [], 'indexable': True, 'is_pagination': False, 'issues': [], 'error': None,
         'depth': 0, 'redirect_url': None, 'redirect_kind': None,
         'redirect_hops': 0, 'redirect_chain': [],
         'body_hash': '', 'security': {}, 'mixed_content': [],
@@ -586,6 +586,12 @@ def _crawl_page(url, session, domain, pw_page=None):
             if any(p in _parsed_url.query for p in ('utm_', 'gclid=', 'fbclid=')):
                 _url_issues.append('tracking parameters')
         result['url_issues'] = _url_issues
+
+        # --- Pagination detection ---
+        import re as _re_pag
+        _pag_path = _re_pag.search(r'/page/\d+/?$', _parsed_url.path)
+        _pag_query = _re_pag.search(r'\b(page|paged|pg)\s*=\s*[2-9]\d*', _parsed_url.query)
+        result['is_pagination'] = bool(_pag_path or _pag_query)
 
         # --- Security headers (applies to every response, HTML or not) ---
         hdrs = {k.lower(): v for k, v in resp.headers.items()}
@@ -953,10 +959,9 @@ def _crawl_page(url, session, domain, pw_page=None):
         result['external_link_urls'] = ext_links_list
         result['external_links'] = ext_count
 
-        # Issues detection — skip content/SEO checks for noindex pages
-        # (noindex means Google won't rank it, so missing titles/metas/H1/alt
-        # text / thin content / schema are irrelevant noise)
-        if result['indexable']:
+        # Issues detection — skip content/SEO checks for noindex or pagination pages
+        # (noindex = Google won't rank it; pagination = archive duplicate, not a canonical page)
+        if result['indexable'] and not result.get('is_pagination'):
             if not result['title']:
                 result['issues'].append('Missing title')
             elif result['title_len'] > 60:
