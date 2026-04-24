@@ -29,9 +29,10 @@
                oninput="document.getElementById('crawler-workers-label').textContent=this.value" />
       </div>
       <div class="slider-row">
-        <label>Per-host delay: <strong id="crawler-speed-label">0.1s</strong></label>
-        <input type="range" id="crawler-speed" min="0" max="3" value="0.1" step="0.1"
-               oninput="document.getElementById('crawler-speed-label').textContent=this.value+'s'" />
+        <label>Per-host delay: <strong id="crawler-speed-label">0.4s</strong></label>
+        <input type="range" id="crawler-speed" min="0" max="3" value="0.4" step="0.1"
+               oninput="(function(v){document.getElementById('crawler-speed-label').textContent=v+'s';var w=document.getElementById('crawler-delay-warn');if(w)w.style.display=parseFloat(v)<0.4?'block':'none';})(this.value)" />
+        <div id="crawler-delay-warn" style="display:none;margin-top:4px;font-size:11px;color:#b45309;background:#fefce8;border:1px solid #fde68a;border-radius:4px;padding:3px 8px;">Warning: delays below 0.4s may trigger rate limits or blocks on the target server.</div>
       </div>
       <div class="slider-row">
         <label>Max depth: <strong id="crawler-depth-label">10</strong></label>
