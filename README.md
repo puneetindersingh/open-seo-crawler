@@ -15,7 +15,7 @@ Built for SEO professionals, web developers, and site owners who want a technica
 - **Concurrent crawling** — 5 workers by default, 1-20 configurable. Per-host politeness keeps you under rate limits while running fast.
 - **CMS detection + one-click recommendations** — auto-detects Shopify, WordPress (+ Yoast / Rank Math), Webflow, Wix, Squarespace, Kajabi, Ghost, Drupal, HubSpot, Joomla. Applies sensible exclude patterns and JS-render settings per platform.
 - **Smart retry** — exponential backoff on 429 / 5xx / connection errors. Respects `Retry-After`. Per-host adaptive back-off doubles when a server starts rate-limiting, then decays back.
-- **Severity-tagged SEO issues** — every issue classified as error / warning / info. Click any category to see why it matters and cited sources (Google Search Central, Ahrefs, Moz, Screaming Frog, WCAG, etc.).
+- **Severity-tagged SEO issues** — every issue classified as error / warning / info. Click any category to see an info panel with the "why it matters" explanation and cited sources (Ahrefs, Moz).
 - **Full on-page SEO audit per URL** — title, meta description, H1, canonical, Open Graph, Twitter Card, schema markup, word count, images missing alt, redirects, mixed content, noindex, URL hygiene, Core Web Vitals signals.
 - **Click any URL for details** — bottom dock with full page details, issue breakdown, inlinks (pages pointing to this URL), outlinks (pages this URL points to).
 - **Robots.txt aware** (or ignore it, your choice).
@@ -36,6 +36,7 @@ Every page is checked for:
 - **Redirects** — real redirects vs trailing-slash / www / HTTPS normalisations (classified separately)
 - **HTTP errors** — 4xx / 5xx with retry counts
 - **Indexability** — `noindex` in meta robots or X-Robots-Tag
+- **Pagination** — `/page/N/` and `?page=N` archive URLs are crawled but skipped for SEO issue checks (no false positives for missing meta/title on paginated archive pages)
 - **Mobile-friendliness** — viewport meta tag presence
 - **Mixed content** — HTTPS pages loading HTTP resources
 - **URL hygiene** — uppercase, underscores, spaces, >115 chars, tracking parameters
@@ -69,7 +70,7 @@ playwright install chromium
 ## Usage
 
 1. Enter a website URL
-2. (Optional) tweak defaults — 200 pages, 5 workers, 0.1 s per-host delay, depth 10
+2. (Optional) tweak defaults — 200 pages, 5 workers, 0.4 s per-host delay, depth 10
 3. Click **Start crawl**
 
 The tool detects the target's CMS on the first request and offers a one-click **Apply recommendations** button that populates sensible exclude patterns and worker counts.
@@ -89,7 +90,7 @@ Click any issue category in the left sidebar to filter results and see an info p
 |---|---|---|
 | Max pages | 200 | Cap on total URLs crawled |
 | Workers | 5 | Concurrent HTTP workers (1-20) |
-| Per-host delay | 0.1 s | Min gap between two requests to the same host |
+| Per-host delay | 0.4 s | Min gap between two requests to the same host. A warning is shown if set below 0.4 s |
 | Max depth | 10 | Clicks from seed URL |
 | Render JS | off | Enable for SPAs (requires Playwright) |
 | Ignore robots.txt | off | Default: respect Disallow rules |
