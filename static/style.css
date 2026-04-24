@@ -332,3 +332,12 @@ body {
   padding: 1px 5px;
   border-radius: 3px;
 }
+
+/* Column visibility per category — JS adds classes to #crawler-table.
+   Site-crawler columns: 1=URL 2=Status 3=Title 4=TLen 5=Meta 6=H1 7=Words 8=Speed 9=Issues */
+#crawler-table.hide-col-title th:nth-child(3), #crawler-table.hide-col-title td:nth-child(3) { display: none; }
+#crawler-table.hide-col-tlen th:nth-child(4), #crawler-table.hide-col-tlen td:nth-child(4) { display: none; }
+#crawler-table.hide-col-meta th:nth-child(5), #crawler-table.hide-col-meta td:nth-child(5) { display: none; }
+#crawler-table.hide-col-h1 th:nth-child(6), #crawler-table.hide-col-h1 td:nth-child(6) { display: none; }
+#crawler-table.hide-col-words th:nth-child(7), #crawler-table.hide-col-words td:nth-child(7) { display: none; }
+#crawler-table.hide-col-speed th:nth-child(8), #crawler-table.hide-col-speed td:nth-child(8) { display: none; }
