@@ -1085,9 +1085,7 @@ def crawl_site():
     if max_pages >= 5000:
         max_pages = 999999  # unlimited
     max_depth = min(int(data.get('max_depth', 10) or 10), 20)
-    # Per-host politeness delay (minimum gap between two requests to the SAME host).
-    # Default 0.1s matches Screaming Frog's typical setting; workers on different hosts run freely.
-    crawl_delay = max(float(data.get('crawl_delay', 0.1) or 0.1), 0.0)
+    crawl_delay = max(float(data.get('crawl_delay', 0.4) or 0.4), 0.0)
     render_js = bool(data.get('render_js', False))
     ignore_robots = bool(data.get('ignore_robots', False))
     # Concurrent workers. Default 5 matches Screaming Frog. Clamped to [1, 20].
