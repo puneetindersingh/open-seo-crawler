@@ -403,6 +403,21 @@ def _normalize_crawl_url(url):
     return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, '', query, ''))
 
 
+def _crawl_slash_alt(url):
+    """Return the slash-toggled variant of a URL for dedup, or None if not applicable."""
+    from urllib.parse import urlparse, urlunparse
+    p = urlparse(url)
+    path = p.path
+    last_seg = path.rstrip('/').split('/')[-1]
+    if '.' in last_seg:
+        return None
+    if path.endswith('/') and path != '/':
+        alt_path = path.rstrip('/')
+    else:
+        alt_path = path + '/'
+    return urlunparse((p.scheme, p.netloc, alt_path, p.params, p.query, p.fragment))
+
+
 def _detect_js_platform(html):
     """Cheap signature check for JS-rendered platforms. Returns a human-
     readable platform name or None.
@@ -1262,6 +1277,12 @@ def crawl_site():
         in_flight = {}  # future -> (url, depth)
         consecutive_errors = 0
 
+        def _visit(url):
+            visited.add(url)
+            alt = _crawl_slash_alt(url)
+            if alt:
+                visited.add(alt)
+
         def _dequeue_next():
             """Pop the next URL that passes filters + robots. Returns (url, depth) or None."""
             while queue:
@@ -1269,16 +1290,16 @@ def crawl_site():
                 if url in visited or depth > max_depth:
                     continue
                 if not _url_allowed(url):
-                    visited.add(url)
+                    _visit(url)
                     continue
                 if not ignore_robots:
                     try:
                         if not rp.can_fetch('*', url):
-                            visited.add(url)
+                            _visit(url)
                             continue
                     except Exception:
                         pass
-                visited.add(url)
+                _visit(url)
                 return url, depth
             return None
 
@@ -1342,7 +1363,8 @@ def crawl_site():
                             key = (source_url, anchor, placement)
                             if not any((e.get('source'), e.get('anchor'), e.get('placement')) == key for e in bucket):
                                 bucket.append({'source': source_url, 'anchor': anchor, 'placement': placement})
-                            if link not in visited:
+                            alt = _crawl_slash_alt(link)
+                            if link not in visited and (not alt or alt not in visited):
                                 queue.append((link, depth + 1))
 
                         yield f"data: {json.dumps({'type': 'page', 'data': page_data, 'crawled': len(visited), 'queued': len(queue), 'errors': errors})}\n\n"
