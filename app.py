@@ -1067,6 +1067,29 @@ def _teardown_pw(pw_page, pw_browser, pw_ctx):
 
 
 
+@app.route('/recrawl-url', methods=['POST'])
+def recrawl_url():
+    """Re-crawl a single URL and return fresh page audit data."""
+    import requests as _req
+    from urllib.parse import urlparse
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'URL required'}), 400
+    domain = urlparse(url).netloc
+    try:
+        with _req.Session() as session:
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,*/*;q=0.9',
+                'Accept-Language': 'en-US,en;q=0.9',
+            })
+            result = _crawl_page(url, session, domain)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/crawl', methods=['POST'])
 def crawl_site():
     """BFS site crawl with SSE streaming of per-page results."""

@@ -47,18 +47,33 @@ function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+function _scCopyIcon(url) {
+  const sq = (url||'').replace(/"/g,'&quot;').replace(/'/g,"\\'");
+  return `<button type="button" onclick="copyUrl(this,'${sq}')" title="Copy URL" style="background:none;border:none;cursor:pointer;color:var(--text-muted,#94a3b8);padding:3px 5px;vertical-align:middle;line-height:1;border-radius:4px;" onmouseover="this.style.color='var(--accent,#6366f1)';this.style.background='var(--surface2,#f1f5f9)'" onmouseout="this.style.color='var(--text-muted,#94a3b8)';this.style.background='none'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>`;
+}
+function _scOpenIcon(url) {
+  const sh = (url||'').replace(/"/g,'&quot;');
+  return `${_scCopyIcon(url)}<a href="${sh}" target="_blank" rel="noopener" title="Open in new tab" style="display:inline-block;color:var(--text-muted,#94a3b8);text-decoration:none;padding:3px 5px;vertical-align:middle;border-radius:4px;" onmouseover="this.style.color='var(--accent,#6366f1)';this.style.background='var(--surface2,#f1f5f9)'" onmouseout="this.style.color='var(--text-muted,#94a3b8)';this.style.background='none'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>`;
+}
+function _scRefetchIcon(url) {
+  const sq = (url||'').replace(/"/g,'&quot;').replace(/'/g,"\\'");
+  return `<button type="button" onclick="scRecrawlUrl(this,'${sq}')" title="Re-crawl this URL" style="background:none;border:none;cursor:pointer;color:var(--text-muted,#94a3b8);padding:3px 5px;vertical-align:middle;line-height:1;border-radius:4px;" onmouseover="this.style.color='var(--accent,#6366f1)';this.style.background='var(--surface2,#f1f5f9)'" onmouseout="this.style.color='var(--text-muted,#94a3b8)';this.style.background='none'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-5.97"/></svg></button>`;
+}
+
 function renderRow(d) {
   const tbody = document.getElementById('crawler-tbody');
   const tr = document.createElement('tr');
+  tr.dataset.url = d.url;
   const statusColor = d.status_code >= 400 ? '#ef4444' : d.status_code >= 300 ? '#f59e0b' : '#22c55e';
   const path = d.url.replace(/^https?:\/\/[^\/]+/, '') || '/';
   const issues = (d.issues || []).map(i => `<span class="badge ${sevOf(i)}" title="${sevOf(i).toUpperCase()}">${escapeHtml(i)}</span>`).join('');
   const safe = d.url.replace(/"/g, '&quot;').replace(/'/g, "\\'");
   tr.innerHTML = `
     <td style="max-width:300px" title="${escapeHtml(d.url)}">
-      <span class="url-cell" onclick="openDock('${safe}')">${escapeHtml(path)}</span>
-      <button class="copy-icon" onclick="copyUrl(this,'${safe}')" title="Copy URL">⧉</button>
-      <a class="open-icon" href="${escapeHtml(d.url)}" target="_blank" rel="noopener" title="Open in new tab">↗</a>
+      <span style="display:flex;align-items:center;gap:2px;min-width:0;">
+        <span class="url-cell" onclick="openDock('${safe}')" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(path)}</span>
+        ${_scOpenIcon(d.url)}${_scRefetchIcon(d.url)}
+      </span>
     </td>
     <td style="color:${statusColor};font-weight:700">${d.status_code}</td>
     <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:#ef4444">missing</em>'}</td>
@@ -238,7 +253,7 @@ function startCrawl() {
   document.getElementById('crawler-cms-banner').innerHTML = '';
   document.getElementById('issue-info-box').style.display = 'none';
   document.getElementById('issue-info-box').innerHTML = '';
-  document.getElementById('detail-title').textContent = 'All Pages';
+  document.getElementById('detail-title-text').textContent = 'All Pages';
   document.getElementById('cs-crawled').textContent = '0';
   document.getElementById('cs-queued').textContent = '0';
   document.getElementById('cs-errors').textContent = '0';
@@ -366,10 +381,11 @@ window.selectCategory = function(cat) {
     'Missing Twitter Card': 'Pages Missing Twitter Card', 'Missing viewport': 'Pages Missing Viewport Meta',
     'Mixed content': 'HTTPS Pages Loading HTTP Resources', 'URL:': 'URL Hygiene Issues',
   };
-  document.getElementById('detail-title').textContent = titleMap[cat] || cat;
+  document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
   // Info box
   renderIssueInfo(cat);
+  _scSetColumns(cat);
 
   // Re-render the table with the filtered rows
   const tbody = document.getElementById('crawler-tbody');
@@ -441,4 +457,63 @@ function crawlFinished() {
   if (crawlerTimer) { clearInterval(crawlerTimer); crawlerTimer = null; }
   document.getElementById('crawler-start-btn').style.display = '';
   document.getElementById('crawler-stop-btn').style.display = 'none';
+}
+
+function scFilterByUrl(q) {
+  const term = (q || '').toLowerCase().trim();
+  const rows = document.querySelectorAll('#crawler-tbody tr[data-url]');
+  rows.forEach(row => {
+    const match = !term || (row.dataset.url || '').toLowerCase().includes(term);
+    row.style.display = match ? '' : 'none';
+    const next = row.nextElementSibling;
+    if (next && !next.dataset.url) next.style.display = match ? '' : 'none';
+  });
+  const clearBtn = document.getElementById('sc-url-search-clear');
+  if (clearBtn) clearBtn.style.display = term ? '' : 'none';
+}
+
+async function scRecrawlUrl(btn, url) {
+  if (btn) { btn.style.opacity = '0.35'; btn.disabled = true; }
+  try {
+    const resp = await fetch('/recrawl-url', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ url })
+    });
+    const fresh = await resp.json();
+    if (fresh.error) { console.warn('Recrawl error:', fresh.error); return; }
+    const idx = (crawlerResults || []).findIndex(r => r.url === url);
+    if (idx >= 0) {
+      fresh.depth = crawlerResults[idx].depth;
+      crawlerResults[idx] = fresh;
+    }
+    const activeCat = document.querySelector('.cat-item.active');
+    if (activeCat) activeCat.click();
+    const note = document.createElement('div');
+    note.textContent = '✓ Re-crawled: ' + (url.replace(/^https?:\/\/[^/]+/, '') || url);
+    note.style.cssText = 'position:fixed;bottom:80px;right:20px;background:#22c55e;color:#fff;padding:8px 14px;border-radius:6px;font-size:.8rem;z-index:9999;pointer-events:none;';
+    document.body.appendChild(note);
+    setTimeout(() => note.remove(), 3000);
+  } catch(e) {
+    console.error('Recrawl failed:', e);
+  } finally {
+    if (btn) { btn.style.opacity = '1'; btn.disabled = false; }
+  }
+}
+
+function _scSetColumns(cat) {
+  const table = document.getElementById('crawler-table');
+  if (!table) return;
+  const all = ['title','tlen','meta','h1','words','speed'];
+  table.classList.remove(...all.map(c => 'hide-col-' + c));
+  const show = (cols) => table.classList.add(...all.filter(c => !cols.includes(c)).map(c => 'hide-col-' + c));
+  if (cat === 'Missing meta description') return show(['url','status','title','meta','issues']);
+  if (cat === 'Meta desc too long' || cat === 'Meta desc too short') return show(['url','status','meta','issues']);
+  if (cat === 'Missing title') return show(['url','status','title','tlen','h1','issues']);
+  if (cat === 'Title too long' || cat === 'Title too short') return show(['url','status','title','tlen','issues']);
+  if (cat === 'Missing H1' || cat === 'Multiple H1s') return show(['url','status','h1','issues']);
+  if (cat === 'H1 identical to title tag') return show(['url','status','title','h1','issues']);
+  if (cat === 'Thin content') return show(['url','status','words','issues']);
+  if (cat === 'Slow') return show(['url','status','speed','issues']);
+  if (cat !== 'all' && !cat.startsWith('__')) return show(['url','status','title','issues']);
 }
