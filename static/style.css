@@ -341,3 +341,7 @@ body {
 #crawler-table.hide-col-h1 th:nth-child(6), #crawler-table.hide-col-h1 td:nth-child(6) { display: none; }
 #crawler-table.hide-col-words th:nth-child(7), #crawler-table.hide-col-words td:nth-child(7) { display: none; }
 #crawler-table.hide-col-speed th:nth-child(8), #crawler-table.hide-col-speed td:nth-child(8) { display: none; }
+
+/* Drag-select row highlighting */
+#crawler-tbody tr.cr-selected { background: rgba(99,102,241,0.12) !important; }
+#crawler-tbody { user-select: none; }
