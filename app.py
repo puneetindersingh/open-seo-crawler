@@ -976,7 +976,9 @@ def _crawl_page(url, session, domain, pw_page=None):
 
         # Issues detection — skip content/SEO checks for noindex or pagination pages
         # (noindex = Google won't rank it; pagination = archive duplicate, not a canonical page)
-        if result['indexable'] and not result.get('is_pagination'):
+        # Also skip URLs that redirected: the resolved target is crawled separately and
+        # any content issues belong on that row, not on the 301 source.
+        if result['indexable'] and not result.get('is_pagination') and not result.get('redirect_url'):
             if not result['title']:
                 result['issues'].append('Missing title')
             elif result['title_len'] > 60:
