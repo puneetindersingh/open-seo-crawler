@@ -410,6 +410,8 @@ window.selectCategory = function(cat) {
     const tbody = document.getElementById('crawler-tbody');
     tbody.innerHTML = '';
     _renderSitemapPanel(cat);
+    const bulkBtn = document.getElementById('crawler-bulk-recrawl-btn');
+    if (bulkBtn) bulkBtn.style.display = 'none';
     return;
   }
   // Drop any sitemap-panel content when switching back to a normal category.
@@ -423,8 +425,18 @@ window.selectCategory = function(cat) {
   // Re-render the table with the filtered rows
   const tbody = document.getElementById('crawler-tbody');
   tbody.innerHTML = '';
+  let _matched = 0;
   for (const r of crawlerResults) {
-    if (matchesCategory(r, cat)) renderRow(r);
+    if (matchesCategory(r, cat)) { renderRow(r); _matched++; }
+  }
+  // Show the bulk-recrawl button for any category that has rows. Lets the
+  // user fix a batch in WP, then verify with one click that the fix landed.
+  const bulkBtn = document.getElementById('crawler-bulk-recrawl-btn');
+  if (bulkBtn) {
+    bulkBtn.style.display = _matched ? 'inline-flex' : 'none';
+    bulkBtn.disabled = false;
+    const lbl = document.getElementById('crawler-bulk-recrawl-label');
+    if (lbl) lbl.textContent = `Re-crawl ${_matched} URL${_matched === 1 ? '' : 's'}`;
   }
 };
 
@@ -647,6 +659,69 @@ function scFilterByUrl(q) {
   const clearBtn = document.getElementById('sc-url-search-clear');
   if (clearBtn) clearBtn.style.display = term ? '' : 'none';
 }
+
+// Bulk re-crawl every URL currently visible in the detail panel — i.e.
+// every row that matches the active category AND survives the URL filter.
+let _scBulkRecrawlRunning = false;
+window.scBulkRecrawlVisible = async function(btn) {
+  if (_scBulkRecrawlRunning) return;
+  const rows = Array.from(document.querySelectorAll('#crawler-tbody tr[data-url]'))
+    .filter(r => r.style.display !== 'none');
+  const urls = [...new Set(rows.map(r => r.dataset.url).filter(Boolean))];
+  if (!urls.length) { alert('No rows to re-crawl.'); return; }
+  if (!confirm(`Re-crawl ${urls.length} URL${urls.length === 1 ? '' : 's'} now?\n\nEach page is fetched fresh from the live site, so this can take a while on large batches.`)) return;
+
+  _scBulkRecrawlRunning = true;
+  const label = document.getElementById('crawler-bulk-recrawl-label');
+  const startedAt = performance.now();
+  let ok = 0, errors = 0;
+  if (btn) btn.disabled = true;
+  rows.forEach(r => { r.style.opacity = '0.55'; });
+
+  try {
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      if (label) label.textContent = `Re-crawling ${i + 1}/${urls.length}…`;
+      const tr = document.querySelector(`#crawler-tbody tr[data-url="${(window.CSS && CSS.escape) ? CSS.escape(url) : url.replace(/"/g, '\\"')}"]`);
+      if (tr) {
+        tr.style.opacity = '1';
+        tr.style.background = 'rgba(234,179,8,0.18)';
+        try { tr.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {}
+      }
+      try {
+        const resp = await fetch('/recrawl-url', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ url })
+        });
+        const fresh = await resp.json();
+        if (fresh.error) { errors++; }
+        else {
+          const idx = (crawlerResults || []).findIndex(r => r.url === url);
+          if (idx >= 0) {
+            fresh.depth = crawlerResults[idx].depth;
+            crawlerResults[idx] = fresh;
+          }
+          ok++;
+        }
+      } catch (e) { errors++; }
+    }
+  } finally {
+    _scBulkRecrawlRunning = false;
+    if (btn) btn.disabled = false;
+    // Re-render the active category — fixed pages drop out automatically.
+    const activeCat = document.querySelector('.ci-cat.active');
+    if (activeCat && activeCat.dataset.cat && typeof window.selectCategory === 'function') {
+      window.selectCategory(activeCat.dataset.cat);
+    }
+    const elapsed = ((performance.now() - startedAt) / 1000).toFixed(1);
+    const note = document.createElement('div');
+    note.textContent = `Re-crawled ${ok}/${urls.length} in ${elapsed}s${errors ? ` · ${errors} errors` : ''}.`;
+    note.style.cssText = `position:fixed;bottom:80px;right:20px;background:${errors ? '#ef4444' : '#22c55e'};color:#fff;padding:8px 14px;border-radius:6px;font-size:.8rem;z-index:9999;pointer-events:none;`;
+    document.body.appendChild(note);
+    setTimeout(() => note.remove(), 3500);
+  }
+};
 
 async function scRecrawlUrl(btn, url) {
   if (btn) { btn.style.opacity = '0.35'; btn.disabled = true; }
