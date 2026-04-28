@@ -422,13 +422,13 @@ window.selectCategory = function(cat) {
   renderIssueInfo(cat);
   _scSetColumns(cat);
 
-  // Re-render the table with the filtered rows
+  // Re-render the table with the filtered rows. Apply current sort if any.
   const tbody = document.getElementById('crawler-tbody');
   tbody.innerHTML = '';
+  let rows = crawlerResults.filter(r => matchesCategory(r, cat));
+  if (typeof _scSortCol === 'number') rows = _scSortRows(rows);
   let _matched = 0;
-  for (const r of crawlerResults) {
-    if (matchesCategory(r, cat)) { renderRow(r); _matched++; }
-  }
+  for (const r of rows) { renderRow(r); _matched++; }
   // Show the bulk-recrawl button for any category that has rows. Lets the
   // user fix a batch in WP, then verify with one click that the fix landed.
   const bulkBtn = document.getElementById('crawler-bulk-recrawl-btn');
@@ -721,6 +721,33 @@ window.scBulkRecrawlVisible = async function(btn) {
     document.body.appendChild(note);
     setTimeout(() => note.remove(), 3500);
   }
+};
+
+// Column sort: click any header to sort ASC, click again to flip DESC.
+let _scSortCol = null;
+let _scSortAsc = true;
+const _SC_SORT_KEYS = ['url','status_code','title','title_len','meta_description','h1','word_count','response_time','issues'];
+function _scSortRows(rows) {
+  const key = _SC_SORT_KEYS[_scSortCol];
+  if (!key) return rows;
+  return rows.slice().sort((a, b) => {
+    let va = a[key], vb = b[key];
+    if (key === 'issues') { va = (va||[]).length; vb = (vb||[]).length; }
+    if (typeof va === 'string') return _scSortAsc ? (va||'').localeCompare(vb||'') : (vb||'').localeCompare(va||'');
+    return _scSortAsc ? (va||0) - (vb||0) : (vb||0) - (va||0);
+  });
+}
+window.scSortTable = function(col) {
+  if (_scSortCol === col) _scSortAsc = !_scSortAsc;
+  else { _scSortCol = col; _scSortAsc = true; }
+  // Re-render the active category with the new sort applied.
+  if (typeof activeCategory !== 'undefined' && activeCategory && typeof window.selectCategory === 'function') {
+    window.selectCategory(activeCategory);
+  }
+  document.querySelectorAll('.sc-sort-ind').forEach(el => {
+    if (parseInt(el.dataset.col, 10) === col) el.textContent = _scSortAsc ? '↑' : '↓';
+    else el.textContent = '';
+  });
 };
 
 async function scRecrawlUrl(btn, url) {
