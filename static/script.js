@@ -4,6 +4,7 @@ let crawlerTimer = null;
 let crawlerStart = 0;
 let crawlerResults = [];
 let crawlerInlinks = {}; // target URL -> [{source, anchor, placement}]
+let crawlerCrawlId = null;
 let dockUrl = null;
 let activeCategory = 'all';
 
@@ -280,6 +281,7 @@ function startCrawl() {
       max_depth: parseInt(document.getElementById('crawler-depth').value) || 10,
       render_js: document.getElementById('crawler-render-js').checked,
       ignore_robots: document.getElementById('crawler-ignore-robots').checked,
+      ignore_noindex: document.getElementById('crawler-ignore-noindex').checked,
       include_patterns: document.getElementById('crawler-include').value.trim(),
       exclude_patterns: document.getElementById('crawler-exclude').value.trim(),
     })
@@ -324,6 +326,10 @@ function startCrawl() {
               }
             } else if (p.type === 'cms_detected') {
               renderCmsBanner(p);
+            } else if (p.type === 'start') {
+              crawlerCrawlId = p.crawl_id || null;
+              const applyBtn = document.getElementById('crawler-apply-rules');
+              if (applyBtn) applyBtn.disabled = !crawlerCrawlId;
             }
           } catch {}
         }
@@ -457,6 +463,35 @@ function crawlFinished() {
   if (crawlerTimer) { clearInterval(crawlerTimer); crawlerTimer = null; }
   document.getElementById('crawler-start-btn').style.display = '';
   document.getElementById('crawler-stop-btn').style.display = 'none';
+  const applyBtn = document.getElementById('crawler-apply-rules');
+  if (applyBtn) applyBtn.disabled = true;
+  crawlerCrawlId = null;
+}
+
+function applyCrawlRules() {
+  const msg = document.getElementById('crawler-apply-rules-msg');
+  if (!crawlerCrawlId) {
+    if (msg) { msg.textContent = 'No active crawl.'; msg.style.color = '#dc2626'; }
+    return;
+  }
+  const includePatterns = (document.getElementById('crawler-include')?.value || '').trim();
+  const excludePatterns = (document.getElementById('crawler-exclude')?.value || '').trim();
+  if (msg) { msg.textContent = 'Applying…'; msg.style.color = ''; }
+  fetch('/crawl/update-rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ crawl_id: crawlerCrawlId, include_patterns: includePatterns, exclude_patterns: excludePatterns })
+  }).then(r => r.json().then(j => ({ ok: r.ok, body: j }))).then(({ ok, body }) => {
+    if (!ok || !body.ok) {
+      if (msg) { msg.textContent = body.error || 'Failed to apply.'; msg.style.color = '#dc2626'; }
+      return;
+    }
+    const ex = (body.exclude || []).length;
+    const inc = (body.include || []).length;
+    if (msg) { msg.textContent = `Applied — ${ex} exclude, ${inc} include rule${(ex+inc)===1?'':'s'} active.`; msg.style.color = '#059669'; }
+  }).catch(() => {
+    if (msg) { msg.textContent = 'Network error.'; msg.style.color = '#dc2626'; }
+  });
 }
 
 function scFilterByUrl(q) {
