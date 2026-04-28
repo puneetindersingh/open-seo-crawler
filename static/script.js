@@ -242,6 +242,16 @@ function startCrawl() {
   crawlerStart = Date.now();
   crawlerResults = [];
   crawlerInlinks = {};
+  // Reset sitemap analysis from a previous crawl + hide its sidebar entries.
+  if (typeof crawlerSitemap !== 'undefined') crawlerSitemap = null;
+  const _smBtn = document.getElementById('sitemap-analyse-btn');
+  if (_smBtn) { _smBtn.textContent = 'Analyse'; _smBtn.disabled = false; _smBtn.style.opacity = ''; }
+  ['sm-cat-missing','sm-cat-orphan','sm-cat-only','sm-cat-noindex','sm-cat-non200','sm-cat-redirects','sm-cat-pagination'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.style.display = 'none'; const cnt = el.querySelector('.ci-count'); if (cnt) cnt.textContent = '0'; }
+  });
+  const _smPanel = document.getElementById('sitemap-panel');
+  if (_smPanel) _smPanel.remove();
   activeCategory = 'all';
 
   document.getElementById('crawler-start-btn').style.display = 'none';
@@ -386,8 +396,25 @@ window.selectCategory = function(cat) {
     'Missing Open Graph': 'Pages Missing Open Graph Tags', 'Missing og:image': 'Pages Missing og:image',
     'Missing Twitter Card': 'Pages Missing Twitter Card', 'Missing viewport': 'Pages Missing Viewport Meta',
     'Mixed content': 'HTTPS Pages Loading HTTP Resources', 'URL:': 'URL Hygiene Issues',
+    '__sm_missing': 'Missing from Sitemap', '__sm_orphan': 'Orphan in Sitemap',
+    '__sm_only': 'Sitemap Only — Not Reached by Crawl', '__sm_noindex': 'Non-Indexable in Sitemap',
+    '__sm_non200': 'Non-200 in Sitemap', '__sm_redirects': 'Redirects in Sitemap',
+    '__sm_pagination': 'Pagination in Sitemap',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
+
+  // Sitemap categories render their own list view (no table); other
+  // categories use the standard crawler table.
+  if (typeof cat === 'string' && cat.startsWith('__sm_')) {
+    renderIssueInfo(cat);
+    const tbody = document.getElementById('crawler-tbody');
+    tbody.innerHTML = '';
+    _renderSitemapPanel(cat);
+    return;
+  }
+  // Drop any sitemap-panel content when switching back to a normal category.
+  const smPanel = document.getElementById('sitemap-panel');
+  if (smPanel) smPanel.remove();
 
   // Info box
   renderIssueInfo(cat);
@@ -400,6 +427,120 @@ window.selectCategory = function(cat) {
     if (matchesCategory(r, cat)) renderRow(r);
   }
 };
+
+// In-memory result of the last sitemap analysis. Cleared on every new crawl.
+let crawlerSitemap = null;
+
+window.analyseSitemap = async function() {
+  if (!Array.isArray(crawlerResults) || !crawlerResults.length) {
+    alert('Run a crawl first.');
+    return;
+  }
+  let domain = '';
+  try { domain = new URL(crawlerResults[0].url).origin; } catch { alert('Could not detect domain.'); return; }
+  const btn = document.getElementById('sitemap-analyse-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analysing…'; btn.style.opacity = '0.6'; }
+  try {
+    const r = await fetch('/sitemap-analyse', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ domain, results: crawlerResults, inlinks: crawlerInlinks || {} }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alert('Sitemap analysis failed: ' + (d.error || ('http ' + r.status))); return; }
+    crawlerSitemap = d;
+    if (!d.sitemaps_found || !d.sitemaps_found.length) {
+      alert('No sitemap discovered. Tried robots.txt + common paths.');
+      return;
+    }
+    const r0 = d.reports || {};
+    const setCat = (id, key) => {
+      const el = document.getElementById(id);
+      const cnt = (el || {}).querySelector ? el.querySelector('.ci-count') : null;
+      const count = (r0[key] || []).length;
+      if (el) el.style.display = '';
+      if (cnt) cnt.textContent = String(count);
+    };
+    setCat('sm-cat-missing',    'missing_from_sitemap');
+    setCat('sm-cat-orphan',     'orphan_in_sitemap');
+    setCat('sm-cat-only',       'sitemap_only');
+    setCat('sm-cat-noindex',    'non_indexable_in_sitemap');
+    setCat('sm-cat-non200',     'non_200_in_sitemap');
+    setCat('sm-cat-redirects',  'redirects_in_sitemap');
+    setCat('sm-cat-pagination', 'pagination_in_sitemap');
+    const tot = d.totals || {};
+    alert(`Sitemap analysed — ${tot.urls_in_sitemap || 0} URLs in sitemap, ${tot.urls_in_crawl || 0} crawled. Click any sitemap category to see the list.`);
+  } catch (e) {
+    alert('Sitemap analysis failed: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Re-analyse'; btn.style.opacity = ''; }
+  }
+};
+
+function _renderSitemapPanel(cat) {
+  const d = crawlerSitemap;
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  // Remove prior panel if any.
+  const old = document.getElementById('sitemap-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'sitemap-panel';
+  panel.style.cssText = 'padding:0 14px 14px;font-size:12px;';
+  if (!d) {
+    panel.innerHTML = '<div style="padding:20px;color:#64748b;">Click <b>Analyse</b> in the sidebar to run sitemap analysis.</div>';
+    main.appendChild(panel);
+    return;
+  }
+  const reports = d.reports || {};
+  const map = {
+    '__sm_missing':    { key: 'missing_from_sitemap',     hint: 'These pages are indexable, return 200, and were reached by the crawl, but are NOT in the sitemap. Add them.' },
+    '__sm_orphan':     { key: 'orphan_in_sitemap',        hint: 'In the sitemap and crawled, but no internal links point to them. Link to them from related pages.' },
+    '__sm_only':       { key: 'sitemap_only',             hint: 'In the sitemap but the crawl never reached them. Either truly orphan (no internal links anywhere) or buried beyond crawl depth.' },
+    '__sm_noindex':    { key: 'non_indexable_in_sitemap', hint: 'In sitemap but flagged noindex. Remove from sitemap OR remove the noindex.' },
+    '__sm_non200':     { key: 'non_200_in_sitemap',       hint: 'In sitemap but the URL returns 4xx/5xx. Remove from sitemap or fix the page.' },
+    '__sm_redirects':  { key: 'redirects_in_sitemap',     hint: 'Replace with the canonical destination URL — having a 301/302 in the sitemap wastes crawl budget.' },
+    '__sm_pagination': { key: 'pagination_in_sitemap',    hint: 'Google explicitly says do not include pagination URLs (/page/2/) in sitemaps.' },
+  };
+  const info = map[cat] || { key: '', hint: '' };
+  const items = reports[info.key] || [];
+  const sources = (d.sitemaps_found || []).map(s => `<a href="${s.url}" target="_blank" style="color:#4f46e5;">${s.url}</a> <span style="color:#64748b;">(${s.source})</span>`).join(' · ');
+  const totals = d.totals || {};
+  const warns = (d.warnings || []).map(w => `<div style="font-size:11px;color:#d97706;padding:4px 0;">⚠ ${w}</div>`).join('');
+  const header = `
+    <div style="padding:10px 0;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:11px;">
+      <div><b>Sitemap(s):</b> ${sources || '(none)'}</div>
+      <div><b>Totals:</b> ${totals.urls_in_sitemap || 0} URLs in sitemap · ${totals.urls_in_crawl || 0} crawled · ${totals.sitemaps_walked || 0} sitemap files walked</div>
+      ${warns}
+    </div>
+    <div style="padding:10px 0 4px;font-size:13px;font-weight:600;">${cat.replace('__sm_','').replace(/^./, c => c.toUpperCase())} (${items.length})</div>
+    <div style="padding-bottom:8px;font-size:11px;color:#64748b;">${info.hint}</div>
+  `;
+  if (!items.length) {
+    panel.innerHTML = header + '<div style="padding:14px 0;color:#16a34a;">✓ Nothing in this category.</div>';
+    main.appendChild(panel);
+    return;
+  }
+  const rows = items.map(it => {
+    if (typeof it === 'string') return { url: it, meta: '' };
+    const u = it.url || '';
+    const meta = [
+      it.lastmod      ? `lastmod ${it.lastmod}` : '',
+      it.status_code  ? `${it.status_code}` : '',
+      it.redirects_to ? `→ ${it.redirects_to}` : '',
+      it.reason       ? it.reason : '',
+    ].filter(Boolean).join(' · ');
+    return { url: u, meta };
+  });
+  const list = rows.map(r => `
+    <div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:11px;display:flex;gap:8px;align-items:center;">
+      <a href="${r.url}" target="_blank" style="color:#4f46e5;flex:1;word-break:break-all;">${r.url}</a>
+      ${r.meta ? `<span style="color:#94a3b8;font-size:10.5px;">${r.meta}</span>` : ''}
+    </div>
+  `).join('');
+  panel.innerHTML = header + list;
+  main.appendChild(panel);
+}
 
 function renderIssueInfo(cat) {
   const box = document.getElementById('issue-info-box');
