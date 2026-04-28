@@ -748,6 +748,27 @@ function _scSetColumns(cat) {
 
   document.addEventListener('mouseup', () => { dragging = false; });
 
+  // Double-click any cell to expand it (wrap the full value, drop the
+  // ellipsis) and auto-select for easy copy. Click again to collapse.
+  document.addEventListener('dblclick', e => {
+    const td = e.target.closest('#crawler-tbody td');
+    if (!td) return;
+    if (e.target.closest('button,a,input,select,svg')) return;
+    e.preventDefault();
+    td.classList.toggle('cs-cell-expanded');
+    if (td.classList.contains('cs-cell-expanded')) {
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(td);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch {}
+    } else {
+      try { window.getSelection().removeAllRanges(); } catch {}
+    }
+  });
+
   document.addEventListener('contextmenu', e => {
     const selected = Array.from(document.querySelectorAll('#crawler-tbody tr.cr-selected[data-url]'));
     if (!selected.length || !e.target.closest('#crawler-tbody')) return;

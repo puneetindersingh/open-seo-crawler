@@ -345,3 +345,21 @@ body {
 /* Drag-select row highlighting */
 #crawler-tbody tr.cr-selected { background: rgba(99,102,241,0.12) !important; }
 #crawler-tbody { user-select: none; }
+
+/* Double-click any cell to expand and read the full value (mirrors the
+   private internal-tool's behaviour). Inline styles set max-width + ellipsis
+   on most TDs, so we override with !important. */
+#crawler-tbody td.cs-cell-expanded {
+  white-space: normal !important;
+  overflow: visible !important;
+  max-width: none !important;
+  word-break: break-all;
+  background: rgba(99, 102, 241, 0.06) !important;
+}
+#crawler-tbody td.cs-cell-expanded > *,
+#crawler-tbody td.cs-cell-expanded span {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  max-width: none !important;
+}
