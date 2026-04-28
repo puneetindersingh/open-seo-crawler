@@ -803,16 +803,34 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         _norm = ' '.join(body_text.lower().split())
         result['body_hash'] = _hashlib.md5(_norm.encode('utf-8', errors='ignore')).hexdigest() if _norm else ''
 
-        # Mixed content: HTTPS page loading HTTP resources
+        # Mixed content: HTTPS page loading HTTP resources.
+        # <link> is rel-dependent — most rels are pure metadata (rel="profile"
+        # for XFN, rel="canonical", rel="alternate", rel="EditURI"/"pingback"/
+        # "https://api.w.org/" for WP) and don't trigger any fetch. Browsers
+        # only fire mixed-content warnings on the rels below.
+        _MIXED_LINK_RELS = {
+            'stylesheet',
+            'preload', 'prefetch', 'modulepreload',
+            'icon', 'shortcut icon', 'apple-touch-icon',
+            'apple-touch-icon-precomposed', 'mask-icon', 'fluid-icon',
+            'manifest',
+        }
         if result.get('security', {}).get('is_https'):
             mixed = []
-            for tag_name, attr in (('img', 'src'), ('script', 'src'), ('link', 'href'),
-                                    ('iframe', 'src'), ('video', 'src'), ('audio', 'src'),
-                                    ('source', 'src')):
+            for tag_name, attr in (('img', 'src'), ('script', 'src'),
+                                    ('iframe', 'src'), ('video', 'src'),
+                                    ('audio', 'src'), ('source', 'src')):
                 for t in soup.find_all(tag_name, attrs={attr: True}):
-                    v = t.get(attr, '').strip()
+                    v = (t.get(attr) or '').strip()
                     if v.startswith('http://'):
                         mixed.append(v)
+            for t in soup.find_all('link', attrs={'href': True}):
+                v = (t.get('href') or '').strip()
+                if not v.startswith('http://'):
+                    continue
+                rels = [r.lower() for r in (t.get('rel') or [])]
+                if any(r in _MIXED_LINK_RELS for r in rels):
+                    mixed.append(v)
             result['mixed_content'] = mixed[:20]
 
         # Images — smarter than "any <img> without alt".
