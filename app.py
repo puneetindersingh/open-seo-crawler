@@ -1068,6 +1068,288 @@ def _teardown_pw(pw_page, pw_browser, pw_ctx):
 
 
 
+# -------- Sitemap analysis ---------------------------------------------------
+# Discovers a site's XML sitemap(s), parses every URL, and diffs them against a
+# crawl. Mirrors the Screaming Frog Sitemaps tab. No external API or LLM —
+# pure XML parsing + set diffs.
+_SITEMAP_DEFAULT_PATHS = (
+    '/sitemap.xml', '/sitemap_index.xml', '/sitemap-index.xml',
+    '/wp-sitemap.xml',
+    '/sitemap.xml.gz',
+    '/sitemap1.xml', '/sitemap-1.xml',
+    '/post-sitemap.xml', '/page-sitemap.xml',
+)
+_SITEMAP_NS = '{http://www.sitemaps.org/schemas/sitemap/0.9}'
+
+
+def _discover_sitemaps(domain):
+    """Find sitemap URLs for a domain. Tries robots.txt first, then common
+    default paths. When robots.txt points at a sibling subdomain (multisite
+    misconfiguration) we surface a warning AND also probe the analysed
+    domain's own paths so the diff isn't comparing the crawl against the
+    wrong site's URL set.
+    """
+    found = []
+    seen = set()
+    warnings = []
+
+    def _add(u, src):
+        u = u.strip()
+        if u and u not in seen:
+            seen.add(u)
+            found.append({'url': u, 'source': src})
+
+    analysed_host = (urlparse(domain).netloc or '').lower()
+
+    try:
+        r = requests.get(f"{domain.rstrip('/')}/robots.txt", timeout=10,
+                         headers={'User-Agent': 'Mozilla/5.0'})
+        if r.ok and r.text:
+            for line in r.text.splitlines():
+                line = line.strip()
+                if line.lower().startswith('sitemap:'):
+                    sm_url = line.split(':', 1)[1].strip()
+                    sm_host = (urlparse(sm_url).netloc or '').lower()
+                    src = 'robots.txt'
+                    if sm_host and analysed_host and sm_host != analysed_host:
+                        src = 'robots.txt (DIFFERENT DOMAIN)'
+                        warnings.append(
+                            f"robots.txt declares sitemap on a different host ({sm_host}) "
+                            f"than the site being analysed ({analysed_host}). "
+                            f"Likely multisite misconfiguration — also probing default paths."
+                        )
+                    _add(sm_url, src)
+    except Exception:
+        pass
+
+    has_onsite = any((urlparse(s['url']).netloc or '').lower() == analysed_host for s in found)
+    if not has_onsite:
+        for path in _SITEMAP_DEFAULT_PATHS:
+            url = f"{domain.rstrip('/')}{path}"
+            try:
+                resp = requests.head(url, timeout=8, allow_redirects=True,
+                                     headers={'User-Agent': 'Mozilla/5.0'})
+                if resp.status_code == 405:
+                    resp = requests.get(url, timeout=10, allow_redirects=True,
+                                        headers={'User-Agent': 'Mozilla/5.0'},
+                                        stream=True)
+                    resp.close()
+                if resp.ok:
+                    ct = (resp.headers.get('content-type') or '').lower()
+                    if 'xml' in ct or path.endswith('.xml') or path.endswith('.gz'):
+                        _add(url, 'default-path')
+                        break
+            except Exception:
+                pass
+
+    return found, warnings
+
+
+def _fetch_sitemap_recursive(seed_urls, max_depth=5):
+    """Walk a sitemap (handling sitemap-index recursion) and collect every URL."""
+    import xml.etree.ElementTree as ET
+    import gzip
+
+    urls = []
+    sitemaps_meta = []
+    errors = []
+    visited = set()
+
+    def _walk(sm_url, depth):
+        if depth > max_depth or sm_url in visited:
+            return
+        visited.add(sm_url)
+        try:
+            r = requests.get(sm_url, timeout=20,
+                             headers={'User-Agent': 'Mozilla/5.0',
+                                      'Accept': 'application/xml,text/xml,*/*'})
+            if not r.ok:
+                errors.append({'sitemap': sm_url, 'error': f'http_{r.status_code}'})
+                sitemaps_meta.append({'url': sm_url, 'url_count': 0, 'error': f'http_{r.status_code}'})
+                return
+            content = r.content
+            if sm_url.lower().endswith('.gz'):
+                try:
+                    content = gzip.decompress(content)
+                except Exception:
+                    pass
+            try:
+                root = ET.fromstring(content)
+            except ET.ParseError as e:
+                errors.append({'sitemap': sm_url, 'error': f'xml_parse: {str(e)[:120]}'})
+                sitemaps_meta.append({'url': sm_url, 'url_count': 0, 'error': 'xml_parse'})
+                return
+
+            tag = root.tag.split('}', 1)[-1] if '}' in root.tag else root.tag
+            count_here = 0
+            if tag == 'sitemapindex':
+                for sm_node in root.findall(f'{_SITEMAP_NS}sitemap'):
+                    loc = sm_node.find(f'{_SITEMAP_NS}loc')
+                    if loc is not None and loc.text:
+                        _walk(loc.text.strip(), depth + 1)
+                sitemaps_meta.append({'url': sm_url, 'url_count': 0, 'error': None,
+                                      'is_index': True})
+            else:
+                for url_node in root.findall(f'{_SITEMAP_NS}url'):
+                    loc = url_node.find(f'{_SITEMAP_NS}loc')
+                    if loc is None or not loc.text:
+                        continue
+                    lastmod = url_node.find(f'{_SITEMAP_NS}lastmod')
+                    urls.append({
+                        'url': loc.text.strip(),
+                        'lastmod': lastmod.text.strip() if lastmod is not None and lastmod.text else None,
+                        'source_sitemap': sm_url,
+                    })
+                    count_here += 1
+                sitemaps_meta.append({'url': sm_url, 'url_count': count_here, 'error': None,
+                                      'is_index': False})
+        except Exception as e:
+            errors.append({'sitemap': sm_url, 'error': str(e)[:200]})
+            sitemaps_meta.append({'url': sm_url, 'url_count': 0, 'error': str(e)[:120]})
+
+    for u in seed_urls:
+        _walk(u, 0)
+    return urls, sitemaps_meta, errors
+
+
+def _norm_url(u):
+    """Normalise a URL for set-comparison."""
+    if not u:
+        return ''
+    u = u.strip()
+    try:
+        p = urlparse(u)
+        host = (p.netloc or '').lower()
+        path = (p.path or '').rstrip('/')
+        return f"{p.scheme}://{host}{path}".lower()
+    except Exception:
+        return u.rstrip('/').lower()
+
+
+@app.route('/sitemap-analyse', methods=['POST'])
+def sitemap_analyse():
+    """Discover the site's sitemap(s) and diff against a crawl.
+
+    Body: {"domain": "https://example.com", "results": [...page rows...],
+           "inlinks": {url: [source_urls...]}}
+    """
+    data = request.get_json() or {}
+    domain = (data.get('domain') or '').rstrip('/')
+    results = data.get('results') or []
+    inlinks_map = data.get('inlinks') or {}
+
+    if not domain:
+        return jsonify({'error': 'domain required'}), 400
+
+    discovered, discovery_warnings = _discover_sitemaps(domain)
+    if not discovered:
+        return jsonify({
+            'sitemaps_found': [],
+            'warnings': discovery_warnings + ['No sitemap could be discovered. Tried robots.txt and common default paths.'],
+            'tried_paths': list(_SITEMAP_DEFAULT_PATHS),
+        }), 200
+
+    seed = [d['url'] for d in discovered]
+    sm_urls, sitemaps_meta, sm_errors = _fetch_sitemap_recursive(seed)
+
+    crawl_by_norm = {}
+    for r in results:
+        u = r.get('url')
+        if not u:
+            continue
+        crawl_by_norm[_norm_url(u)] = r
+
+    sitemap_by_norm = {}
+    for entry in sm_urls:
+        sitemap_by_norm.setdefault(_norm_url(entry['url']), entry)
+
+    inlinks_by_norm = {}
+    for k, v in inlinks_map.items():
+        inlinks_by_norm[_norm_url(k)] = v or []
+
+    pag_re = _re.compile(r'/page/\d+/?$|[?&](page|paged|pg)=\d+', _re.I)
+
+    missing_from_sitemap = []
+    orphan_in_sitemap = []
+    sitemap_only = []
+    non_indexable_in_sitemap = []
+    non_200_in_sitemap = []
+    redirects_in_sitemap = []
+    pagination_in_sitemap = []
+
+    for nrm, r in crawl_by_norm.items():
+        if nrm in sitemap_by_norm:
+            continue
+        sc = r.get('status_code') or 0
+        if not r.get('indexable', True):
+            continue
+        if sc and sc != 200:
+            continue
+        if r.get('redirect_url'):
+            continue
+        if r.get('is_pagination'):
+            continue
+        missing_from_sitemap.append(r.get('url'))
+
+    for nrm, entry in sitemap_by_norm.items():
+        original_url = entry['url']
+        if pag_re.search(urlparse(original_url).path) or pag_re.search('?' + (urlparse(original_url).query or '')):
+            pagination_in_sitemap.append(original_url)
+        crawled = crawl_by_norm.get(nrm)
+        if crawled is None:
+            sitemap_only.append({'url': original_url, 'lastmod': entry.get('lastmod')})
+            continue
+        sc = crawled.get('status_code') or 0
+        if sc and sc != 200:
+            non_200_in_sitemap.append({'url': original_url, 'status_code': sc})
+        if crawled.get('redirect_url'):
+            redirects_in_sitemap.append({
+                'url': original_url,
+                'redirects_to': crawled.get('redirect_url'),
+            })
+        if not crawled.get('indexable', True):
+            non_indexable_in_sitemap.append({
+                'url': original_url,
+                'reason': 'noindex',
+            })
+        if (sc == 200 and not crawled.get('redirect_url')
+                and crawled.get('indexable', True)
+                and not inlinks_by_norm.get(nrm)):
+            orphan_in_sitemap.append(original_url)
+
+    warnings = list(discovery_warnings)
+    if any(len(s.get('url', '')) and s['url'].startswith('http://') for s in sitemaps_meta):
+        warnings.append('At least one sitemap is served over HTTP, not HTTPS.')
+    for sm in sitemaps_meta:
+        if (sm.get('url_count') or 0) > 50000:
+            warnings.append(f"{sm['url']} contains {sm['url_count']} URLs — over the 50,000 sitemap limit.")
+    no_lastmod = sum(1 for u in sm_urls if not u.get('lastmod'))
+    if sm_urls and no_lastmod / len(sm_urls) > 0.5:
+        warnings.append(f"{no_lastmod}/{len(sm_urls)} URLs in sitemap are missing <lastmod>.")
+
+    return jsonify({
+        'domain': domain,
+        'sitemaps_found': discovered,
+        'sitemaps_walked': sitemaps_meta,
+        'sitemap_errors': sm_errors,
+        'totals': {
+            'urls_in_sitemap': len(sm_urls),
+            'urls_in_crawl': len(crawl_by_norm),
+            'sitemaps_walked': len(sitemaps_meta),
+        },
+        'reports': {
+            'missing_from_sitemap': missing_from_sitemap,
+            'orphan_in_sitemap': orphan_in_sitemap,
+            'sitemap_only': sitemap_only,
+            'non_indexable_in_sitemap': non_indexable_in_sitemap,
+            'non_200_in_sitemap': non_200_in_sitemap,
+            'redirects_in_sitemap': redirects_in_sitemap,
+            'pagination_in_sitemap': pagination_in_sitemap,
+        },
+        'warnings': warnings,
+    })
+
+
 @app.route('/recrawl-url', methods=['POST'])
 def recrawl_url():
     """Re-crawl a single URL and return fresh page audit data."""
