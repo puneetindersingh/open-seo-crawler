@@ -364,21 +364,39 @@ def detect_cms_route():
     except Exception as e:
         return jsonify({'error': f'Detection failed: {str(e)[:100]}'}), 500
 
-def _normalize_crawl_url(url):
-    """Normalize URL for deduplication: strip fragments, utm params, lowercase host.
+_CRAWL_NOISE_PARAMS = frozenset({
+    # Tracking
+    'fbclid', 'gclid', 'mc_cid', 'mc_eid', 'gad_source', 'gbraid', 'wbraid',
+    'msclkid', 'yclid', 'dclid', 'igshid', 'srsltid',
+    'ref', 'ref_src', 'ref_url',
+    # WooCommerce action endpoints — not real pages.
+    'add-to-cart', 'remove_item', 'removed_item', 'undo_item',
+    'wc-ajax', 'wc-api', 'wcml_currency', 'orderby', 'product-page',
+    'min_price', 'max_price',
+    # Other common ecommerce/forum noise
+    'replytocom', 'unapproved', 'moderation-hash',
+    'share', 'sharesource',
+})
 
-    Preserves the trailing slash as found in the source href. Stripping slashes
-    was manufacturing phantom 'Trailing slash redirect' issues — we'd queue
-    /foo after seeing <a href="/foo/"> and then be surprised when the server
-    redirected us back. We also couldn't show inlinks because the inlinks_map
-    key and result['url'] didn't line up with the anchor as written.
+
+def _normalize_crawl_url(url):
+    """Normalize URL for deduplication: strip fragments, utm/tracking/action
+    params, lowercase host.
+
+    Strips WooCommerce action endpoints (?add-to-cart=, ?wc-ajax= …) so
+    every product page's "Add to cart" button doesn't surface as its own
+    URL with no meta description.
     """
     from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
     parsed = urlparse(url)
     path = parsed.path or '/'
     if parsed.query:
         params = parse_qs(parsed.query, keep_blank_values=True)
-        cleaned = {k: v for k, v in params.items() if not k.startswith('utm_') and k not in ('fbclid', 'gclid', 'mc_cid', 'mc_eid')}
+        cleaned = {
+            k: v for k, v in params.items()
+            if not k.lower().startswith('utm_')
+            and k.lower() not in _CRAWL_NOISE_PARAMS
+        }
         query = urlencode(cleaned, doseq=True)
     else:
         query = ''
