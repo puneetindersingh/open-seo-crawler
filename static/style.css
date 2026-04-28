@@ -346,6 +346,14 @@ body {
 #crawler-tbody tr.cr-selected { background: rgba(99,102,241,0.12) !important; }
 #crawler-tbody { user-select: none; }
 
+/* Column sort indicator */
+.sc-sort-ind {
+  font-size: 10px;
+  color: var(--accent, #6366f1);
+  margin-left: 2px;
+  font-weight: 700;
+}
+
 /* Double-click any cell to expand and read the full value (mirrors the
    private seo-tool's behaviour). Inline styles set max-width + ellipsis
    on most TDs, so we override with !important. */
