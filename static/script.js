@@ -620,9 +620,36 @@ function _scSetColumns(cat) {
     menu.id = 'cr-ctx-menu';
     menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:var(--surface);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:9999;min-width:200px;overflow:hidden;font-size:12px;`;
 
+    // Clipboard with execCommand fallback + always-fires toast. On HTTPS or
+    // localhost navigator.clipboard works; on insecure / cross-origin pages
+    // (or if focus left the doc) it can reject — fall back to a hidden
+    // textarea + execCommand. Always show feedback so the user sees the
+    // click registered, even if the copy itself failed.
+    const copyText = (text, ok, fail) => {
+      const done = (success) => scToast(success ? ok : (fail || 'Copy failed — clipboard blocked.'));
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(() => done(true), () => {
+            try {
+              const ta = document.createElement('textarea');
+              ta.value = text;
+              ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0;';
+              document.body.appendChild(ta);
+              ta.focus(); ta.select();
+              const ok2 = document.execCommand('copy');
+              ta.remove();
+              done(ok2);
+            } catch { done(false); }
+          });
+          return;
+        }
+      } catch {}
+      done(false);
+    };
+
     const items = [
-      { label: `Copy ${urls.length} URL${urls.length > 1 ? 's' : ''}`, action: () => navigator.clipboard.writeText(urls.join('\n')).then(() => scToast(`Copied ${urls.length} URL${urls.length > 1 ? 's' : ''}.`)) },
-      { label: 'Copy as comma-separated', action: () => navigator.clipboard.writeText(urls.join(', ')).then(() => scToast('Copied.')) },
+      { label: `Copy ${urls.length} URL${urls.length > 1 ? 's' : ''}`, action: () => copyText(urls.join('\n'), `Copied ${urls.length} URL${urls.length > 1 ? 's' : ''}.`) },
+      { label: 'Copy as comma-separated', action: () => copyText(urls.join(', '), 'Copied as comma-separated.') },
       { label: 'Clear selection', action: clearSelection },
     ];
 
@@ -632,7 +659,13 @@ function _scSetColumns(cat) {
       btn.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 14px;background:none;border:none;cursor:pointer;color:var(--text);font-size:12px;';
       btn.onmouseover = () => btn.style.background = 'var(--surface2)';
       btn.onmouseout  = () => btn.style.background = 'none';
-      btn.onclick = () => { item.action(); menu.remove(); };
+      // Always close the menu, regardless of whether the action itself
+      // succeeded or threw — prevents the menu sticking around when the
+      // clipboard write rejects.
+      btn.onclick = () => {
+        try { item.action(); } catch (err) { console.error('ctx-menu action failed', err); }
+        menu.remove();
+      };
       menu.appendChild(btn);
     });
 
