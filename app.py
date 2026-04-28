@@ -29,6 +29,79 @@ from bs4 import BeautifulSoup
 app = Flask(__name__, static_folder='static', template_folder='templates')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s: %(message)s')
 
+# crawl_id -> {'include': [patterns], 'exclude': [patterns]}. Workers read on
+# every URL so the Apply button can mutate rules mid-crawl. Replace list refs
+# atomically (do not mutate in place) so concurrent readers see a consistent
+# snapshot. Cleared when the crawl ends.
+ACTIVE_CRAWL_RULES = {}
+
+
+def _robots_pattern_match(pattern, url):
+    """robots.txt-style path pattern matcher (Google's spec).
+
+    Wildcards: ``*`` matches any sequence, ``$`` at end anchors end of URL.
+    Everything else is literal — including ``?``. Match is anchored at the
+    start of the path; a leading ``*`` lets it match anywhere. Tests path+query
+    first, then full URL so users can paste either form.
+    """
+    if not pattern:
+        return False
+    p = pattern.strip()
+    if not p:
+        return False
+    end_anchor = p.endswith('$')
+    if end_anchor:
+        p = p[:-1]
+    rx = '.*'.join(_re.escape(part) for part in p.split('*'))
+    if end_anchor:
+        rx += r'\Z'
+    rx = '^' + rx
+    try:
+        prog = _re.compile(rx)
+    except _re.error:
+        return False
+    parsed = urlparse(url)
+    path_q = parsed.path + (('?' + parsed.query) if parsed.query else '')
+    if prog.match(path_q):
+        return True
+    if prog.match(url):
+        return True
+    return False
+
+
+_DUP_NOISE_PARAMS = frozenset({
+    'add-to-cart', 'replytocom', 'fbclid', 'gclid', 'gad_source', 'gbraid',
+    'wbraid', 'mc_cid', 'mc_eid', '_ga', 'msclkid', 'yclid', 'dclid',
+    'igshid', 'srsltid', 'ref', 'ref_src', 'ref_url',
+})
+
+
+def _normalize_url_for_dup(url):
+    """Collapse pagination + tracking/ecommerce params so duplicate-meta
+    grouping doesn't fragment a canonical page across its variants."""
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    path = parsed.path or '/'
+    path = _re.sub(r'/page/\d+/?$', '/', path)
+    path = _re.sub(r'/comment-page-\d+/?$', '/', path)
+    if parsed.query:
+        kept = []
+        for kv in parsed.query.split('&'):
+            if not kv:
+                continue
+            k = kv.split('=', 1)[0].lower()
+            if k in _DUP_NOISE_PARAMS or k.startswith('utm_'):
+                continue
+            kept.append(kv)
+        new_q = '&'.join(kept)
+    else:
+        new_q = ''
+    return urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, new_q, ''))
+
 
 STATIC_VERSION = str(int(time.time()))
 
@@ -357,7 +430,7 @@ def _detect_js_platform(html):
     return None
 
 
-def _crawl_page(url, session, domain, pw_page=None):
+def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
     """Crawl a single page and return audit data dict.
 
     If ``pw_page`` (a live Playwright page) is provided, the HTML body will be
@@ -887,7 +960,9 @@ def _crawl_page(url, session, domain, pw_page=None):
         # (noindex = Google won't rank it; pagination = archive duplicate, not a canonical page)
         # Also skip URLs that redirected: the resolved target is crawled separately and
         # any content issues belong on that row, not on the 301 source.
-        if result['indexable'] and not result.get('is_pagination') and not result.get('redirect_url'):
+        # When ignore_noindex is set, treat noindex pages like indexable ones for
+        # the audit so the user sees the full warning/info list, not just the flag.
+        if (result['indexable'] or ignore_noindex) and not result.get('is_pagination') and not result.get('redirect_url'):
             if not result['title']:
                 result['issues'].append('Missing title')
             elif result['title_len'] > 60:
@@ -1037,6 +1112,7 @@ def crawl_site():
     crawl_delay = max(float(data.get('crawl_delay', 0.4) or 0.4), 0.0)
     render_js = bool(data.get('render_js', False))
     ignore_robots = bool(data.get('ignore_robots', False))
+    ignore_noindex = bool(data.get('ignore_noindex', False))
     # Concurrent workers. Default 5 matches Screaming Frog. Clamped to [1, 20].
     # When render_js is on, Playwright can't share a single page across threads —
     # force single-worker mode so page state stays consistent.
@@ -1045,19 +1121,29 @@ def crawl_site():
     if render_js:
         max_workers = 1
 
-    # URL include/exclude patterns (simple glob: * wildcard, one per line).
+    # URL include/exclude patterns — robots.txt syntax (Google's spec):
+    #   *       matches any sequence
+    #   $       at end anchors end of URL
+    #   ?, .    are LITERAL (no fnmatch single-char wildcard surprise)
     # Exclude beats include. If include is non-empty, URLs must match at least one.
-    import fnmatch as _fnmatch
+    # Stored in ACTIVE_CRAWL_RULES so /crawl/update-rules can mutate them mid-crawl.
+    import uuid as _uuid
     def _parse_patterns(raw):
         if not raw: return []
         return [p.strip() for p in raw.splitlines() if p.strip() and not p.strip().startswith('#')]
-    include_patterns = _parse_patterns(data.get('include_patterns', ''))
-    exclude_patterns = _parse_patterns(data.get('exclude_patterns', ''))
+    crawl_id = _uuid.uuid4().hex[:12]
+    ACTIVE_CRAWL_RULES[crawl_id] = {
+        'include': _parse_patterns(data.get('include_patterns', '')),
+        'exclude': _parse_patterns(data.get('exclude_patterns', '')),
+    }
 
     def _url_allowed(u):
-        if exclude_patterns and any(_fnmatch.fnmatch(u, p) or _fnmatch.fnmatch(urlparse(u).path, p) for p in exclude_patterns):
+        rules = ACTIVE_CRAWL_RULES.get(crawl_id) or {}
+        excl = rules.get('exclude') or []
+        incl = rules.get('include') or []
+        if excl and any(_robots_pattern_match(p, u) for p in excl):
             return False
-        if include_patterns and not any(_fnmatch.fnmatch(u, p) or _fnmatch.fnmatch(urlparse(u).path, p) for p in include_patterns):
+        if incl and not any(_robots_pattern_match(p, u) for p in incl):
             return False
         return True
 
@@ -1122,7 +1208,7 @@ def crawl_site():
         inlinks_map = {}
 
         tracked_kws = []  # left in place for payload compatibility; no external data sources in the public build
-        yield f"data: {json.dumps({'type': 'start', 'domain': domain, 'workers': max_workers})}\n\n"
+        yield f"data: {json.dumps({'type': 'start', 'domain': domain, 'workers': max_workers, 'crawl_id': crawl_id})}\n\n"
 
         # CMS fingerprint using the seed page (cheap HEAD+GET already handles this below,
         # but we want the info up-front so the UI can badge + offer one-click recommendations).
@@ -1180,7 +1266,7 @@ def crawl_site():
         def _fetch_job(url, depth):
             """Worker: politeness-wait, fetch, return (url, depth, page_data)."""
             _wait_host_turn(url)
-            pd = _crawl_page(url, session, domain, pw_page=pw_page)
+            pd = _crawl_page(url, session, domain, pw_page=pw_page, ignore_noindex=ignore_noindex)
             pd['depth'] = depth
             _adjust_host_backoff(url, pd)
             return url, depth, pd
@@ -1292,6 +1378,7 @@ def crawl_site():
             app.logger.info(f"[crawler] Client disconnected, stopping crawl at {len(visited)} pages")
             session.close()
             _teardown_pw(pw_page, pw_browser, pw_ctx)
+            ACTIVE_CRAWL_RULES.pop(crawl_id, None)
             return
 
         session.close()
@@ -1333,19 +1420,26 @@ def crawl_site():
         # Duplicate titles / metas / H1s / body
         # Skip redirected URLs (http/https/www variants that 301 to the canonical)
         # and non-200 responses — those aren't unique content, just transit stops.
+        # Dedupe within each group by normalised URL so pagination (/page/2/)
+        # and tracking/ecommerce params (?add-to-cart=, ?utm_*, ?replytocom=)
+        # don't fragment a single canonical page across its variants.
         def _group_by(field_getter):
-            g = _dd(list)
+            g = _dd(dict)  # value -> {normalised_url: original_url}
             for r in results:
-                if not r.get('indexable', True):
+                if not (r.get('indexable', True) or ignore_noindex):
                     continue
                 if r.get('redirect_url'):
                     continue
                 if r.get('status_code') and r['status_code'] >= 300:
                     continue
                 v = field_getter(r)
-                if v:
-                    g[v].append(r.get('url'))
-            return {k: v for k, v in g.items() if len(v) > 1}
+                if not v:
+                    continue
+                url = r.get('url')
+                norm = _normalize_url_for_dup(url)
+                if norm not in g[v]:
+                    g[v][norm] = url
+            return {k: list(d.values()) for k, d in g.items() if len(d) > 1}
 
         dup_titles = _group_by(lambda r: (r.get('title') or '').strip().lower())
         dup_metas = _group_by(lambda r: (r.get('meta_description') or '').strip().lower())
@@ -1429,6 +1523,7 @@ def crawl_site():
         app.logger.info(f"[crawler] Crawl complete: {len(results)} pages, {errors} errors, {avg_time}s avg, {len(dup_titles)} dup titles, {len(orphans)} orphans")
         yield f"data: {json.dumps({'type': 'complete', 'total': len(results), 'summary': summary, 'inlinks': inlinks_payload, 'reports': reports})}\n\n"
         yield "data: [DONE]\n\n"
+        ACTIVE_CRAWL_RULES.pop(crawl_id, None)
 
     return Response(
         stream_with_context(generate()),
@@ -1439,6 +1534,31 @@ def crawl_site():
             'Access-Control-Allow-Origin': '*'
         }
     )
+
+
+@app.route('/crawl/update-rules', methods=['POST'])
+def crawl_update_rules():
+    """Apply new include/exclude patterns to a crawl that's already running.
+
+    The crawl_id is issued in the 'start' SSE event. Patterns use robots.txt
+    syntax (Google's spec): ``*`` is any sequence, ``$`` at end anchors end of
+    URL, everything else is literal (including ``?``).
+    """
+    payload = request.get_json(silent=True) or {}
+    crawl_id = (payload.get('crawl_id') or '').strip()
+    if not crawl_id or crawl_id not in ACTIVE_CRAWL_RULES:
+        return jsonify({'ok': False, 'error': 'No active crawl with that id'}), 404
+
+    def _parse(raw):
+        if not raw:
+            return []
+        return [p.strip() for p in raw.splitlines() if p.strip() and not p.strip().startswith('#')]
+
+    new_excl = _parse(payload.get('exclude_patterns', ''))
+    new_incl = _parse(payload.get('include_patterns', ''))
+    ACTIVE_CRAWL_RULES[crawl_id] = {'include': new_incl, 'exclude': new_excl}
+    app.logger.info(f"[crawler] {crawl_id} rules updated: {len(new_excl)} exclude, {len(new_incl)} include")
+    return jsonify({'ok': True, 'exclude': new_excl, 'include': new_incl})
 
 
 
