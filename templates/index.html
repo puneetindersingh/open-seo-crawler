@@ -200,6 +200,10 @@
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-5.97"/></svg>
             <span id="crawler-bulk-recrawl-label">Re-crawl all</span>
           </button>
+          <button id="crawler-export-sitemap-btn" onclick="exportCrawlerSitemap()" title="Export an XML sitemap of all 200-status indexable pages found in this crawl" style="display:none;align-items:center;gap:5px;padding:4px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:11px;font-weight:600;cursor:pointer;line-height:1;" onmouseover="this.style.borderColor='#0ea5e9';this.style.color='#0ea5e9'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>Sitemap.xml</span>
+          </button>
           <div style="display:flex;align-items:center;gap:3px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:3px 8px;">
             <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" style="color:#94a3b8;flex-shrink:0;"><circle cx="9" cy="9" r="6"/><path d="M13.5 13.5L18 18"/></svg>
             <input type="text" id="sc-url-search" placeholder="Filter by URL…" oninput="scFilterByUrl(this.value)" autocomplete="off" spellcheck="false" style="background:none;border:none;outline:none;font-size:11px;width:150px;padding:2px 0;" />

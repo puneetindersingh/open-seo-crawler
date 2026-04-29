@@ -15,7 +15,7 @@ Features:
   - Severity-tagged issues (error / warning / info) with source citations
   - Optional JS rendering via Playwright (install separately)
 """
-from flask import Flask, render_template, request, Response, stream_with_context, jsonify
+from flask import Flask, render_template, request, Response, stream_with_context, jsonify, send_file
 import requests
 import json
 import os
@@ -482,7 +482,7 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
     """
     from urllib.parse import urlparse, urljoin
     result = {
-        'url': url, 'status_code': 0, 'content_type': '', 'response_time': 0,
+        'url': url, 'status_code': 0, 'content_type': '', 'last_modified': '', 'response_time': 0,
         'title': '', 'title_len': 0, 'meta_description': '', 'meta_len': 0,
         'h1': '', 'h1_list': [], 'h2_list': [], 'h2_count': 0,
         'canonical': '', 'canonical_match': False, 'canonical_kind': None,
@@ -558,6 +558,7 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         result['status_code'] = resp.status_code
         result['response_time'] = round(resp.elapsed.total_seconds(), 2)
         result['content_type'] = resp.headers.get('Content-Type', '')[:50]
+        result['last_modified'] = resp.headers.get('Last-Modified', '')[:60]
 
         # Track redirects — classify by type so trivial normalizations (trailing slash,
         # www, https) don't pollute the main Redirect bucket
@@ -2597,6 +2598,122 @@ def crawl_continue():
     app.logger.info(f"[crawler] {crawl_id} {action}: max_pages={state.get('max_pages')}, bumps={state.get('bumps')}")
     return jsonify({'ok': True, 'max_pages': state.get('max_pages'), 'finalize': state.get('finalize'), 'bumps': state.get('bumps')})
 
+
+@app.route('/export-crawl-sitemap', methods=['POST'])
+def export_crawl_sitemap():
+    """Build a sitemaps.org 0.9 XML sitemap from the crawl results.
+
+    Filter: include only URLs that a search engine would actually want to
+    index - HTTP 200, indexable (no noindex meta or X-Robots-Tag), self- or
+    missing-canonical (skip pages that canonical to a different URL since
+    those aren't the canonical version), and not redirected. >50K URLs
+    splits into a sitemap-index plus N child sitemaps to stay within the
+    sitemaps.org 50,000-URL / 50MB-uncompressed limits.
+    """
+    from xml.sax.saxutils import escape as _xml_escape
+    from datetime import datetime as _dt
+    from email.utils import parsedate_to_datetime as _parsedate
+    import io as _io
+    import zipfile as _zipfile
+
+    data = request.json or {}
+    results = data.get('results', [])
+    domain = (data.get('domain') or '').strip()
+
+    if not results:
+        return json.dumps({'error': 'No results to export'}), 400
+
+    def _is_indexable_200(r):
+        if r.get('status_code') != 200:
+            return False
+        if r.get('error'):
+            return False
+        if r.get('redirect_url'):
+            return False
+        if r.get('indexable') is False:
+            return False
+        if r.get('canonical_kind') == 'canonicalised':
+            return False
+        ctype = (r.get('content_type') or '').lower()
+        if ctype and 'html' not in ctype and 'xml' not in ctype:
+            return False
+        if r.get('is_pagination'):
+            return False
+        url = (r.get('url') or '').strip()
+        if not url or not (url.startswith('http://') or url.startswith('https://')):
+            return False
+        return True
+
+    eligible = [r for r in results if _is_indexable_200(r)]
+
+    seen = set()
+    urls = []
+    for r in eligible:
+        u = r['url'].strip()
+        if u in seen:
+            continue
+        seen.add(u)
+        # Format Last-Modified as W3C date (YYYY-MM-DD). Header arrives as
+        # RFC 1123; fall back silently if missing or malformed.
+        lastmod = ''
+        lm_raw = (r.get('last_modified') or '').strip()
+        if lm_raw:
+            try:
+                lastmod = _parsedate(lm_raw).strftime('%Y-%m-%d')
+            except Exception:
+                lastmod = ''
+        urls.append({'loc': u, 'lastmod': lastmod})
+
+    SITEMAP_NS = 'http://www.sitemaps.org/schemas/sitemap/0.9'
+    URLS_PER_SITEMAP = 50000
+
+    def _build_urlset(chunk):
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                 f'<urlset xmlns="{SITEMAP_NS}">']
+        for u in chunk:
+            lines.append('  <url>')
+            lines.append(f'    <loc>{_xml_escape(u["loc"])}</loc>')
+            if u['lastmod']:
+                lines.append(f'    <lastmod>{u["lastmod"]}</lastmod>')
+            lines.append('  </url>')
+        lines.append('</urlset>')
+        lines.append('')
+        return '\n'.join(lines)
+
+    safe_domain = _re.sub(r'[^a-zA-Z0-9.-]', '', (domain or '').lstrip('.').replace('www.', '', 1))
+    _ts = _dt.now().strftime('%Y-%m-%d-%H%M')
+
+    if len(urls) <= URLS_PER_SITEMAP:
+        xml = _build_urlset(urls)
+        _name = '-'.join([p for p in ['sitemap', safe_domain, _ts] if p]) + '.xml'
+        return send_file(_io.BytesIO(xml.encode('utf-8')),
+            mimetype='application/xml',
+            as_attachment=True,
+            download_name=_name)
+
+    zip_buf = _io.BytesIO()
+    today = _dt.now().strftime('%Y-%m-%d')
+    with _zipfile.ZipFile(zip_buf, 'w', _zipfile.ZIP_DEFLATED) as zf:
+        index_lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                       f'<sitemapindex xmlns="{SITEMAP_NS}">']
+        for i in range(0, len(urls), URLS_PER_SITEMAP):
+            chunk = urls[i:i + URLS_PER_SITEMAP]
+            child_name = f'sitemap-{i // URLS_PER_SITEMAP + 1}.xml'
+            zf.writestr(child_name, _build_urlset(chunk))
+            host = domain.rstrip('/') if domain else ''
+            index_lines.append('  <sitemap>')
+            index_lines.append(f'    <loc>{_xml_escape(host + "/" + child_name)}</loc>')
+            index_lines.append(f'    <lastmod>{today}</lastmod>')
+            index_lines.append('  </sitemap>')
+        index_lines.append('</sitemapindex>')
+        index_lines.append('')
+        zf.writestr('sitemap.xml', '\n'.join(index_lines))
+    zip_buf.seek(0)
+    _name = '-'.join([p for p in ['sitemap', safe_domain, _ts] if p]) + '.zip'
+    return send_file(zip_buf,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=_name)
 
 
 if __name__ == "__main__":
