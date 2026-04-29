@@ -837,6 +837,9 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         text_root = main_container if main_container else soup_body
         body_text = text_root.get_text(separator=' ', strip=True)
         result['word_count'] = len(body_text.split()) if body_text else 0
+        # Cap body text at 30k chars — sufficient for shingle-based near-dup
+        # detection on any reasonable page; keeps the SSE payload bounded.
+        result['body_text'] = (body_text[:30_000] if body_text else '')
 
         # Body hash for exact-duplicate detection — normalize whitespace first
         import hashlib as _hashlib
@@ -1474,6 +1477,129 @@ def sitemap_analyse():
             'pagination_in_sitemap': pagination_in_sitemap,
         },
         'warnings': warnings,
+    })
+
+
+# =============================================================================
+# Near-duplicate content detection (Shingle Jaccard 5-gram + df=1 filter).
+# Mirrors the algorithm and API surface in seo-tool. Pure stdlib, no LLM.
+# =============================================================================
+
+_ND_STOP = {
+    'a', 'an', 'the', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could', 'can',
+    'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'about', 'as', 'into', 'through',
+    'this', 'that', 'these', 'those', 'i', 'we', 'you', 'they', 'it', 'he', 'she',
+    'our', 'your', 'their', 'its', 'his', 'her', 'my',
+    'not', 'no', 'so', 'if', 'than', 'then', 'too', 'very', 'just',
+    'over', 'under', 'before', 'after', 'between', 'from', 'up', 'down', 'out', 'off',
+    'all', 'any', 'each', 'most', 'some', 'other', 'such', 'only', 'own', 'same',
+    'us', 'me', 'them', 'who', 'what', 'where', 'when', 'why', 'how',
+}
+
+def _nd_tokenize(text):
+    return _re.findall(r"[a-z][a-z'\-]{1,}", (text or '').lower())
+
+def _nd_strip_selectors(html_or_text, selectors):
+    if not selectors or not html_or_text:
+        return html_or_text
+    sel_list = [s.strip() for s in selectors.split(',') if s.strip()]
+    if not sel_list or '<' not in html_or_text or '>' not in html_or_text:
+        return html_or_text
+    try:
+        soup = BeautifulSoup(html_or_text, 'html.parser')
+        for sel in sel_list:
+            for node in soup.select(sel):
+                node.decompose()
+        return soup.get_text(separator=' ', strip=True)
+    except Exception:
+        return html_or_text
+
+@app.route('/near-dup-content', methods=['POST'])
+def near_dup_content():
+    payload = request.get_json(silent=True) or {}
+    pages = payload.get('pages') or []
+    try:
+        threshold = float(payload.get('threshold', 0.90))
+    except (TypeError, ValueError):
+        threshold = 0.90
+    threshold = max(0.5, min(0.99, threshold))
+    exclude_sel = (payload.get('exclude_selectors') or '').strip()
+
+    t0 = time.perf_counter()
+
+    docs = []
+    skipped = 0
+    for p in pages:
+        url = (p.get('url') or '').strip()
+        body = p.get('body_text') or ''
+        if not url or not body:
+            skipped += 1
+            continue
+        canonical = (p.get('canonical') or '').strip()
+        if canonical and canonical != url:
+            skipped += 1
+            continue
+        if p.get('indexable') is False:
+            skipped += 1
+            continue
+        if exclude_sel:
+            body = _nd_strip_selectors(body, exclude_sel)
+        toks = [t for t in _nd_tokenize(body) if t not in _ND_STOP and len(t) > 1]
+        if len(toks) < 20:
+            skipped += 1
+            continue
+        docs.append({'url': url, 'tokens': toks})
+
+    df = {}
+    for d in docs:
+        for t in set(d['tokens']):
+            df[t] = df.get(t, 0) + 1
+    common_terms = {t for t, c in df.items() if c >= 2}
+
+    n = 5
+    sets = []
+    for d in docs:
+        toks = [t for t in d['tokens'] if t in common_terms]
+        if len(toks) < n:
+            sets.append({'url': d['url'], 'shingles': set()})
+            continue
+        shingles = {' '.join(toks[i:i + n]) for i in range(len(toks) - n + 1)}
+        sets.append({'url': d['url'], 'shingles': shingles})
+
+    pairs = []
+    M = len(sets)
+    for i in range(M):
+        sa = sets[i]['shingles']
+        if not sa:
+            continue
+        for j in range(i + 1, M):
+            sb = sets[j]['shingles']
+            if not sb:
+                continue
+            inter = len(sa & sb)
+            union = len(sa | sb)
+            if not union:
+                continue
+            sim = inter / union
+            if sim >= threshold:
+                sample = next(iter(sa & sb), '') if inter else ''
+                pairs.append({
+                    'url_a': sets[i]['url'],
+                    'url_b': sets[j]['url'],
+                    'similarity': round(sim, 4),
+                    'shared_phrase_sample': sample,
+                })
+    pairs.sort(key=lambda p: -p['similarity'])
+
+    return jsonify({
+        'pairs': pairs,
+        'stats': {
+            'docs_analysed': M,
+            'docs_skipped': skipped,
+            'threshold': threshold,
+            'took_ms': int((time.perf_counter() - t0) * 1000),
+        },
     })
 
 

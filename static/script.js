@@ -561,6 +561,7 @@ window.selectCategory = function(cat) {
     '__sm_only': 'Sitemap Only — Not Reached by Crawl', '__sm_noindex': 'Non-Indexable in Sitemap',
     '__sm_non200': 'Non-200 in Sitemap', '__sm_redirects': 'Redirects in Sitemap',
     '__sm_pagination': 'Pagination in Sitemap',
+    '__nd_content': 'Near-Duplicate Content — pairs above the similarity threshold',
     '__schema_by_page': 'Schema by Page — every crawled page with the schema types it emits',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
@@ -572,7 +573,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -581,6 +582,8 @@ window.selectCategory = function(cat) {
     if (_expandHint) _expandHint.style.display = 'none';
     if (cat === '__schema_by_page') {
       _renderSchemaByPagePanel();
+    } else if (cat === '__nd_content') {
+      _renderNearDupPanel();
     } else {
       _renderSitemapPanel(cat);
     }
@@ -588,11 +591,13 @@ window.selectCategory = function(cat) {
     if (bulkBtn) bulkBtn.style.display = 'none';
     return;
   }
-  // Drop any sitemap/schema panel content when switching back.
+  // Drop any sitemap/schema/near-dup panel content when switching back.
   const smPanel = document.getElementById('sitemap-panel');
   if (smPanel) smPanel.remove();
   const schemaPanel = document.getElementById('schema-by-page-panel');
   if (schemaPanel) schemaPanel.remove();
+  const ndPanel = document.getElementById('near-dup-panel');
+  if (ndPanel) ndPanel.remove();
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
 
@@ -781,6 +786,172 @@ function _renderSchemaByPagePanel() {
   main.appendChild(panel);
 }
 
+// =============================================================================
+// Near-duplicate content detection (mirrors seo-tool, no Claude/AI).
+// =============================================================================
+function _scToggleNearDupCfg(checked) {
+  const cfg = document.getElementById('crawler-neardup-cfg');
+  if (cfg) cfg.style.display = checked ? '' : 'none';
+}
+window._scToggleNearDupCfg = _scToggleNearDupCfg;
+
+window.runNearDupAnalysis = async function() {
+  const thresholdEl = document.getElementById('crawler-neardup-threshold');
+  const excludeEl = document.getElementById('crawler-neardup-exclude');
+  let threshold = parseFloat((thresholdEl && thresholdEl.value) || '90');
+  if (!isFinite(threshold)) threshold = 90;
+  threshold = Math.max(50, Math.min(99, threshold)) / 100;
+  const excludeSelectors = (excludeEl && excludeEl.value) || '';
+  const pages = (crawlerResults || [])
+    .filter(r => r && r.body_text && !r.error)
+    .map(r => ({
+      url: r.url,
+      body_text: r.body_text,
+      canonical: r.canonical || '',
+      indexable: r.indexable !== false,
+    }));
+  if (!pages.length) return;
+  try {
+    const resp = await fetch('/near-dup-content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pages, threshold, exclude_selectors: excludeSelectors }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || 'failed');
+    window._ndPairs = data.pairs || [];
+    window._ndStats = data.stats || {};
+    const header = document.getElementById('nd-section-header');
+    const cat = document.getElementById('nd-cat-content');
+    const cnt = document.querySelector('#nd-cat-content [data-count="__nd_content"]');
+    const n = window._ndPairs.length;
+    if (header) header.style.display = (n > 0) ? '' : 'none';
+    if (cat) cat.style.display = (n > 0) ? '' : 'none';
+    if (cnt) cnt.textContent = String(n);
+  } catch (e) {
+    console.warn('[near-dup] analysis failed:', e);
+  }
+};
+
+function _renderNearDupPanel() {
+  const main = document.querySelector('section#crawler-results') || document.querySelector('section.results') || document.querySelector('main') || document.body;
+  document.getElementById('near-dup-panel')?.remove();
+  const panel = document.createElement('div');
+  panel.id = 'near-dup-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;';
+  const pairs = window._ndPairs || [];
+  const stats = window._ndStats || {};
+  if (!pairs.length) {
+    panel.innerHTML = `<div style="padding:20px;color:var(--text-muted,#64748b);font-size:13px;">
+      Tick <b>Near-duplicate content</b> in the sidebar before crawling, or
+      <button type="button" onclick="runNearDupAnalysis().then(() => selectCategory('__nd_content'))" style="background:var(--accent,#6366f1);color:#fff;border:none;border-radius:5px;padding:5px 12px;font-size:12px;cursor:pointer;margin:0 4px;">Run analysis now</button>
+      against the current crawl.
+    </div>`;
+    main.appendChild(panel);
+    return;
+  }
+  const tPct = Math.round((stats.threshold || 0.9) * 100);
+  const rowsHtml = pairs.map(p => {
+    const safeA = (p.url_a || '').replace(/'/g, "\\'");
+    const safeB = (p.url_b || '').replace(/'/g, "\\'");
+    const sim = Math.round((p.similarity || 0) * 100);
+    const simColor = sim >= 95 ? '#dc2626' : sim >= 90 ? '#ea580c' : sim >= 85 ? '#d97706' : '#65a30d';
+    const pathA = (p.url_a || '').replace(/^https?:\/\/[^\/]+/, '') || '/';
+    const pathB = (p.url_b || '').replace(/^https?:\/\/[^\/]+/, '') || '/';
+    return `<tr style="border-bottom:1px solid var(--border,#e2e8f0);">
+      <td style="padding:7px 12px;font-variant-numeric:tabular-nums;font-weight:700;color:${simColor};white-space:nowrap;">${sim}%</td>
+      <td style="padding:7px 12px;font-size:12px;"><a href="${p.url_a}" target="_blank" style="color:var(--accent,#6366f1);text-decoration:none;">${pathA}</a></td>
+      <td style="padding:7px 12px;font-size:12px;"><a href="${p.url_b}" target="_blank" style="color:var(--accent,#6366f1);text-decoration:none;">${pathB}</a></td>
+      <td style="padding:7px 12px;font-size:11px;color:var(--text-muted,#64748b);font-family:monospace;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(p.shared_phrase_sample||'').replace(/"/g,'&quot;')}">${p.shared_phrase_sample || '—'}</td>
+      <td style="padding:7px 12px;text-align:right;"><button type="button" onclick="openNdDiff('${safeA}','${safeB}')" style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:5px;padding:3px 9px;font-size:11px;color:var(--accent,#6366f1);cursor:pointer;">Compare →</button></td>
+    </tr>`;
+  }).join('');
+  panel.innerHTML = `
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border,#e2e8f0);background:var(--surface2,#f8fafc);display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:12px;">
+      <span><b style="font-size:16px;font-variant-numeric:tabular-nums;">${pairs.length}</b> <span style="color:var(--text-muted,#64748b);">pair${pairs.length === 1 ? '' : 's'} ≥ ${tPct}%</span></span>
+      <span style="color:var(--text-muted,#64748b);">·</span>
+      <span><b>${stats.docs_analysed || 0}</b> <span style="color:var(--text-muted,#64748b);">analysed</span></span>
+      <span><b>${stats.docs_skipped || 0}</b> <span style="color:var(--text-muted,#64748b);">skipped</span></span>
+      <span style="color:var(--text-muted,#64748b);">· took ${stats.took_ms || 0} ms</span>
+      <button type="button" onclick="runNearDupAnalysis().then(() => selectCategory('__nd_content'))" style="margin-left:auto;background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;">Re-run</button>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead>
+        <tr style="background:var(--surface,#fff);border-bottom:2px solid var(--border,#e2e8f0);">
+          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Sim</th>
+          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Page A</th>
+          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Page B</th>
+          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Shared sample</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>`;
+  main.appendChild(panel);
+}
+
+window.openNdDiff = function(urlA, urlB) {
+  const findRow = (u) => (crawlerResults || []).find(r => r.url === u);
+  const a = findRow(urlA);
+  const b = findRow(urlB);
+  if (!a || !b) return;
+  const pair = (window._ndPairs || []).find(p =>
+    (p.url_a === urlA && p.url_b === urlB) || (p.url_a === urlB && p.url_b === urlA));
+  const sim = pair ? Math.round((pair.similarity || 0) * 100) : 0;
+  const ND_STOP = new Set(('a an the and or but is are was were be been being have has had do does did will would should could can to of in on at by for with about as into through this that these those i we you they it he she our your their its his her my not no so if than then too very just over under before after between from up down out off all any each most some other such only own same us me them who what where when why how').split(' '));
+  const tokenise = (s) => (s || '').toLowerCase().match(/[a-z][a-z'\-]{1,}/g) || [];
+  const tokensA = tokenise(a.body_text);
+  const tokensB = tokenise(b.body_text);
+  const counts = {};
+  [...new Set(tokensA)].forEach(t => counts[t] = (counts[t] || 0) + 1);
+  [...new Set(tokensB)].forEach(t => counts[t] = (counts[t] || 0) + 1);
+  const filt = (toks) => toks.filter(t => !ND_STOP.has(t) && t.length > 1 && counts[t] >= 2);
+  const fa = filt(tokensA);
+  const fb = filt(tokensB);
+  const shing = (toks, n=5) => {
+    const s = new Set();
+    for (let i = 0; i + n <= toks.length; i++) s.add(toks.slice(i, i + n).join(' '));
+    return s;
+  };
+  const sa = shing(fa);
+  const sb = shing(fb);
+  const shared = new Set([...sa].filter(s => sb.has(s)));
+  const sharedTokens = new Set();
+  shared.forEach(g => g.split(' ').forEach(t => sharedTokens.add(t)));
+  const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const renderBody = (text) => {
+    if (!text) return '<em style="color:var(--text-muted,#64748b);">(no body text captured)</em>';
+    const sentences = text.split(/(?<=[.!?])\s+/);
+    return sentences.map(sent => {
+      const words = (sent.toLowerCase().match(/[a-z][a-z'\-]{1,}/g) || []).filter(t => sharedTokens.has(t));
+      const isShared = words.length >= 4;
+      return isShared
+        ? `<span style="background:rgba(34,197,94,0.18);color:#15803d;padding:0 2px;border-radius:2px;">${escapeHtml(sent)}</span>`
+        : escapeHtml(sent);
+    }).join(' ');
+  };
+  document.getElementById('nd-diff-similarity').textContent = `${sim}% similar`;
+  document.getElementById('nd-diff-url-a').textContent = a.url;
+  document.getElementById('nd-diff-url-b').textContent = b.url;
+  document.getElementById('nd-diff-link-a').href = a.url;
+  document.getElementById('nd-diff-link-b').href = b.url;
+  document.getElementById('nd-diff-body-a').innerHTML = renderBody(a.body_text);
+  document.getElementById('nd-diff-body-b').innerHTML = renderBody(b.body_text);
+  document.getElementById('nd-diff-modal').style.display = 'flex';
+};
+
+window.closeNdDiff = function() {
+  const modal = document.getElementById('nd-diff-modal');
+  if (modal) modal.style.display = 'none';
+};
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const modal = document.getElementById('nd-diff-modal');
+    if (modal && modal.style.display === 'flex') closeNdDiff();
+  }
+});
+
 function _renderSitemapPanel(cat) {
   const d = crawlerSitemap;
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
@@ -932,14 +1103,21 @@ function crawlFinished() {
     }
   }
   if (queuedEl) queuedEl.textContent = '0';
-  // Auto-run sitemap analysis once the crawl settles. Saves a click on
-  // every audit and pre-populates the sm_* sidebar entries. Defer briefly
-  // so the host has a moment to recover from the crawl burst rate-limit
-  // before we re-fetch robots.txt.
-  if (Array.isArray(crawlerResults) && crawlerResults.length && typeof window.analyseSitemap === 'function') {
-    setTimeout(() => {
-      try { window.analyseSitemap(); } catch (e) { console.warn('auto-analyseSitemap failed:', e); }
-    }, 1500);
+  // Sitemap analysis is opt-in via the 'Sitemap analysis' checkbox.
+  if (Array.isArray(crawlerResults) && crawlerResults.length) {
+    const _smCheckbox = document.getElementById('crawler-run-sitemap');
+    if (_smCheckbox && _smCheckbox.checked && typeof window.analyseSitemap === 'function') {
+      setTimeout(() => {
+        try { window.analyseSitemap(); } catch (e) { console.warn('auto-analyseSitemap failed:', e); }
+      }, 1500);
+    }
+    // Near-duplicate content analysis — opt-in via 'Near-duplicate content' checkbox.
+    const _ndCheckbox = document.getElementById('crawler-run-neardup');
+    if (_ndCheckbox && _ndCheckbox.checked && typeof window.runNearDupAnalysis === 'function') {
+      setTimeout(() => {
+        try { window.runNearDupAnalysis(); } catch (e) { console.warn('auto-runNearDup failed:', e); }
+      }, 1800);
+    }
   }
 }
 
