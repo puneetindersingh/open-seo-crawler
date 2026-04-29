@@ -18,6 +18,7 @@ Features:
 from flask import Flask, render_template, request, Response, stream_with_context, jsonify
 import requests
 import json
+import os
 import re as _re
 import time
 import logging
@@ -2086,6 +2087,286 @@ def crawl_site():
             'Access-Control-Allow-Origin': '*'
         }
     )
+
+
+# =============================================================================
+# Saved crawls — store / list / load / delete / compare
+# Storage: ~/.site-crawler-crawls/  (LOCAL ONLY, never pushed to git).
+# Open to all users on this instance — saved crawls are shared.
+# Note: this is pure file I/O + diff math. No AI / LLM involved.
+# =============================================================================
+
+_CRAWL_FOLDER = os.path.expanduser('~/.site-crawler-crawls')
+
+@app.route('/crawl/save', methods=['POST'])
+def crawl_save():
+    body = request.json or {}
+    name = (body.get('name') or '').strip() or f'crawl-{int(time.time())}'
+    results = body.get('results') or []
+    inlinks = body.get('inlinks') or {}
+    reports = body.get('reports') or {}
+    if not results:
+        return jsonify({'error': 'No crawl data supplied'}), 400
+    os.makedirs(_CRAWL_FOLDER, exist_ok=True)
+    safe = _re.sub(r'[^A-Za-z0-9._-]', '_', name)[:80]
+    path = os.path.join(_CRAWL_FOLDER, f'{int(time.time())}_{safe}.json')
+    try:
+        with open(path, 'w') as f:
+            json.dump({
+                'name': name,
+                'saved_at': int(time.time()),
+                'pages': len(results),
+                'seed': (results[0].get('url') if results else ''),
+                'saved_by': (request.remote_addr or 'anon'),
+                'results': results,
+                'inlinks': inlinks,
+                'reports': reports,
+            }, f)
+    except Exception as e:
+        return jsonify({'error': f'Save failed: {str(e)[:200]}'}), 500
+    # 30-day cleanup
+    try:
+        cutoff = int(time.time()) - 30 * 86400
+        for fn in os.listdir(_CRAWL_FOLDER):
+            if not fn.endswith('.json'):
+                continue
+            fp = os.path.join(_CRAWL_FOLDER, fn)
+            try:
+                with open(fp) as f:
+                    d = json.load(f)
+            except Exception:
+                continue
+            if (d.get('saved_at') or 0) < cutoff:
+                try: os.remove(fp)
+                except OSError: pass
+    except Exception:
+        pass
+    return jsonify({'ok': True, 'file': os.path.basename(path), 'name': name})
+
+
+@app.route('/crawl/list', methods=['GET'])
+def crawl_list():
+    """List ALL saved crawls from the last 30 days (shared across users)."""
+    if not os.path.isdir(_CRAWL_FOLDER):
+        return jsonify({'crawls': []})
+    cutoff = int(time.time()) - 30 * 86400
+    out = []
+    for fn in sorted(os.listdir(_CRAWL_FOLDER), reverse=True):
+        if not fn.endswith('.json'): continue
+        path = os.path.join(_CRAWL_FOLDER, fn)
+        try:
+            with open(path) as f: d = json.load(f)
+            if (d.get('saved_at') or 0) < cutoff: continue
+            out.append({
+                'file': fn,
+                'name': d.get('name', fn),
+                'saved_at': d.get('saved_at'),
+                'pages': d.get('pages', 0),
+                'seed': d.get('seed', ''),
+                'saved_by': d.get('saved_by', '') or 'unknown',
+            })
+        except Exception:
+            continue
+    return jsonify({'crawls': out})
+
+
+@app.route('/crawl/load', methods=['GET'])
+def crawl_load():
+    fn = request.args.get('file', '')
+    if not fn or '/' in fn or '\\' in fn or not fn.endswith('.json'):
+        return jsonify({'error': 'Invalid file'}), 400
+    path = os.path.join(_CRAWL_FOLDER, fn)
+    if not os.path.exists(path):
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        with open(path) as f: d = json.load(f)
+    except Exception as e:
+        return jsonify({'error': f'Load failed: {str(e)[:200]}'}), 500
+    return jsonify({
+        'results': d.get('results', []),
+        'inlinks': d.get('inlinks', {}),
+        'reports': d.get('reports', {}),
+        'name': d.get('name', ''),
+        'seed': d.get('seed', ''),
+    })
+
+
+@app.route('/crawl/delete', methods=['POST'])
+def crawl_delete():
+    fn = (request.json or {}).get('file', '')
+    if not fn or '/' in fn or '\\' in fn or not fn.endswith('.json'):
+        return jsonify({'error': 'Invalid file'}), 400
+    path = os.path.join(_CRAWL_FOLDER, fn)
+    if not os.path.exists(path):
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        os.remove(path)
+    except Exception as e:
+        return jsonify({'error': f'Delete failed: {str(e)[:200]}'}), 500
+    return jsonify({'ok': True})
+
+
+@app.route('/crawl/compare', methods=['POST'])
+def crawl_compare():
+    """Diff two crawls. Accepts {a_file, b_file} or {a_file, b_results}.
+    Returns aggregate metrics, issues comparison, structure diff,
+    plus added/removed/changed URL lists."""
+    body = request.json or {}
+
+    def _load_file(fn):
+        if not fn or '/' in fn or '\\' in fn or not fn.endswith('.json'):
+            return None, 'Invalid file'
+        fp = os.path.join(_CRAWL_FOLDER, fn)
+        if not os.path.exists(fp):
+            return None, 'Not found'
+        try:
+            with open(fp) as f: d = json.load(f)
+        except Exception as e:
+            return None, f'Load failed: {str(e)[:200]}'
+        return d, None
+
+    a_file = body.get('a_file', '')
+    a_data, err = _load_file(a_file)
+    if err: return jsonify({'error': err}), 400
+    a_results = a_data.get('results', [])
+    a_meta = {'name': a_data.get('name',''), 'saved_at': a_data.get('saved_at'), 'pages': a_data.get('pages', len(a_results))}
+
+    b_file = body.get('b_file', '')
+    b_results_in = body.get('b_results')
+    if b_file:
+        b_data, err = _load_file(b_file)
+        if err: return jsonify({'error': err}), 400
+        b_results = b_data.get('results', [])
+        b_meta = {'name': b_data.get('name',''), 'saved_at': b_data.get('saved_at'), 'pages': b_data.get('pages', len(b_results))}
+    elif isinstance(b_results_in, list):
+        b_results = b_results_in
+        b_meta = {'name': 'Current crawl (in memory)', 'saved_at': int(time.time()), 'pages': len(b_results)}
+    else:
+        return jsonify({'error': 'Supply b_file or b_results'}), 400
+
+    def _key(u):
+        return (u or '').rstrip('/').lower()
+    a_by = {_key(r.get('url')): r for r in a_results if r.get('url')}
+    b_by = {_key(r.get('url')): r for r in b_results if r.get('url')}
+    a_urls = set(a_by.keys()); b_urls = set(b_by.keys())
+    added = sorted(b_urls - a_urls); removed = sorted(a_urls - b_urls)
+    shared = a_urls & b_urls
+
+    watch = (
+        'status_code', 'title', 'title_len', 'meta_description', 'meta_len',
+        'h1', 'word_count', 'canonical', 'redirect_url', 'indexable',
+        'depth', 'response_time', 'internal_links', 'external_links',
+        'images_no_alt', 'body_hash',
+    )
+    def _norm_list(v):
+        if v is None: return ''
+        if isinstance(v, list): return ', '.join(sorted(str(x) for x in v))
+        return str(v)
+    changed = []
+    for k in sorted(shared):
+        ar = a_by[k]; br = b_by[k]
+        diffs = {}
+        for f in watch:
+            av = ar.get(f); bv = br.get(f)
+            if (av if av is not None else '') != (bv if bv is not None else ''):
+                diffs[f] = {'old': av, 'new': bv}
+        sa = _norm_list(ar.get('schema_types')); sb = _norm_list(br.get('schema_types'))
+        if sa != sb:
+            diffs['schema_types'] = {'old': sa or '—', 'new': sb or '—'}
+        if diffs:
+            changed.append({'url': ar.get('url') or br.get('url'), 'diffs': diffs})
+
+    def _agg(rows):
+        n = len(rows); codes = {'2xx':0,'3xx':0,'4xx':0,'5xx':0,'other':0}
+        errors=warns=indexable=noindex=with_schema=redirects=missing_title=missing_meta=missing_h1=missing_canonical=title_too_long=meta_too_long=thin=slow=no_alt=0
+        depths=[]; rts=[]
+        for r in rows:
+            sc = r.get('status_code') or 0
+            if 200 <= sc < 300: codes['2xx'] += 1
+            elif 300 <= sc < 400: codes['3xx'] += 1
+            elif 400 <= sc < 500: codes['4xx'] += 1
+            elif 500 <= sc < 600: codes['5xx'] += 1
+            else: codes['other'] += 1
+            if sc >= 400 or r.get('error'): errors += 1
+            if r.get('issues'): warns += 1
+            depths.append(r.get('depth') or 0)
+            if r.get('response_time'): rts.append(r['response_time'])
+            if r.get('indexable') is True: indexable += 1
+            elif r.get('indexable') is False: noindex += 1
+            if r.get('schema_types'): with_schema += 1
+            if r.get('redirect_url'): redirects += 1
+            if not r.get('title'): missing_title += 1
+            elif (r.get('title_len') or 0) > 60: title_too_long += 1
+            if not r.get('meta_description'): missing_meta += 1
+            elif (r.get('meta_len') or 0) > 160: meta_too_long += 1
+            if not r.get('h1'): missing_h1 += 1
+            if not r.get('canonical'): missing_canonical += 1
+            if (r.get('word_count') or 0) < 200: thin += 1
+            if (r.get('response_time') or 0) > 3: slow += 1
+            no_alt += int(r.get('images_no_alt') or 0)
+        return {'pages':n,'codes':codes,'errors':errors,'warns_pages':warns,
+                'max_depth':max(depths) if depths else 0,
+                'avg_depth':round(sum(depths)/len(depths),2) if depths else 0,
+                'avg_response_time':round(sum(rts)/len(rts),2) if rts else 0,
+                'indexable':indexable,'noindex':noindex,'with_schema':with_schema,
+                'redirects':redirects,'missing_title':missing_title,'missing_meta':missing_meta,
+                'missing_h1':missing_h1,'missing_canonical':missing_canonical,
+                'title_too_long':title_too_long,'meta_too_long':meta_too_long,
+                'thin':thin,'slow':slow,'images_no_alt':no_alt}
+    agg_a = _agg(a_results); agg_b = _agg(b_results)
+
+    def _normalize_issue(s):
+        if not s: return s
+        out = _re.sub(r'\s*\([^)]*\)\s*$', '', s).strip()
+        out = _re.sub(r'^\d+\s+', '', out).strip()
+        return out or s
+    def _issue_counts(rows):
+        counts = {}
+        for r in rows:
+            seen = set()
+            for issue in (r.get('issues') or []):
+                norm = _normalize_issue(issue)
+                if norm in seen: continue
+                seen.add(norm)
+                counts[norm] = counts.get(norm, 0) + 1
+        return counts
+    issues_a = _issue_counts(a_results); issues_b = _issue_counts(b_results)
+    issues_compare = []
+    for iss in sorted(set(issues_a) | set(issues_b)):
+        ia = issues_a.get(iss, 0); ib = issues_b.get(iss, 0)
+        if ia == ib == 0: continue
+        issues_compare.append({'issue': iss, 'a': ia, 'b': ib, 'delta': ib - ia})
+    issues_compare.sort(key=lambda x: abs(x['delta']), reverse=True)
+
+    from urllib.parse import urlparse as _urlp
+    def _dir_counts(rows):
+        c = {}
+        for r in rows:
+            try: p = _urlp(r.get('url') or '').path or '/'
+            except Exception: p = '/'
+            seg = '/' + p.lstrip('/').split('/', 1)[0] + ('/' if '/' in p.lstrip('/') else '')
+            if seg in ('/', '/'): seg = '/' if p == '/' else seg
+            c[seg] = c.get(seg, 0) + 1
+        return c
+    dirs_a = _dir_counts(a_results); dirs_b = _dir_counts(b_results)
+    structure = []
+    for d in sorted(set(dirs_a) | set(dirs_b)):
+        da = dirs_a.get(d, 0); db = dirs_b.get(d, 0)
+        if da == db == 0: continue
+        structure.append({'path': d, 'a': da, 'b': db, 'delta': db - da})
+    structure.sort(key=lambda x: -(x['a'] + x['b']))
+
+    return jsonify({
+        'a': a_meta, 'b': b_meta,
+        'aggregate': {'a': agg_a, 'b': agg_b},
+        'issues': issues_compare,
+        'structure': structure[:30],
+        'added': [{'url': b_by[k].get('url'), 'status_code': b_by[k].get('status_code'), 'title': b_by[k].get('title')} for k in added],
+        'removed': [{'url': a_by[k].get('url'), 'status_code': a_by[k].get('status_code'), 'title': a_by[k].get('title')} for k in removed],
+        'changed': changed,
+        'summary': {'added': len(added), 'removed': len(removed),
+                    'changed': len(changed), 'unchanged': len(shared) - len(changed)},
+    })
 
 
 @app.route('/crawl/update-rules', methods=['POST'])

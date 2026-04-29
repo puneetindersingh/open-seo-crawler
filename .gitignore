@@ -13,3 +13,9 @@ logs/
 node_modules/
 .vscode/
 .idea/
+# Saved crawls — kept LOCAL ONLY, never pushed to git.
+# Stored at ~/.site-crawler-crawls/ (outside this repo). These patterns
+# are belt-and-braces in case the storage path ever changes to relative.
+.site-crawler-crawls/
+site-crawler-crawls/
+crawls/

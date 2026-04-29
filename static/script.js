@@ -1493,3 +1493,497 @@ function _scSetColumns(cat) {
     setTimeout(() => document.addEventListener('mousedown', close), 0);
   });
 })();
+
+// =============================================================================
+// Save / Load / Compare crawl sessions  (port of internal-tool's save+compare)
+// Crawls are persisted to ~/.site-crawler-crawls/ on the host — never committed.
+// =============================================================================
+if (typeof window.showToast !== 'function') {
+  window.showToast = function(msg, kind) {
+    const colors = { success: '#22c55e', error: '#ef4444', info: '#3b82f6' };
+    const n = document.createElement('div');
+    n.textContent = msg;
+    n.style.cssText = `position:fixed;bottom:80px;right:20px;background:${colors[kind] || colors.info};color:#fff;padding:9px 16px;border-radius:6px;font-size:12.5px;z-index:10001;pointer-events:none;box-shadow:0 6px 18px rgba(0,0,0,0.18);max-width:420px;`;
+    document.body.appendChild(n);
+    setTimeout(() => n.remove(), 3200);
+  };
+}
+
+function saveCurrentCrawl() {
+  if (!crawlerResults || !crawlerResults.length) {
+    showToast('Nothing to save yet — run a crawl first.', 'error');
+    return;
+  }
+  const defaultName = (crawlerResults[0].url || '').replace(/^https?:\/\//,'').replace(/\/$/,'');
+  const name = prompt('Name this crawl:', defaultName);
+  if (!name) return;
+  fetch('/crawl/save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name, results: crawlerResults, inlinks: crawlerInlinks })
+  }).then(r => r.json()).then(d => {
+    if (d.error) { showToast('Save failed: ' + d.error, 'error'); return; }
+    showToast(`Saved "${d.name}"`, 'success');
+  }).catch(e => showToast('Save failed: ' + e.message, 'error'));
+}
+
+function openCrawlLoader(opts) {
+  opts = opts || {};
+  const compareOnly = !!opts.compareOnly;
+  const ov = document.getElementById('crawl-loader-overlay');
+  const body = document.getElementById('crawl-loader-body');
+  if (!ov || !body) return;
+  body.innerHTML = '<div style="padding:20px;text-align:center;color:#64748b;font-size:12px;">Loading saved crawls…</div>';
+  ov.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  const hasCurrent = !!(crawlerResults && crawlerResults.length);
+  fetch('/crawl/list').then(r => r.json()).then(d => {
+    const crawls = d.crawls || [];
+    if (!crawls.length) {
+      body.innerHTML = '<div style="padding:32px;text-align:center;color:#64748b;font-size:13px;">No saved crawls in the last 30 days. Every crawl auto-saves — run one and it will appear here.</div>';
+      return;
+    }
+    let headerNote;
+    if (compareOnly) {
+      headerNote = hasCurrent
+        ? `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Pick a saved crawl to diff against the current crawl (${crawlerResults.length} pages).</div>`
+        : `<div style="padding:10px 14px;font-size:12px;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;margin:10px 14px;">Run or load a crawl first, then come back here to compare.</div>`;
+    } else {
+      headerNote = hasCurrent
+        ? `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Showing last 30 days · Current crawl loaded (${crawlerResults.length} pages) — use <strong>Compare</strong> to diff against any saved crawl.</div>`
+        : `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Showing last 30 days · Load a crawl to view it, then open this list again to compare.</div>`;
+    }
+    const header = `
+      <div style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">
+        <div>Date</div><div>Time</div><div>Website</div><div>Saved by</div><div style="text-align:right;">Pages</div><div></div>
+      </div>`;
+    const rows = crawls.map(c => {
+      const dt = new Date((c.saved_at || 0) * 1000);
+      const dateStr = dt.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'2-digit' });
+      const timeStr = dt.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit', hour12:false });
+      const seed = (c.seed || '').replace(/^https?:\/\//,'').replace(/\/$/,'');
+      const savedBy = (c.saved_by || 'unknown');
+      const compareBtn = hasCurrent
+        ? `<button onclick='compareWithCurrent(${JSON.stringify(c.file)}, ${JSON.stringify(c.name)})' style="padding:6px 12px;font-size:11px;background:${compareOnly ? '#6366f1' : 'transparent'};color:${compareOnly ? '#fff' : '#6366f1'};border:1px solid #6366f1;border-radius:4px;cursor:pointer;font-weight:${compareOnly ? '600' : '400'};">Compare</button>`
+        : '';
+      const loadBtn = compareOnly
+        ? ''
+        : `<button onclick='loadSavedCrawl(${JSON.stringify(c.file)})' style="padding:6px 10px;font-size:11px;background:#6366f1;color:#fff;border:0;border-radius:4px;cursor:pointer;">Load</button>`;
+      const delBtn = compareOnly
+        ? ''
+        : `<button onclick='deleteSavedCrawl(${JSON.stringify(c.file)})' title="Delete" style="padding:6px 8px;font-size:11px;background:transparent;color:#64748b;border:1px solid #e2e8f0;border-radius:4px;cursor:pointer;">✕</button>`;
+      return `
+        <div style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;">
+          <div style="color:#0f172a;font-variant-numeric:tabular-nums;">${dateStr}</div>
+          <div style="color:#64748b;font-variant-numeric:tabular-nums;font-family:'SF Mono','Menlo',monospace;">${timeStr}</div>
+          <div style="min-width:0;">
+            <div style="font-weight:600;color:#0f172a;word-break:break-all;">${seed || c.name}</div>
+            <div style="font-size:10px;color:#64748b;word-break:break-all;">${c.name}</div>
+          </div>
+          <div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${savedBy}">${savedBy}</div>
+          <div style="text-align:right;color:#0f172a;font-variant-numeric:tabular-nums;">${c.pages}</div>
+          <div style="display:flex;gap:6px;justify-content:flex-end;">
+            ${compareBtn}
+            ${loadBtn}
+            ${delBtn}
+          </div>
+        </div>
+      `;
+    }).join('');
+    body.innerHTML = headerNote + header + rows;
+  }).catch(e => {
+    body.innerHTML = `<div style="padding:20px;color:#ef4444;font-size:12px;">Error: ${e.message}</div>`;
+  });
+}
+
+function openCompareCrawlsPicker() {
+  if (!crawlerResults || !crawlerResults.length) {
+    showToast('Run or load a crawl first, then pick one to compare against.', 'error');
+    return;
+  }
+  openCrawlLoader({ compareOnly: true });
+}
+
+function closeCrawlLoader() {
+  const ov = document.getElementById('crawl-loader-overlay');
+  if (ov) ov.style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+function loadSavedCrawl(file) {
+  fetch('/crawl/load?file=' + encodeURIComponent(file)).then(r => r.json()).then(d => {
+    if (d.error) { showToast('Load failed: ' + d.error, 'error'); return; }
+    crawlerResults = d.results || [];
+    crawlerInlinks = d.inlinks || {};
+    const urlField = document.getElementById('crawler-url');
+    if (urlField && (d.seed || d.name)) urlField.value = d.seed || d.name;
+    setTimeout(() => {
+      const empty = document.getElementById('crawler-empty');
+      const results = document.getElementById('crawler-results');
+      const sidebar = document.getElementById('issues-sidebar');
+      const stats = document.getElementById('crawler-stats');
+      if (empty) empty.style.display = 'none';
+      if (results) results.style.display = '';
+      if (sidebar) sidebar.style.display = '';
+      if (stats) stats.style.display = 'grid';
+      const tbody = document.getElementById('crawler-tbody');
+      if (tbody) tbody.innerHTML = '';
+      crawlerResults.forEach(r => { try { renderRow(r); } catch(e){} });
+      const csCrawled = document.getElementById('cs-crawled');
+      if (csCrawled) csCrawled.textContent = String(crawlerResults.length);
+      const saveBtn = document.getElementById('crawler-save-btn');
+      if (saveBtn) saveBtn.style.display = '';
+      if (typeof updateCounts === 'function') updateCounts();
+      if (typeof window.selectCategory === 'function') window.selectCategory('all');
+      showToast(`Loaded "${d.name}" · ${crawlerResults.length} pages`, 'success');
+      closeCrawlLoader();
+    }, 120);
+  }).catch(e => showToast('Load failed: ' + e.message, 'error'));
+}
+
+function deleteSavedCrawl(file) {
+  if (!confirm('Delete this saved crawl?')) return;
+  fetch('/crawl/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ file })
+  }).then(r => r.json()).then(d => {
+    if (d.error) { showToast('Delete failed: ' + d.error, 'error'); return; }
+    openCrawlLoader();
+  });
+}
+
+function compareWithCurrent(file, savedName) {
+  if (!crawlerResults || !crawlerResults.length) {
+    showToast('Load or run a crawl first, then compare.', 'error'); return;
+  }
+  closeCrawlLoader();
+  window._compareActiveTab = 'overview';
+  showToast('Comparing…', 'info');
+  fetch('/crawl/compare', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ a_file: file, b_results: crawlerResults })
+  }).then(r => r.json()).then(d => {
+    if (d.error) { showToast('Compare failed: ' + d.error, 'error'); return; }
+    _renderCompareModal(d, savedName);
+  }).catch(e => showToast('Compare failed: ' + e.message, 'error'));
+}
+
+function _renderCompareModal(d, savedName) {
+  window._compareData = d;
+  window._compareSavedName = savedName;
+
+  let ov = document.getElementById('crawl-compare-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'crawl-compare-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:10000;display:none;flex-direction:column;overflow:hidden;';
+    ov.innerHTML = `
+      <div style="display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0;">
+        <div style="font-size:13px;font-weight:600;color:#0f172a;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="crawl-compare-title">Compare crawls</div>
+        <button onclick="_closeCompareModal()" style="background:#fff;border:1px solid #e2e8f0;border-radius:5px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;color:#0f172a;flex-shrink:0;display:inline-flex;align-items:center;gap:6px;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Exit Compare
+        </button>
+      </div>
+      <div id="crawl-compare-tabs" style="display:flex;gap:0;padding:0 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0;overflow-x:auto;"></div>
+      <div id="crawl-compare-body" style="overflow:auto;flex:1;min-height:0;background:#fff;"></div>
+    `;
+    document.body.appendChild(ov);
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && document.getElementById('crawl-compare-overlay')?.style.display === 'flex') {
+        _closeCompareModal();
+      }
+    });
+  }
+  const title = document.getElementById('crawl-compare-title');
+  if (title) title.textContent = `Compare: "${savedName || (d.a && d.a.name) || ''}" (old) vs current crawl`;
+  const escHtml = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const delta = (a, b, opts = {}) => {
+    const dlt = b - a;
+    if (dlt === 0) return `<span style="color:#94a3b8;">·</span>`;
+    const lessIsBetter = opts.lessIsBetter !== false;
+    const good = lessIsBetter ? dlt < 0 : dlt > 0;
+    const arrow = dlt > 0 ? '▲' : '▼';
+    const sign = dlt > 0 ? '+' : '';
+    const color = good ? '#10b981' : '#ef4444';
+    return `<span style="color:${color};font-weight:600;">${arrow} ${sign}${dlt}</span>`;
+  };
+  const deltaTime = (a, b) => {
+    const dlt = +(b - a).toFixed(2);
+    if (dlt === 0) return `<span style="color:#94a3b8;">·</span>`;
+    const good = dlt < 0;
+    const sign = dlt > 0 ? '+' : '';
+    const color = good ? '#10b981' : '#ef4444';
+    return `<span style="color:${color};font-weight:600;">${sign}${dlt}s</span>`;
+  };
+
+  const aggA = (d.aggregate && d.aggregate.a) || {};
+  const aggB = (d.aggregate && d.aggregate.b) || {};
+  const codesA = aggA.codes || {'2xx':0,'3xx':0,'4xx':0,'5xx':0,'other':0};
+  const codesB = aggB.codes || {'2xx':0,'3xx':0,'4xx':0,'5xx':0,'other':0};
+
+  const kpi = (label, a, b, opts) => `
+    <div style="flex:1;min-width:130px;padding:12px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">
+      <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
+      <div style="display:flex;align-items:baseline;gap:8px;">
+        <div style="font-size:20px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums;">${b}</div>
+        <div style="font-size:11px;color:#64748b;">was ${a}</div>
+        <div style="margin-left:auto;font-size:11px;">${(opts && opts.time) ? deltaTime(a, b) : delta(a, b, opts)}</div>
+      </div>
+    </div>`;
+  const toplineHtml = `
+    <div style="padding:14px 18px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;">
+        ${kpi('Pages', aggA.pages || 0, aggB.pages || 0, { lessIsBetter: false })}
+        ${kpi('Errors (4xx/5xx)', aggA.errors || 0, aggB.errors || 0)}
+        ${kpi('Pages with issues', aggA.warns_pages || 0, aggB.warns_pages || 0)}
+        ${kpi('Avg response time', aggA.avg_response_time || 0, aggB.avg_response_time || 0, { time: true })}
+        ${kpi('Max depth', aggA.max_depth || 0, aggB.max_depth || 0)}
+        ${kpi('Indexable', aggA.indexable || 0, aggB.indexable || 0, { lessIsBetter: false })}
+        ${kpi('Noindex', aggA.noindex || 0, aggB.noindex || 0)}
+        ${kpi('Pages with schema', aggA.with_schema || 0, aggB.with_schema || 0, { lessIsBetter: false })}
+        ${kpi('Redirects', aggA.redirects || 0, aggB.redirects || 0)}
+        ${kpi('Missing title', aggA.missing_title || 0, aggB.missing_title || 0)}
+        ${kpi('Missing meta', aggA.missing_meta || 0, aggB.missing_meta || 0)}
+        ${kpi('Missing H1', aggA.missing_h1 || 0, aggB.missing_h1 || 0)}
+        ${kpi('Thin content', aggA.thin || 0, aggB.thin || 0)}
+        ${kpi('Slow (>3s)', aggA.slow || 0, aggB.slow || 0)}
+        ${kpi('Images no alt', aggA.images_no_alt || 0, aggB.images_no_alt || 0)}
+      </div>
+    </div>`;
+
+  const codeColor = { '2xx': '#22c55e', '3xx': '#f59e0b', '4xx': '#ef4444', '5xx': '#dc2626', 'other': '#888' };
+  const codeRow = (k) => `
+    <tr style="border-bottom:1px solid #e2e8f0;">
+      <td style="padding:7px 14px;font-weight:600;color:${codeColor[k]};">${k}</td>
+      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b;">${codesA[k] || 0}</td>
+      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${codesB[k] || 0}</td>
+      <td style="padding:7px 14px;text-align:right;">${delta(codesA[k] || 0, codesB[k] || 0, { lessIsBetter: k !== '2xx' })}</td>
+    </tr>`;
+  const codesHtml = `
+    <details open style="border-bottom:1px solid #e2e8f0;">
+      <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Status codes</summary>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:7px 14px;text-align:left;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Code</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Old</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">New</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Δ</th>
+        </tr></thead>
+        <tbody>${['2xx','3xx','4xx','5xx','other'].map(codeRow).join('')}</tbody>
+      </table>
+    </details>`;
+
+  const issues = d.issues || [];
+  const issueRow = (it) => {
+    const sev = (typeof sevOf === 'function' ? sevOf(it.issue) : 'warn');
+    const sevColor = sev === 'error' ? '#ef4444' : sev === 'warn' ? '#f59e0b' : '#3b82f6';
+    return `<tr style="border-bottom:1px solid #e2e8f0;">
+      <td style="padding:7px 14px;"><span style="display:inline-block;padding:1px 6px;border-radius:3px;background:rgba(0,0,0,0.04);color:${sevColor};font-size:10px;font-weight:600;text-transform:uppercase;margin-right:6px;">${sev}</span><span style="font-size:12px;">${escHtml(it.issue)}</span></td>
+      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b;">${it.a}</td>
+      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${it.b}</td>
+      <td style="padding:7px 14px;text-align:right;">${delta(it.a, it.b)}</td>
+    </tr>`;
+  };
+  const issuesHtml = `
+    <details open style="border-bottom:1px solid #e2e8f0;">
+      <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Issues (${issues.length})</summary>
+      ${issues.length === 0 ? `<div style="padding:14px 18px;color:#64748b;font-size:12px;">No issues seen in either crawl.</div>` : `
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:7px 14px;text-align:left;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Issue</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Old</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">New</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Δ</th>
+        </tr></thead>
+        <tbody>${issues.map(issueRow).join('')}</tbody>
+      </table>`}
+    </details>`;
+
+  const structure = d.structure || [];
+  const structRow = (s) => `<tr style="border-bottom:1px solid #e2e8f0;">
+    <td style="padding:6px 14px;font-family:'SF Mono','Menlo',monospace;font-size:12px;">${escHtml(s.path)}</td>
+    <td style="padding:6px 14px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b;">${s.a}</td>
+    <td style="padding:6px 14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${s.b}</td>
+    <td style="padding:6px 14px;text-align:right;">${delta(s.a, s.b, { lessIsBetter: false })}</td>
+  </tr>`;
+  const structureHtml = structure.length ? `
+    <details style="border-bottom:1px solid #e2e8f0;">
+      <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Site structure (${structure.length} top-level directories)</summary>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:7px 14px;text-align:left;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Directory</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Old</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">New</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Δ</th>
+        </tr></thead>
+        <tbody>${structure.map(structRow).join('')}</tbody>
+      </table>
+    </details>` : '';
+
+  const s = d.summary || {};
+  const urlRow = (x, sign, signColor) => {
+    const sc = x.status_code ? `<span style="font-size:10.5px;color:${x.status_code >= 400 ? '#ef4444' : x.status_code >= 300 ? '#f59e0b' : '#22c55e'};font-weight:600;font-variant-numeric:tabular-nums;margin-right:8px;">${x.status_code}</span>` : '';
+    const ti = x.title ? `<div style="font-size:11px;color:#64748b;margin-top:2px;">${escHtml(x.title.slice(0, 100))}</div>` : '';
+    return `<div style="padding:6px 14px;border-bottom:1px solid #e2e8f0;">
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-family:'SF Mono','Menlo',monospace;">
+        <span style="color:${signColor};font-weight:700;">${sign}</span>
+        ${sc}
+        <a href="${x.url}" target="_blank" style="color:#6366f1;text-decoration:none;word-break:break-all;flex:1;min-width:0;">${escHtml(x.url)}</a>
+      </div>
+      ${ti}
+    </div>`;
+  };
+
+  const FIELD_LABELS = {
+    status_code: 'Status', title: 'Title', title_len: 'Title len', meta_description: 'Meta',
+    meta_len: 'Meta len', h1: 'H1', word_count: 'Word count', canonical: 'Canonical',
+    redirect_url: 'Redirect', indexable: 'Indexable', depth: 'Depth',
+    response_time: 'Response time', internal_links: 'Internal links',
+    external_links: 'External links', images_no_alt: 'Imgs no alt',
+    body_hash: 'Body content', schema_types: 'Schema types',
+  };
+  const changedRow = (c) => {
+    const fields = Object.entries(c.diffs).map(([f, v]) => {
+      let oldv = v.old, newv = v.new;
+      if (f === 'body_hash') { oldv = oldv ? oldv.slice(0, 8) + '…' : '—'; newv = newv ? newv.slice(0, 8) + '…' : '—'; }
+      else { oldv = (oldv == null ? '—' : String(oldv)).slice(0, 220); newv = (newv == null ? '—' : String(newv)).slice(0, 220); }
+      return `<div style="display:grid;grid-template-columns:120px 1fr;gap:8px;margin-top:4px;">
+        <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">${FIELD_LABELS[f] || f}</div>
+        <div style="font-size:12px;">
+          <div style="color:#ef4444;">− ${escHtml(oldv)}</div>
+          <div style="color:#10b981;">+ ${escHtml(newv)}</div>
+        </div>
+      </div>`;
+    }).join('');
+    return `<div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;">
+      <div style="font-size:12px;font-family:'SF Mono','Menlo',monospace;word-break:break-all;margin-bottom:4px;">
+        <a href="${c.url}" target="_blank" style="color:#6366f1;text-decoration:none;">${escHtml(c.url)}</a>
+      </div>
+      ${fields}
+    </div>`;
+  };
+  const sliceList = (items, max, render) => {
+    if (!items || !items.length) return `<div style="padding:14px 18px;color:#64748b;font-size:12px;">None.</div>`;
+    return items.slice(0, max).map(render).join('') +
+      (items.length > max ? `<div style="padding:8px 14px;font-size:11px;color:#64748b;">…and ${items.length - max} more</div>` : '');
+  };
+
+  const tabs = [
+    { id: 'overview', label: 'Overview', count: null },
+    { id: 'codes', label: 'Status Codes', count: null },
+    { id: 'issues', label: 'Issues', count: (d.issues || []).length },
+    { id: 'structure', label: 'Site Structure', count: (d.structure || []).length },
+    { id: 'added', label: 'Added', count: s.added || 0, color: '#10b981' },
+    { id: 'removed', label: 'Removed', count: s.removed || 0, color: '#ef4444' },
+    { id: 'changed', label: 'Changed', count: s.changed || 0, color: '#f59e0b' },
+  ];
+  const active = window._compareActiveTab || 'overview';
+  document.getElementById('crawl-compare-tabs').innerHTML = tabs.map(t => {
+    const isActive = t.id === active;
+    const badge = (t.count != null && t.count > 0)
+      ? `<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:${t.color || (isActive ? '#6366f1' : '#f1f5f9')};color:${t.color || isActive ? '#fff' : '#64748b'};font-size:10.5px;font-variant-numeric:tabular-nums;font-weight:600;">${t.count}</span>`
+      : (t.count === 0 ? `<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:10.5px;font-variant-numeric:tabular-nums;">0</span>` : '');
+    return `<button type="button" onclick="_compareSwitchTab('${t.id}')" style="background:none;border:0;border-bottom:2px solid ${isActive ? '#6366f1' : 'transparent'};padding:11px 16px;cursor:pointer;font-size:12.5px;font-weight:${isActive ? 700 : 500};color:${isActive ? '#0f172a' : '#64748b'};display:inline-flex;align-items:center;gap:0;flex-shrink:0;">${t.label}${badge}</button>`;
+  }).join('');
+
+  let bodyHtml = '';
+  if (active === 'overview') {
+    bodyHtml = toplineHtml +
+      `<div style="padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div style="border:1px solid #e2e8f0;border-radius:8px;background:#fff;overflow:hidden;">
+          <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Top moving issues</div>
+          ${(d.issues || []).slice(0, 8).length === 0 ? `<div style="padding:14px;color:#64748b;font-size:12px;">No issues changed.</div>` : `
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <tbody>${(d.issues || []).slice(0, 8).map(it => `<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:7px 14px;">${escHtml(it.issue)}</td><td style="padding:7px 14px;text-align:right;color:#64748b;">${it.a}</td><td style="padding:7px 14px;text-align:right;font-weight:600;">${it.b}</td><td style="padding:7px 14px;text-align:right;">${delta(it.a, it.b)}</td></tr>`).join('')}</tbody>
+          </table>`}
+        </div>
+        <div style="border:1px solid #e2e8f0;border-radius:8px;background:#fff;overflow:hidden;">
+          <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Top moving directories</div>
+          ${(d.structure || []).filter(x => x.delta !== 0).slice(0, 8).length === 0 ? `<div style="padding:14px;color:#64748b;font-size:12px;">No directory changes.</div>` : `
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <tbody>${(d.structure || []).filter(x => x.delta !== 0).slice(0, 8).map(s2 => `<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:7px 14px;font-family:'SF Mono','Menlo',monospace;">${escHtml(s2.path)}</td><td style="padding:7px 14px;text-align:right;color:#64748b;">${s2.a}</td><td style="padding:7px 14px;text-align:right;font-weight:600;">${s2.b}</td><td style="padding:7px 14px;text-align:right;">${delta(s2.a, s2.b, { lessIsBetter: false })}</td></tr>`).join('')}</tbody>
+          </table>`}
+        </div>
+      </div>
+      <div style="padding:0 18px 18px;">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff;">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">URLs added</div>
+            <div style="font-size:24px;font-weight:700;color:#10b981;font-variant-numeric:tabular-nums;">${s.added || 0}</div>
+            <button onclick="_compareSwitchTab('added')" style="margin-top:6px;background:none;border:0;color:#6366f1;font-size:12px;cursor:pointer;padding:0;">View →</button>
+          </div>
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff;">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">URLs removed</div>
+            <div style="font-size:24px;font-weight:700;color:#ef4444;font-variant-numeric:tabular-nums;">${s.removed || 0}</div>
+            <button onclick="_compareSwitchTab('removed')" style="margin-top:6px;background:none;border:0;color:#6366f1;font-size:12px;cursor:pointer;padding:0;">View →</button>
+          </div>
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff;">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">URLs changed</div>
+            <div style="font-size:24px;font-weight:700;color:#f59e0b;font-variant-numeric:tabular-nums;">${s.changed || 0}</div>
+            <button onclick="_compareSwitchTab('changed')" style="margin-top:6px;background:none;border:0;color:#6366f1;font-size:12px;cursor:pointer;padding:0;">View →</button>
+          </div>
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:#64748b;">Unchanged: ${s.unchanged || 0} URLs (same on both crawls)</div>
+      </div>`;
+  } else if (active === 'codes') {
+    bodyHtml = codesHtml;
+  } else if (active === 'issues') {
+    bodyHtml = issuesHtml;
+  } else if (active === 'structure') {
+    bodyHtml = structureHtml || `<div style="padding:18px;color:#64748b;font-size:12px;">No structural changes.</div>`;
+  } else if (active === 'added') {
+    bodyHtml = `<div style="padding:0;">${sliceList(d.added, 1000, (x) => urlRow(x, '+', '#10b981'))}</div>`;
+  } else if (active === 'removed') {
+    bodyHtml = `<div style="padding:0;">${sliceList(d.removed, 1000, (x) => urlRow(x, '−', '#ef4444'))}</div>`;
+  } else if (active === 'changed') {
+    bodyHtml = `<div style="padding:0;">${sliceList(d.changed, 1000, changedRow)}</div>`;
+  }
+  document.getElementById('crawl-compare-body').innerHTML = bodyHtml;
+
+  ov.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+
+function _compareSwitchTab(tabId) {
+  window._compareActiveTab = tabId;
+  if (window._compareData) _renderCompareModal(window._compareData, window._compareSavedName);
+}
+
+function _closeCompareModal() {
+  const ov = document.getElementById('crawl-compare-overlay');
+  if (ov) ov.style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+// Auto-save on crawl finish + reveal manual Save button.
+(function _wireSiteCrawlerSave() {
+  const _origCrawlFinished = (typeof crawlFinished === 'function') ? crawlFinished : null;
+  if (!_origCrawlFinished) return;
+  window.crawlFinished = function() {
+    _origCrawlFinished.apply(this, arguments);
+    if (!Array.isArray(crawlerResults) || !crawlerResults.length) return;
+    const btn = document.getElementById('crawler-save-btn');
+    if (btn) btn.style.display = '';
+    try {
+      const host = (crawlerResults[0].url || '').replace(/^https?:\/\//,'').replace(/\/.*$/,'');
+      const d = new Date();
+      const stamp = d.getFullYear() + '-' +
+        String(d.getMonth()+1).padStart(2,'0') + '-' +
+        String(d.getDate()).padStart(2,'0') + ' ' +
+        String(d.getHours()).padStart(2,'0') + ':' +
+        String(d.getMinutes()).padStart(2,'0');
+      const name = host ? `${host} — ${stamp}` : `crawl — ${stamp}`;
+      fetch('/crawl/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name, results: crawlerResults, inlinks: crawlerInlinks })
+      }).then(r => r.json()).then(d => {
+        if (d && d.ok) showToast(`Auto-saved: ${name}`, 'success');
+      }).catch(() => {});
+    } catch {}
+  };
+})();

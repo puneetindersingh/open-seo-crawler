@@ -85,9 +85,12 @@
         </div>
       </details>
 
-      <div class="actions">
+      <div class="actions" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
         <button id="crawler-start-btn" onclick="startCrawl()">Start crawl</button>
         <button id="crawler-stop-btn" onclick="stopCrawl()" style="display:none">Stop</button>
+        <button id="crawler-save-btn" type="button" onclick="saveCurrentCrawl()" style="display:none;padding:7px 12px;font-size:12px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;font-weight:500;" title="Save the current crawl (auto-saved by default — use this to rename)">Save</button>
+        <button id="crawler-load-btn" type="button" onclick="openCrawlLoader()" style="padding:7px 12px;font-size:12px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;font-weight:500;" title="Open a saved crawl">Load saved</button>
+        <button id="crawler-compare-btn" type="button" onclick="openCompareCrawlsPicker()" style="padding:7px 12px;font-size:12px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;font-weight:500;" title="Pick a saved crawl to diff against the current crawl">Compare crawls</button>
       </div>
 
       <div class="stats" id="crawler-stats" style="display:none">
@@ -274,6 +277,17 @@
           <div id="nd-diff-body-b" style="flex:1;overflow:auto;padding:14px 18px;font-size:13px;line-height:1.6;"></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Saved-crawls drawer (Load saved / Compare crawls) -->
+  <div id="crawl-loader-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9998;display:none;align-items:flex-start;justify-content:center;padding:60px 20px 20px;" onclick="if(event.target===this)closeCrawlLoader()">
+    <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:10px;width:min(1000px,98vw);max-height:82vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,0.45);">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border,#e2e8f0);background:var(--surface2,#f8fafc);">
+        <div style="font-weight:700;font-size:13px;flex:1;">Saved crawls</div>
+        <button type="button" onclick="closeCrawlLoader()" style="background:none;border:none;color:var(--text-muted,#64748b);cursor:pointer;font-size:22px;line-height:1;">×</button>
+      </div>
+      <div id="crawl-loader-body" style="flex:1;overflow:auto;min-height:0;"></div>
     </div>
   </div>
 
