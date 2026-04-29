@@ -1510,7 +1510,24 @@ def crawl_site():
         'exclude': _parse_patterns(data.get('exclude_patterns', '')),
     }
 
+    _NON_PAGE_PATH_FRAGMENTS = (
+        '/feed/', '/feed.atom', '/feed.rss', '/comments/feed/',
+        '/wp-json/', '/wp-admin/', '/wp-login.php', '/xmlrpc.php',
+        '/?wc-ajax=', '/cart/?', '/checkout/?',
+        '/sitemap.xml', '/sitemap_index.xml',
+    )
+
     def _url_allowed(u):
+        # Drop media files + non-HTML endpoints so they never enter the
+        # results table or pollute per-page reports (Schema by Page, etc.).
+        if _is_non_html_url(u):
+            return False
+        try:
+            path_lower = (urlparse(u).path or '').lower()
+        except Exception:
+            path_lower = ''
+        if any(frag in path_lower for frag in _NON_PAGE_PATH_FRAGMENTS):
+            return False
         rules = ACTIVE_CRAWL_RULES.get(crawl_id) or {}
         excl = rules.get('exclude') or []
         incl = rules.get('include') or []
@@ -1734,7 +1751,7 @@ def crawl_site():
                             if not any((e.get('source'), e.get('anchor'), e.get('placement')) == key for e in bucket):
                                 bucket.append({'source': source_url, 'anchor': anchor, 'placement': placement})
                             alt = _crawl_slash_alt(link)
-                            if link not in visited and (not alt or alt not in visited):
+                            if link not in visited and (not alt or alt not in visited) and _url_allowed(link):
                                 queue.append((link, depth + 1))
 
                         yield f"data: {json.dumps({'type': 'page', 'data': page_data, 'crawled': len(visited), 'queued': len(queue), 'errors': errors})}\n\n"
