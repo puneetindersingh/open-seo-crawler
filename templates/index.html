@@ -43,6 +43,25 @@
       <label class="check"><input type="checkbox" id="crawler-render-js" /> Render JS (Playwright, slower)</label>
       <label class="check"><input type="checkbox" id="crawler-ignore-robots" /> Ignore robots.txt</label>
       <label class="check"><input type="checkbox" id="crawler-ignore-noindex" /> Ignore noindex <small>(audit noindex pages as if indexable)</small></label>
+      <label class="check"><input type="checkbox" id="crawler-run-sitemap" /> Sitemap analysis <small>(after crawl: missing / orphan / sitemap-only / etc.)</small></label>
+      <label class="check"><input type="checkbox" id="crawler-run-neardup" onchange="_scToggleNearDupCfg(this.checked)" /> Near-duplicate content <small>(content body only; Shingle Jaccard)</small></label>
+      <div id="crawler-neardup-cfg" style="display:none;padding:6px 8px 4px 22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;">
+          <small>Similarity ≥</small>
+          <input type="number" id="crawler-neardup-threshold" min="50" max="100" step="1" value="90" style="width:54px;text-align:right;padding:3px 6px;border:1px solid var(--border,#e2e8f0);border-radius:4px;" />
+          <small>%</small>
+          <span style="display:inline-flex;gap:3px;">
+            <button type="button" onclick="document.getElementById('crawler-neardup-threshold').value=90" style="font-size:10px;padding:2px 7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:3px;cursor:pointer;">90</button>
+            <button type="button" onclick="document.getElementById('crawler-neardup-threshold').value=85" style="font-size:10px;padding:2px 7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:3px;cursor:pointer;">85</button>
+            <button type="button" onclick="document.getElementById('crawler-neardup-threshold').value=80" style="font-size:10px;padding:2px 7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:3px;cursor:pointer;">80</button>
+          </span>
+        </div>
+        <details style="margin-top:6px;">
+          <summary style="font-size:10.5px;color:var(--text-muted,#94a3b8);cursor:pointer;">Exclude CSS selectors (advanced)</summary>
+          <textarea id="crawler-neardup-exclude" placeholder=".testimonials, #cta-block, .related-posts" spellcheck="false" style="width:100%;min-height:36px;margin-top:4px;font-family:monospace;font-size:10.5px;padding:5px 7px;border:1px solid var(--border,#e2e8f0);border-radius:4px;resize:vertical;"></textarea>
+          <small style="display:block;margin-top:3px;">Stops shared CTAs / testimonials / footers from inflating similarity. Canonicalised URLs are skipped automatically.</small>
+        </details>
+      </div>
 
       <details class="filters">
         <summary>URL filters (robots.txt + custom rules)</summary>
@@ -137,6 +156,9 @@
       <div class="ci-cat" data-cat="__sm_non200"     onclick="selectCategory('__sm_non200')"     id="sm-cat-non200"     style="display:none;"><span title="In sitemap but 4xx/5xx">Non-200 in sitemap</span><span class="ci-count err" data-count="__sm_non200">0</span></div>
       <div class="ci-cat" data-cat="__sm_redirects"  onclick="selectCategory('__sm_redirects')"  id="sm-cat-redirects"  style="display:none;"><span title="In sitemap but redirects">Redirects in sitemap</span><span class="ci-count warn" data-count="__sm_redirects">0</span></div>
       <div class="ci-cat" data-cat="__sm_pagination" onclick="selectCategory('__sm_pagination')" id="sm-cat-pagination" style="display:none;"><span title="Pagination URLs shouldn't be in sitemap">Pagination in sitemap</span><span class="ci-count warn" data-count="__sm_pagination">0</span></div>
+
+      <div class="ci-section-header" id="nd-section-header" style="display:none;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;padding:10px 8px 4px;font-weight:700;">Content duplication</div>
+      <div class="ci-cat" data-cat="__nd_content" onclick="selectCategory('__nd_content')" id="nd-cat-content" style="display:none;"><span title="Pairs of pages whose body content exceeds the similarity threshold">Near-duplicate content</span><span class="ci-count warn" data-count="__nd_content">0</span></div>
     </aside>
 
     <section class="main">
@@ -222,6 +244,38 @@
       </div>
     </section>
   </main>
+
+  <!-- Near-duplicate content side-by-side diff modal -->
+  <div id="nd-diff-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)closeNdDiff()">
+    <div style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:10px;width:min(1400px,98vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,0.45);">
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border,#e2e8f0);background:var(--surface2,#f8fafc);">
+        <div style="font-weight:700;font-size:13px;flex:1;min-width:0;">
+          Near-duplicate diff <span id="nd-diff-similarity" style="margin-left:8px;padding:2px 8px;border-radius:10px;background:var(--accent,#6366f1);color:#fff;font-size:11px;font-weight:600;"></span>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted,#64748b);">
+          <span style="background:rgba(34,197,94,0.18);padding:1px 5px;border-radius:3px;color:#15803d;">shared phrase</span>
+          <span style="background:rgba(239,68,68,0.10);padding:1px 5px;border-radius:3px;color:#b91c1c;margin-left:6px;">unique to this page</span>
+        </div>
+        <button type="button" onclick="closeNdDiff()" style="background:none;border:none;color:var(--text-muted,#64748b);cursor:pointer;font-size:22px;line-height:1;">×</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border,#e2e8f0);flex:1;overflow:hidden;min-height:0;">
+        <div style="background:var(--surface,#fff);display:flex;flex-direction:column;overflow:hidden;">
+          <div style="padding:8px 14px;border-bottom:1px solid var(--border,#e2e8f0);font-size:12px;font-weight:600;background:var(--surface2,#f8fafc);display:flex;align-items:center;gap:6px;min-width:0;">
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="nd-diff-url-a"></span>
+            <a id="nd-diff-link-a" target="_blank" style="color:var(--accent,#6366f1);text-decoration:none;font-size:11px;flex-shrink:0;">↗</a>
+          </div>
+          <div id="nd-diff-body-a" style="flex:1;overflow:auto;padding:14px 18px;font-size:13px;line-height:1.6;"></div>
+        </div>
+        <div style="background:var(--surface,#fff);display:flex;flex-direction:column;overflow:hidden;">
+          <div style="padding:8px 14px;border-bottom:1px solid var(--border,#e2e8f0);font-size:12px;font-weight:600;background:var(--surface2,#f8fafc);display:flex;align-items:center;gap:6px;min-width:0;">
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="nd-diff-url-b"></span>
+            <a id="nd-diff-link-b" target="_blank" style="color:var(--accent,#6366f1);text-decoration:none;font-size:11px;flex-shrink:0;">↗</a>
+          </div>
+          <div id="nd-diff-body-b" style="flex:1;overflow:auto;padding:14px 18px;font-size:13px;line-height:1.6;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/script.js?v={{ v }}"></script>
 </body>
