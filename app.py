@@ -73,6 +73,13 @@ _DUP_NOISE_PARAMS = frozenset({
     'add-to-cart', 'replytocom', 'fbclid', 'gclid', 'gad_source', 'gbraid',
     'wbraid', 'mc_cid', 'mc_eid', '_ga', 'msclkid', 'yclid', 'dclid',
     'igshid', 'srsltid', 'ref', 'ref_src', 'ref_url',
+    # WooCommerce SWOOF / product filter plugins — ?swoof=1&pa_cube-size=28mm
+    # &product_cat=drawer&really_curr_tax=63-product_cat etc. Each combination
+    # is a separate URL but renders the same template; collapsing them stops
+    # filter permutations from polluting duplicate-meta/title groups.
+    'swoof', 'really_curr_tax', 'product_cat', 'product_tag',
+    'orderby', 'min_price', 'max_price', 'rating_filter', 'filter_size',
+    'filter_color',
 })
 
 
@@ -94,7 +101,11 @@ def _normalize_url_for_dup(url):
             if not kv:
                 continue
             k = kv.split('=', 1)[0].lower()
-            if k in _DUP_NOISE_PARAMS or k.startswith('utm_'):
+            if (k in _DUP_NOISE_PARAMS
+                    or k.startswith('utm_')
+                    or k.startswith('pa_')              # WC product attribute filters
+                    or k.startswith('filter_')          # generic filter params
+                    or k.startswith('swoof_')):         # SWOOF internal params
                 continue
             kept.append(kv)
         new_q = '&'.join(kept)
@@ -709,20 +720,31 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
             if hl and hf:
                 result['hreflang'].append({'lang': hl, 'href': urljoin(url, hf)})
 
-        # Schema types
+        # Schema types — schema.org @type can be a single string or a list
+        # ("@type": ["Service", "LocalBusiness"]). Flatten to individual
+        # strings so the client receives list[str] and rendering doesn't
+        # choke on a nested array element.
+        def _push_type(val):
+            if isinstance(val, list):
+                for v in val:
+                    if isinstance(v, str):
+                        result['schema_types'].append(v)
+            elif isinstance(val, str):
+                result['schema_types'].append(val)
         for script in soup.find_all('script', attrs={'type': 'application/ld+json'}):
             try:
                 ld = json.loads(script.string or '')
                 if isinstance(ld, dict):
-                    if '@type' in ld: result['schema_types'].append(ld['@type'])
+                    if '@type' in ld:
+                        _push_type(ld['@type'])
                     if '@graph' in ld:
                         for item in ld['@graph']:
                             if isinstance(item, dict) and '@type' in item:
-                                result['schema_types'].append(item['@type'])
+                                _push_type(item['@type'])
                 elif isinstance(ld, list):
                     for item in ld:
                         if isinstance(item, dict) and '@type' in item:
-                            result['schema_types'].append(item['@type'])
+                            _push_type(item['@type'])
             except Exception:
                 pass
 
@@ -1248,6 +1270,28 @@ def _fetch_sitemap_recursive(seed_urls, max_depth=5):
     return urls, sitemaps_meta, errors
 
 
+# File extensions that are NOT HTML pages — sitemaps shouldn't list them
+# and the missing-from-sitemap report should skip them entirely.
+_NON_HTML_EXTS = (
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.bmp', '.tiff', '.avif',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.csv', '.txt', '.rtf',
+    '.zip', '.tar', '.gz', '.7z', '.rar',
+    '.mp4', '.mov', '.webm', '.m4v', '.avi', '.mkv', '.mp3', '.wav', '.ogg', '.flac',
+    '.css', '.js', '.json', '.xml', '.map',
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+)
+
+
+def _is_non_html_url(u):
+    if not u:
+        return False
+    try:
+        path = (urlparse(u).path or '').lower()
+    except Exception:
+        return False
+    return path.endswith(_NON_HTML_EXTS)
+
+
 def _norm_url(u):
     """Normalise a URL for set-comparison."""
     if not u:
@@ -1271,6 +1315,10 @@ def sitemap_analyse():
     """
     data = request.get_json() or {}
     domain = (data.get('domain') or '').rstrip('/')
+    # Tolerate scheme-less domain (urlparse needs http(s):// prefix to
+    # populate netloc — otherwise discovery silently fails).
+    if domain and not domain.startswith('http'):
+        domain = 'https://' + domain
     results = data.get('results') or []
     inlinks_map = data.get('inlinks') or {}
 
@@ -1324,6 +1372,8 @@ def sitemap_analyse():
         if r.get('redirect_url'):
             continue
         if r.get('is_pagination'):
+            continue
+        if _is_non_html_url(r.get('url')):
             continue
         missing_from_sitemap.append(r.get('url'))
 
