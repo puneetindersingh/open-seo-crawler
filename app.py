@@ -1744,6 +1744,23 @@ def crawl_site():
             path_lower = ''
         if any(frag in path_lower for frag in _NON_PAGE_PATH_FRAGMENTS):
             return False
+        # Repeating-segment guard: refuses URLs where the same path slug
+        # appears more than once (e.g. /our-team/our-team/ or
+        # /case-studies/our-team/case-studies/). This is the classic
+        # crawler trap caused by sites whose nav uses path-relative hrefs
+        # ("our-team/" instead of "/our-team/") - resolved against any
+        # sub-page, the relative link bleeds the parent path infinitely.
+        # Legitimate URLs almost never repeat the same slug 2+ times in a
+        # path, so this is a high-precision filter. Short numeric segments
+        # ("/2026/01/01/") are excluded from the dedup check so date-based
+        # archives still resolve.
+        try:
+            _segs = [s for s in path_lower.strip('/').split('/') if s]
+            _word_segs = [s for s in _segs if not s.isdigit() and len(s) >= 4]
+            if len(_word_segs) != len(set(_word_segs)):
+                return False
+        except Exception:
+            pass
         rules = ACTIVE_CRAWL_RULES.get(crawl_id) or {}
         excl = rules.get('exclude') or []
         incl = rules.get('include') or []
