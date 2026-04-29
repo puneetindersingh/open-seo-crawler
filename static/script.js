@@ -270,6 +270,7 @@ function startCrawl() {
   // Reset sitemap analysis from a previous crawl + hide its sidebar entries.
   if (typeof crawlerSitemap !== 'undefined') crawlerSitemap = null;
   window.sitemapAnalysisSkipped = false;
+  if (typeof crawlerDismissErrorBanner === 'function') crawlerDismissErrorBanner();
   const _smStatus = document.getElementById('sitemap-status');
   if (_smStatus) { _smStatus.style.display = 'none'; _smStatus.innerHTML = ''; }
   ['sm-cat-missing','sm-cat-orphan','sm-cat-only','sm-cat-noindex','sm-cat-non200','sm-cat-redirects','sm-cat-pagination'].forEach(id => {
@@ -373,8 +374,45 @@ function startCrawl() {
       });
     }
     return pump();
-  }).catch(e => { if (e.name !== 'AbortError') console.error(e); crawlFinished(); });
+  }).catch(e => {
+    if (e.name !== 'AbortError') {
+      console.error(e);
+      crawlerShowErrorBanner(e && e.message || 'Unknown error', url);
+    }
+    crawlFinished();
+  });
 }
+
+function crawlerShowErrorBanner(reason, url) {
+  const banner = document.getElementById('crawler-error-banner');
+  const msg = document.getElementById('crawler-error-banner-msg');
+  if (!banner || !msg) return;
+  msg.textContent = reason || 'Unknown error';
+  if (url) banner.dataset.failedUrl = url;
+  banner.style.display = 'flex';
+  const empty = document.getElementById('crawler-empty');
+  const results = document.getElementById('crawler-results');
+  if (empty)   empty.style.display = 'none';
+  if (results) results.style.display = '';
+}
+
+function crawlerDismissErrorBanner() {
+  const banner = document.getElementById('crawler-error-banner');
+  if (banner) { banner.style.display = 'none'; banner.removeAttribute('data-failed-url'); }
+}
+
+window.crawlerDismissErrorBanner = crawlerDismissErrorBanner;
+window.crawlerShowErrorBanner = crawlerShowErrorBanner;
+window.crawlerRetryFromBanner = function() {
+  const banner = document.getElementById('crawler-error-banner');
+  const url = banner && banner.dataset.failedUrl;
+  crawlerDismissErrorBanner();
+  if (url) {
+    const inp = document.getElementById('crawler-url');
+    if (inp) inp.value = url;
+  }
+  if (typeof startCrawl === 'function') startCrawl();
+};
 
 // =============================================================================
 // Issue category selection + per-category counts
