@@ -354,28 +354,38 @@ window.applyCmsRecs = function() {
 // =============================================================================
 // Crawl driver
 // =============================================================================
-function startCrawl() {
+// Sticks across crawl finishes so the error banner can offer a Resume option
+// targeting the suspended state on the server.
+let crawlerLastCrawlId = null;
+
+function startCrawl(opts) {
+  opts = opts || {};
+  const resumeFromId = opts.resumeFromId || null;
   const url = document.getElementById('crawler-url').value.trim();
   if (!url) { document.getElementById('crawler-url').focus(); return; }
 
   crawlerAbort = new AbortController();
-  markBusy('site-crawler', `Crawling ${url}`);
+  markBusy('site-crawler', resumeFromId ? `Resuming crawl of ${url}` : `Crawling ${url}`);
   crawlerStart = Date.now();
-  crawlerResults = [];
-  crawlerInlinks = {};
-  // Reset sitemap analysis from a previous crawl + hide its sidebar entries.
-  if (typeof crawlerSitemap !== 'undefined') crawlerSitemap = null;
-  window.sitemapAnalysisSkipped = false;
+  if (!resumeFromId) {
+    crawlerResults = [];
+    crawlerInlinks = {};
+    // Reset sitemap analysis from a previous crawl + hide its sidebar entries.
+    if (typeof crawlerSitemap !== 'undefined') crawlerSitemap = null;
+    window.sitemapAnalysisSkipped = false;
+  }
   if (typeof crawlerDismissErrorBanner === 'function') crawlerDismissErrorBanner();
-  const _smStatus = document.getElementById('sitemap-status');
-  if (_smStatus) { _smStatus.style.display = 'none'; _smStatus.innerHTML = ''; }
-  ['sm-cat-missing','sm-cat-orphan','sm-cat-only','sm-cat-noindex','sm-cat-non200','sm-cat-redirects','sm-cat-pagination'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.style.display = 'none'; const cnt = el.querySelector('.ci-count'); if (cnt) cnt.textContent = '0'; }
-  });
-  const _smPanel = document.getElementById('sitemap-panel');
-  if (_smPanel) _smPanel.remove();
-  activeCategory = 'all';
+  if (!resumeFromId) {
+    const _smStatus = document.getElementById('sitemap-status');
+    if (_smStatus) { _smStatus.style.display = 'none'; _smStatus.innerHTML = ''; }
+    ['sm-cat-missing','sm-cat-orphan','sm-cat-only','sm-cat-noindex','sm-cat-non200','sm-cat-redirects','sm-cat-pagination'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.style.display = 'none'; const cnt = el.querySelector('.ci-count'); if (cnt) cnt.textContent = '0'; }
+    });
+    const _smPanel = document.getElementById('sitemap-panel');
+    if (_smPanel) _smPanel.remove();
+    activeCategory = 'all';
+  }
 
   document.getElementById('crawler-start-btn').style.display = 'none';
   document.getElementById('crawler-stop-btn').style.display = '';
@@ -383,41 +393,46 @@ function startCrawl() {
   document.getElementById('crawler-empty').style.display = 'none';
   document.getElementById('crawler-results').style.display = '';
   document.getElementById('issues-sidebar').style.display = '';
-  document.getElementById('crawler-tbody').innerHTML = '';
-  document.getElementById('crawler-cms-banner').innerHTML = '';
-  document.getElementById('issue-info-box').style.display = 'none';
-  document.getElementById('issue-info-box').innerHTML = '';
-  document.getElementById('detail-title-text').textContent = 'All Pages';
-  document.getElementById('cs-crawled').textContent = '0';
-  document.getElementById('cs-queued').textContent = '0';
-  document.getElementById('cs-errors').textContent = '0';
-  // Reset active pill highlights
-  document.querySelectorAll('.ci-cat').forEach(el => el.classList.toggle('active', el.dataset.cat === 'all'));
-  document.querySelectorAll('.sev-cell').forEach(el => el.classList.remove('active'));
-  updateCounts();
-  closeDock();
+  if (!resumeFromId) {
+    document.getElementById('crawler-tbody').innerHTML = '';
+    document.getElementById('crawler-cms-banner').innerHTML = '';
+    document.getElementById('issue-info-box').style.display = 'none';
+    document.getElementById('issue-info-box').innerHTML = '';
+    document.getElementById('detail-title-text').textContent = 'All Pages';
+    document.getElementById('cs-crawled').textContent = '0';
+    document.getElementById('cs-queued').textContent = '0';
+    document.getElementById('cs-errors').textContent = '0';
+    // Reset active pill highlights
+    document.querySelectorAll('.ci-cat').forEach(el => el.classList.toggle('active', el.dataset.cat === 'all'));
+    document.querySelectorAll('.sev-cell').forEach(el => el.classList.remove('active'));
+    updateCounts();
+    closeDock();
+  }
 
   crawlerTimer = setInterval(() => {
     const s = Math.floor((Date.now() - crawlerStart) / 1000);
     document.getElementById('cs-elapsed').textContent = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
   }, 1000);
 
+  const reqBody = {
+    url,
+    max_pages: parseInt(document.getElementById('crawler-max').value) || 500,
+    max_workers: parseInt(document.getElementById('crawler-workers').value) || 5,
+    crawl_delay: parseFloat(document.getElementById('crawler-speed').value),
+    max_depth: parseInt(document.getElementById('crawler-depth').value) || 10,
+    render_js: document.getElementById('crawler-render-js').checked,
+    ignore_robots: document.getElementById('crawler-ignore-robots').checked,
+    ignore_noindex: document.getElementById('crawler-ignore-noindex').checked,
+    include_patterns: document.getElementById('crawler-include').value.trim(),
+    exclude_patterns: document.getElementById('crawler-exclude').value.trim(),
+  };
+  if (resumeFromId) reqBody.resume_crawl_id = resumeFromId;
+
   fetch('/crawl', {
     method: 'POST',
     signal: crawlerAbort.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url,
-      max_pages: parseInt(document.getElementById('crawler-max').value) || 200,
-      max_workers: parseInt(document.getElementById('crawler-workers').value) || 5,
-      crawl_delay: parseFloat(document.getElementById('crawler-speed').value),
-      max_depth: parseInt(document.getElementById('crawler-depth').value) || 10,
-      render_js: document.getElementById('crawler-render-js').checked,
-      ignore_robots: document.getElementById('crawler-ignore-robots').checked,
-      ignore_noindex: document.getElementById('crawler-ignore-noindex').checked,
-      include_patterns: document.getElementById('crawler-include').value.trim(),
-      exclude_patterns: document.getElementById('crawler-exclude').value.trim(),
-    })
+    body: JSON.stringify(reqBody)
   }).then(r => {
     const reader = r.body.getReader();
     const dec = new TextDecoder();
@@ -452,6 +467,9 @@ function startCrawl() {
               document.getElementById('cs-crawled').textContent = p.crawled;
               document.getElementById('cs-queued').textContent = p.queued;
               document.getElementById('cs-errors').textContent = p.errors;
+              if (p.queue_sample !== undefined) {
+                crawlerUpdateQueuePanel(p.queue_sample, p.queued);
+              }
               updateCounts();
               // Refresh dock if the open URL got fresh data (new inlinks or its own page row)
               if (dockUrl && (dockUrl === src || (p.data.internal_link_urls || []).some(e => (Array.isArray(e) ? e[0] : e) === dockUrl))) {
@@ -462,8 +480,19 @@ function startCrawl() {
               // preview in the URL filters panel instead.
             } else if (p.type === 'start') {
               crawlerCrawlId = p.crawl_id || null;
+              if (crawlerCrawlId) crawlerLastCrawlId = crawlerCrawlId;
               const applyBtn = document.getElementById('crawler-apply-rules');
               if (applyBtn) applyBtn.disabled = !crawlerCrawlId;
+            } else if (p.type === 'resumed') {
+              showToast(`Resumed — picking up ${p.previous_pages} pages, ${p.queued} URLs still in queue`, 'info');
+            } else if (p.type === 'limit_reached') {
+              crawlerShowLimitBanner(p.fetched, p.queued, p.current_max);
+              crawlerUpdateQueuePanel(p.queue_sample, p.queued);
+            } else if (p.type === 'crawl_resumed') {
+              crawlerHideLimitBanner();
+              showToast(`Crawl resumed — page cap raised to ${p.new_max}`, 'info');
+            } else if (p.type === 'complete') {
+              crawlerLastCrawlId = null;  // crawl finished naturally
             }
           } catch {}
         }
@@ -510,6 +539,182 @@ window.crawlerRetryFromBanner = function() {
   }
   if (typeof startCrawl === 'function') startCrawl();
 };
+
+// Lightweight toast — site-crawler doesn't ship a toast system, so use a
+// transient overlay div. Stacks if multiple fire close together.
+function showToast(message, kind) {
+  const stack = document.getElementById('sc-toast-stack') || (() => {
+    const s = document.createElement('div');
+    s.id = 'sc-toast-stack';
+    s.style.cssText = 'position:fixed;bottom:20px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:10000;pointer-events:none;';
+    document.body.appendChild(s);
+    return s;
+  })();
+  const t = document.createElement('div');
+  const bg = kind === 'error' ? '#dc2626' : kind === 'warn' ? '#f59e0b' : '#0ea5e9';
+  t.style.cssText = `background:${bg};color:#fff;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:500;max-width:380px;box-shadow:0 4px 12px rgba(0,0,0,0.15);pointer-events:auto;`;
+  t.textContent = message;
+  stack.appendChild(t);
+  setTimeout(() => { t.style.transition = 'opacity .3s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 4000);
+}
+
+function crawlerShowLimitBanner(fetched, queued, currentMax) {
+  const banner = document.getElementById('crawler-limit-banner');
+  const msg = document.getElementById('crawler-limit-banner-msg');
+  if (!banner || !msg) return;
+  msg.textContent = `Crawled ${fetched} of ${currentMax} cap — ${queued} URL${queued === 1 ? '' : 's'} still queued. Bump the cap to keep going, or finalize with what we have.`;
+  banner.style.display = 'flex';
+  const empty = document.getElementById('crawler-empty');
+  const results = document.getElementById('crawler-results');
+  if (empty)   empty.style.display = 'none';
+  if (results) results.style.display = '';
+  ['crawler-limit-continue-btn','crawler-limit-continue-1k-btn','crawler-limit-finalize-btn']
+    .forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false; });
+}
+
+function crawlerHideLimitBanner() {
+  const banner = document.getElementById('crawler-limit-banner');
+  if (banner) banner.style.display = 'none';
+}
+
+function crawlerContinueCrawl(bump) {
+  if (!crawlerCrawlId) return;
+  ['crawler-limit-continue-btn','crawler-limit-continue-1k-btn','crawler-limit-finalize-btn']
+    .forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
+  fetch('/crawl/continue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ crawl_id: crawlerCrawlId, action: 'continue', bump: bump || 500 }),
+  }).catch(err => {
+    showToast('Could not resume crawl: ' + err.message, 'error');
+    ['crawler-limit-continue-btn','crawler-limit-continue-1k-btn','crawler-limit-finalize-btn']
+      .forEach(id => { const b = document.getElementById(id); if (b) b.disabled = false; });
+  });
+}
+
+function crawlerFinalizeCrawl() {
+  if (!crawlerCrawlId) return;
+  ['crawler-limit-continue-btn','crawler-limit-continue-1k-btn','crawler-limit-finalize-btn']
+    .forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
+  fetch('/crawl/continue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ crawl_id: crawlerCrawlId, action: 'finalize' }),
+  }).then(() => {
+    crawlerHideLimitBanner();
+  }).catch(err => {
+    showToast('Could not finalize crawl: ' + err.message, 'error');
+  });
+}
+
+function crawlerUpdateQueuePanel(sample, totalCount) {
+  const panel = document.getElementById('crawler-queue-panel');
+  const body = document.getElementById('crawler-queue-body');
+  const countEl = document.getElementById('crawler-queue-count');
+  const pluralEl = document.getElementById('crawler-queue-plural');
+  if (!panel || !body || !countEl) return;
+  const count = typeof totalCount === 'number' ? totalCount : (sample || []).length;
+  if (count <= 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  countEl.textContent = count;
+  if (pluralEl) pluralEl.textContent = count === 1 ? '' : 's';
+  panel._lastSample = { sample: sample || [], count: count };
+  if (body.style.display === 'none') return;
+  const list = sample || [];
+  const truncated = count > list.length;
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  let html = '';
+  for (const url of list) {
+    const safe = escapeHtml(url);
+    html += `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
+      <button onclick="crawlerExcludeFromQueue('${safe.replace(/'/g, "\\'")}')" title="Exclude this URL from the rest of the crawl" style="flex-shrink:0;background:none;border:none;color:#dc2626;cursor:pointer;font-size:13px;line-height:1;padding:0 4px;font-weight:700;">✕</button>
+      <span style="color:#0f172a;word-break:break-all;">${safe}</span>
+    </div>`;
+  }
+  if (truncated) {
+    html += `<div style="padding:6px 0 0 0;color:#64748b;font-style:italic;">…and ${count - list.length} more not shown</div>`;
+  }
+  body.innerHTML = html;
+}
+
+function crawlerToggleQueuePanel() {
+  const body = document.getElementById('crawler-queue-body');
+  const chev = document.getElementById('crawler-queue-chevron');
+  if (!body) return;
+  const opening = body.style.display === 'none';
+  body.style.display = opening ? 'block' : 'none';
+  if (chev) chev.style.transform = opening ? 'rotate(90deg)' : 'rotate(0deg)';
+  if (opening) {
+    const panel = document.getElementById('crawler-queue-panel');
+    const cached = panel && panel._lastSample;
+    if (cached) crawlerUpdateQueuePanel(cached.sample, cached.count);
+  }
+}
+
+function crawlerExcludeFromQueue(url) {
+  if (!url || !crawlerCrawlId) return;
+  const excludeBox = document.getElementById('crawler-exclude');
+  if (!excludeBox) return;
+  const existing = excludeBox.value.split('\n').map(s => s.trim()).filter(Boolean);
+  if (existing.includes(url)) {
+    showToast('Already in exclude list', 'info');
+    return;
+  }
+  existing.push(url);
+  excludeBox.value = existing.join('\n');
+  if (typeof applyCrawlRules === 'function') {
+    applyCrawlRules();
+  } else {
+    const includePatterns = (document.getElementById('crawler-include')?.value || '').trim();
+    fetch('/crawl/update-rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ crawl_id: crawlerCrawlId, include_patterns: includePatterns, exclude_patterns: excludeBox.value })
+    });
+  }
+  showToast(`Excluded: ${url}`, 'info');
+}
+
+function crawlerHideQueuePanel() {
+  const panel = document.getElementById('crawler-queue-panel');
+  const body = document.getElementById('crawler-queue-body');
+  if (panel) {
+    panel.style.display = 'none';
+    panel._lastSample = null;
+  }
+  if (body) body.innerHTML = '';
+}
+
+function crawlerShowAllCrawled() {
+  if (typeof selectCategory === 'function') selectCategory('all');
+  const empty = document.getElementById('crawler-empty');
+  const results = document.getElementById('crawler-results');
+  if (empty) empty.style.display = 'none';
+  if (results) results.style.display = '';
+  const table = document.getElementById('crawler-table');
+  if (table && table.scrollIntoView) table.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function crawlerShowQueue() {
+  const panel = document.getElementById('crawler-queue-panel');
+  const body = document.getElementById('crawler-queue-body');
+  if (!panel || panel.style.display === 'none') {
+    showToast('Queue is empty — nothing waiting to crawl.', 'info');
+    return;
+  }
+  if (body && body.style.display === 'none') crawlerToggleQueuePanel();
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+window.crawlerToggleQueuePanel = crawlerToggleQueuePanel;
+window.crawlerExcludeFromQueue = crawlerExcludeFromQueue;
+window.crawlerContinueCrawl = crawlerContinueCrawl;
+window.crawlerFinalizeCrawl = crawlerFinalizeCrawl;
+window.crawlerShowAllCrawled = crawlerShowAllCrawled;
+window.crawlerShowQueue = crawlerShowQueue;
 
 // =============================================================================
 // Issue category selection + per-category counts
@@ -1091,17 +1296,9 @@ function crawlFinished() {
   if (applyBtn) applyBtn.disabled = true;
   crawlerCrawlId = null;
   clearBusy('site-crawler');
-  // Anything left in the queue after the crawl is over is irrelevant.
-  // Surface a 'didn't drain' notice so the user knows WHY (max_pages cap)
-  // and zero the counter so it doesn't look like the crawl is still
-  // running.
+  if (typeof crawlerHideLimitBanner === 'function') crawlerHideLimitBanner();
+  if (typeof crawlerHideQueuePanel === 'function') crawlerHideQueuePanel();
   const queuedEl = document.getElementById('cs-queued');
-  const stragglers = parseInt((queuedEl && queuedEl.textContent) || '0', 10) || 0;
-  if (stragglers > 0 && Array.isArray(crawlerResults) && crawlerResults.length > 0) {
-    if (typeof showToast === 'function') {
-      showToast(`Crawl finished with ${stragglers} URL${stragglers === 1 ? '' : 's'} still queued — likely hit the Max pages cap. Bump it in the sidebar and re-run if you need them.`, 'info');
-    }
-  }
   if (queuedEl) queuedEl.textContent = '0';
   // Sitemap analysis is opt-in via the 'Sitemap analysis' checkbox.
   if (Array.isArray(crawlerResults) && crawlerResults.length) {

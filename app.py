@@ -36,6 +36,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelna
 # snapshot. Cleared when the crawl ends.
 ACTIVE_CRAWL_RULES = {}
 
+# crawl_id -> {'max_pages': int, 'continue_event': Event, 'finalize': bool}.
+# Lets /crawl/continue bump the page cap (or finalize) when the crawler hits
+# the limit with URLs still queued. The generator waits on continue_event.
+ACTIVE_CRAWL_LIMITS = {}
+
+# crawl_id -> snapshot saved when the SSE generator hits GeneratorExit
+# (network drop, browser close, manual stop). Lets the user pick up from where
+# the crawl left off via /crawl with resume_crawl_id set. Auto-prunes anything
+# older than SUSPENDED_CRAWL_TTL on access.
+SUSPENDED_CRAWLS = {}
+SUSPENDED_CRAWL_TTL = 30 * 60  # 30 minutes
+
 
 def _robots_pattern_match(pattern, url):
     """robots.txt-style path pattern matcher (Google's spec).
@@ -1029,7 +1041,13 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         # those issues are real on the canonical page and would surface there.
         # The page itself still appears under the 'Canonicalised' report.
         is_canonicalised = result.get('canonical_kind') == 'canonicalised'
-        if (result['indexable'] or ignore_noindex) and not result.get('is_pagination') and not result.get('redirect_url') and not is_canonicalised:
+        # Status guard: only run content checks on 2xx responses. 3xx/4xx/5xx
+        # responses don't have meaningful content; e.g. an unfollowed 301
+        # has empty body, so without this guard it would surface "Missing meta
+        # description / Missing title / Missing H1" even though the source is
+        # just a redirect that never returns HTML.
+        _status = result.get('status_code', 0) or 0
+        if (result['indexable'] or ignore_noindex) and not result.get('is_pagination') and not result.get('redirect_url') and not is_canonicalised and 200 <= _status < 300:
             if not result['title']:
                 result['issues'].append('Missing title')
             elif result['title_len'] > 60:
@@ -1635,20 +1653,45 @@ def crawl_site():
     import urllib.robotparser
 
     data = request.json
-    seed_url = (data.get('url', '') or '').strip()
-    if not seed_url:
-        return json.dumps({'error': 'URL is required'}), 400
-    if not seed_url.startswith('http'):
-        seed_url = 'https://' + seed_url
 
-    max_pages = int(data.get('max_pages', 200) or 200)
-    if max_pages >= 5000:
-        max_pages = 999999  # unlimited
-    max_depth = min(int(data.get('max_depth', 10) or 10), 20)
-    crawl_delay = max(float(data.get('crawl_delay', 0.4) or 0.4), 0.0)
-    render_js = bool(data.get('render_js', False))
-    ignore_robots = bool(data.get('ignore_robots', False))
-    ignore_noindex = bool(data.get('ignore_noindex', False))
+    # Resume support: if resume_crawl_id is provided AND we have saved state
+    # for it that's not yet expired, restore everything (config + queue +
+    # visited + results + inlinks). Otherwise fall through to a fresh crawl.
+    resume_id = (data.get('resume_crawl_id') or '').strip()
+    resumed_state = None
+    if resume_id:
+        cached = SUSPENDED_CRAWLS.pop(resume_id, None)
+        if cached and (time.time() - cached.get('created', 0)) <= SUSPENDED_CRAWL_TTL:
+            resumed_state = cached
+        elif cached:
+            app.logger.info(f"[crawler] resume {resume_id} expired, falling back to fresh")
+
+    if resumed_state:
+        cfg = resumed_state.get('config', {})
+        seed_url = resumed_state.get('seed_url') or (data.get('url', '') or '').strip()
+        max_pages = int(data.get('max_pages') or cfg.get('max_pages') or 500)
+        if max_pages >= 5000:
+            max_pages = 999999
+        max_depth = min(int(cfg.get('max_depth', 10) or 10), 20)
+        crawl_delay = max(float(cfg.get('crawl_delay', 0.4) or 0.4), 0.0)
+        render_js = bool(cfg.get('render_js', False))
+        ignore_robots = bool(cfg.get('ignore_robots', False))
+        ignore_noindex = bool(cfg.get('ignore_noindex', False))
+    else:
+        seed_url = (data.get('url', '') or '').strip()
+        if not seed_url:
+            return json.dumps({'error': 'URL is required'}), 400
+        if not seed_url.startswith('http'):
+            seed_url = 'https://' + seed_url
+
+        max_pages = int(data.get('max_pages', 500) or 500)
+        if max_pages >= 5000:
+            max_pages = 999999  # unlimited
+        max_depth = min(int(data.get('max_depth', 10) or 10), 20)
+        crawl_delay = max(float(data.get('crawl_delay', 0.4) or 0.4), 0.0)
+        render_js = bool(data.get('render_js', False))
+        ignore_robots = bool(data.get('ignore_robots', False))
+        ignore_noindex = bool(data.get('ignore_noindex', False))
     # Concurrent workers. Default 5 matches Screaming Frog. Clamped to [1, 20].
     # When render_js is on, Playwright can't share a single page across threads —
     # force single-worker mode so page state stays consistent.
@@ -1672,6 +1715,15 @@ def crawl_site():
         'include': _parse_patterns(data.get('include_patterns', '')),
         'exclude': _parse_patterns(data.get('exclude_patterns', '')),
     }
+    ACTIVE_CRAWL_LIMITS[crawl_id] = {
+        'max_pages': max_pages,
+        'continue_event': threading.Event(),
+        'finalize': False,
+        'bumps': 0,
+    }
+
+    def _current_max():
+        return (ACTIVE_CRAWL_LIMITS.get(crawl_id) or {}).get('max_pages', max_pages)
 
     _NON_PAGE_PATH_FRAGMENTS = (
         '/feed/', '/feed.atom', '/feed.rss', '/comments/feed/',
@@ -1751,14 +1803,30 @@ def crawl_site():
                 yield f"data: {json.dumps({'type': 'info', 'msg': f'JS rendering unavailable ({str(e)[:100]}); using raw HTML only.'})}\n\n"
                 pw_page = None
 
-        queue = deque()
-        queue.append((_normalize_crawl_url(seed_url), 0))
-        visited = set()
-        results = []
-        errors = 0
-        total_time = 0
-        # Map of target URL -> list of source URLs linking to it (inlinks / Screaming Frog style)
-        inlinks_map = {}
+        if resumed_state:
+            queue = deque(tuple(item) for item in resumed_state.get('queue', []))
+            visited = set(resumed_state.get('visited', []))
+            results = list(resumed_state.get('results', []))
+            errors = int(resumed_state.get('errors', 0))
+            total_time = float(resumed_state.get('total_time', 0))
+            inlinks_map = dict(resumed_state.get('inlinks_map', {}))
+            yield f"data: {json.dumps({'type': 'resumed', 'previous_pages': len(results), 'queued': len(queue), 'errors': errors})}\n\n"
+        else:
+            queue = deque()
+            _seed_norm = _normalize_crawl_url(seed_url)
+            queue.append((_seed_norm, 0))
+            # Pre-mark the seed (and its slash-alt) as visited so any page that
+            # links back to the homepage doesn't re-queue it. visited =
+            # "URL has been seen / queued / processed".
+            visited = {_seed_norm}
+            _seed_alt = _crawl_slash_alt(_seed_norm)
+            if _seed_alt:
+                visited.add(_seed_alt)
+            results = []
+            errors = 0
+            total_time = 0
+            # Map of target URL -> list of source URLs linking to it (inlinks / Screaming Frog style)
+            inlinks_map = {}
 
         tracked_kws = []  # left in place for payload compatibility; no external data sources in the public build
         yield f"data: {json.dumps({'type': 'start', 'domain': domain, 'workers': max_workers, 'crawl_id': crawl_id})}\n\n"
@@ -1834,29 +1902,32 @@ def crawl_site():
                 visited.add(alt)
 
         def _dequeue_next():
-            """Pop the next URL that passes filters + robots. Returns (url, depth) or None."""
+            """Pop the next URL that passes filters + robots. Returns (url, depth) or None.
+            URLs are added to `visited` at enqueue time now (to prevent the same URL
+            from being queued N times when N pages link to it), so we don't gate on
+            visited here — it would skip every URL since they're all in visited."""
             while queue:
                 url, depth = queue.popleft()
-                if url in visited or depth > max_depth:
+                if depth > max_depth:
                     continue
                 if not _url_allowed(url):
-                    _visit(url)
                     continue
                 if not ignore_robots:
                     try:
                         if not rp.can_fetch('*', url):
-                            _visit(url)
                             continue
                     except Exception:
                         pass
-                _visit(url)
                 return url, depth
             return None
 
         try:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
+              # Outer loop lets /crawl/continue bump the page cap and resume
+              # without restarting the crawl from scratch.
+              while True:
                 # Prime the pool
-                while len(in_flight) < max_workers and len(visited) < max_pages:
+                while len(in_flight) < max_workers and (len(results) + len(in_flight)) < _current_max():
                     nxt = _dequeue_next()
                     if nxt is None:
                         break
@@ -1915,23 +1986,87 @@ def crawl_site():
                                 bucket.append({'source': source_url, 'anchor': anchor, 'placement': placement})
                             alt = _crawl_slash_alt(link)
                             if link not in visited and (not alt or alt not in visited) and _url_allowed(link):
+                                # Mark on enqueue (not dequeue) so the same URL
+                                # discovered from N pages doesn't get queued N
+                                # times before it's pulled.
+                                visited.add(link)
+                                if alt:
+                                    visited.add(alt)
                                 queue.append((link, depth + 1))
 
-                        yield f"data: {json.dumps({'type': 'page', 'data': page_data, 'crawled': len(visited), 'queued': len(queue), 'errors': errors})}\n\n"
+                        from itertools import islice as _islice
+                        queue_sample = [u for u, _d in _islice(queue, 100)]
+                        yield f"data: {json.dumps({'type': 'page', 'data': page_data, 'crawled': len(results), 'queued': len(queue), 'errors': errors, 'queue_sample': queue_sample})}\n\n"
 
                     # Keep the pool topped up
-                    while len(in_flight) < max_workers and len(visited) < max_pages:
+                    while len(in_flight) < max_workers and (len(results) + len(in_flight)) < _current_max():
                         nxt = _dequeue_next()
                         if nxt is None:
                             break
                         fut2 = executor.submit(_fetch_job, nxt[0], nxt[1])
                         in_flight[fut2] = nxt
 
+                # In-flight drained. Either queue is exhausted, the user asked
+                # us to finalize, or we hit the page cap with URLs still queued.
+                _state = ACTIVE_CRAWL_LIMITS.get(crawl_id) or {}
+                if _state.get('finalize') or not queue:
+                    break
+
+                # Hit the cap with URLs still queued — surface a prompt and
+                # wait for the user to either bump the cap or finalize.
+                from itertools import islice as _islice
+                queue_sample = [u for u, _d in _islice(queue, 100)]
+                yield f"data: {json.dumps({'type': 'limit_reached', 'queued': len(queue), 'fetched': len(results), 'current_max': _current_max(), 'crawl_id': crawl_id, 'queue_sample': queue_sample})}\n\n"
+                _ev = _state.get('continue_event')
+                if _ev is None:
+                    break
+                while not _ev.wait(timeout=15):
+                    yield ': waiting\n\n'  # SSE comment heartbeat
+                _ev.clear()
+                _state2 = ACTIVE_CRAWL_LIMITS.get(crawl_id) or {}
+                if _state2.get('finalize'):
+                    break
+                yield f"data: {json.dumps({'type': 'crawl_resumed', 'new_max': _current_max(), 'queued': len(queue)})}\n\n"
+
         except GeneratorExit:
-            app.logger.info(f"[crawler] Client disconnected, stopping crawl at {len(visited)} pages")
+            # Re-enqueue any in-flight URLs so resume picks them up. URL stays
+            # in `visited` (it's been seen) — dequeue doesn't gate on visited.
+            for _fut, _submitted in list(in_flight.items()):
+                if not _submitted:
+                    continue
+                _u, _d = _submitted
+                queue.appendleft((_u, _d))
+            # Prune anything older than TTL while we're here
+            _now = time.time()
+            for _cid in list(SUSPENDED_CRAWLS.keys()):
+                if _now - SUSPENDED_CRAWLS[_cid].get('created', 0) > SUSPENDED_CRAWL_TTL:
+                    SUSPENDED_CRAWLS.pop(_cid, None)
+            # Persist state for resume
+            SUSPENDED_CRAWLS[crawl_id] = {
+                'created': _now,
+                'seed_url': seed_url,
+                'domain': domain,
+                'queue': list(queue),
+                'visited': list(visited),
+                'results': results,
+                'inlinks_map': inlinks_map,
+                'errors': errors,
+                'total_time': total_time,
+                'config': {
+                    'max_pages': max_pages,
+                    'max_depth': max_depth,
+                    'crawl_delay': crawl_delay,
+                    'render_js': render_js,
+                    'ignore_robots': ignore_robots,
+                    'ignore_noindex': ignore_noindex,
+                    'max_workers': max_workers,
+                },
+            }
+            app.logger.info(f"[crawler] {crawl_id} suspended (resumable for {SUSPENDED_CRAWL_TTL//60}m): {len(results)} done, {len(queue)} queued")
             session.close()
             _teardown_pw(pw_page, pw_browser, pw_ctx)
             ACTIVE_CRAWL_RULES.pop(crawl_id, None)
+            ACTIVE_CRAWL_LIMITS.pop(crawl_id, None)
             return
 
         session.close()
@@ -2077,6 +2212,7 @@ def crawl_site():
         yield f"data: {json.dumps({'type': 'complete', 'total': len(results), 'summary': summary, 'inlinks': inlinks_payload, 'reports': reports})}\n\n"
         yield "data: [DONE]\n\n"
         ACTIVE_CRAWL_RULES.pop(crawl_id, None)
+        ACTIVE_CRAWL_LIMITS.pop(crawl_id, None)
 
     return Response(
         stream_with_context(generate()),
@@ -2405,6 +2541,61 @@ def crawl_update_rules():
     ACTIVE_CRAWL_RULES[crawl_id] = {'include': new_incl, 'exclude': new_excl}
     app.logger.info(f"[crawler] {crawl_id} rules updated: {len(new_excl)} exclude, {len(new_incl)} include")
     return jsonify({'ok': True, 'exclude': new_excl, 'include': new_incl})
+
+
+@app.route('/crawl/resumable', methods=['GET'])
+def crawl_resumable():
+    """Return metadata for a suspended crawl (or 404 if unknown/expired).
+    Used by the UI to decide whether to show a Resume button."""
+    crawl_id = (request.args.get('crawl_id') or '').strip()
+    state = SUSPENDED_CRAWLS.get(crawl_id)
+    if not state:
+        return jsonify({'ok': False, 'error': 'No suspended crawl with that id'}), 404
+    age = int(time.time() - state.get('created', 0))
+    if age > SUSPENDED_CRAWL_TTL:
+        SUSPENDED_CRAWLS.pop(crawl_id, None)
+        return jsonify({'ok': False, 'error': 'Suspended crawl expired'}), 410
+    return jsonify({
+        'ok': True,
+        'crawl_id': crawl_id,
+        'seed_url': state.get('seed_url'),
+        'domain': state.get('domain'),
+        'pages': len(state.get('results', [])),
+        'queued': len(state.get('queue', [])),
+        'errors': state.get('errors', 0),
+        'age_seconds': age,
+        'ttl_seconds': SUSPENDED_CRAWL_TTL,
+    })
+
+
+@app.route('/crawl/continue', methods=['POST'])
+def crawl_continue():
+    """Resume a crawl that's paused at the page-cap prompt.
+
+    action=continue → bump max_pages by `bump` (default 500) and resume.
+    action=finalize → stop with what we have, run summary/reports.
+    Either way, signals the generator's continue_event to wake it up.
+    """
+    payload = request.get_json(silent=True) or {}
+    crawl_id = (payload.get('crawl_id') or '').strip()
+    action = (payload.get('action') or 'continue').strip().lower()
+    bump = int(payload.get('bump', 500) or 500)
+
+    state = ACTIVE_CRAWL_LIMITS.get(crawl_id)
+    if not state:
+        return jsonify({'ok': False, 'error': 'No paused crawl with that id'}), 404
+
+    if action == 'finalize':
+        state['finalize'] = True
+    else:
+        state['max_pages'] = state.get('max_pages', 0) + bump
+        state['bumps'] = state.get('bumps', 0) + 1
+
+    ev = state.get('continue_event')
+    if ev is not None:
+        ev.set()
+    app.logger.info(f"[crawler] {crawl_id} {action}: max_pages={state.get('max_pages')}, bumps={state.get('bumps')}")
+    return jsonify({'ok': True, 'max_pages': state.get('max_pages'), 'finalize': state.get('finalize'), 'bumps': state.get('bumps')})
 
 
 
