@@ -393,6 +393,7 @@ function startCrawl(opts) {
   document.getElementById('crawler-empty').style.display = 'none';
   document.getElementById('crawler-results').style.display = '';
   document.getElementById('issues-sidebar').style.display = '';
+  { const _smBtn = document.getElementById('crawler-export-sitemap-btn'); if (_smBtn) _smBtn.style.display = 'none'; }
   if (!resumeFromId) {
     document.getElementById('crawler-tbody').innerHTML = '';
     document.getElementById('crawler-cms-banner').innerHTML = '';
@@ -1288,6 +1289,65 @@ function stopCrawl() {
   if (crawlerAbort) crawlerAbort.abort();
 }
 
+// Export an XML sitemap of every 200-status indexable URL the crawl found.
+// Mirrors the backend filter at /export-crawl-sitemap so the user sees an
+// accurate URL count *before* the download triggers.
+async function exportCrawlerSitemap() {
+  if (!Array.isArray(crawlerResults) || !crawlerResults.length) return;
+  const btn = document.getElementById('crawler-export-sitemap-btn');
+  if (!btn) return;
+  let domain = '';
+  try { domain = new URL(crawlerResults[0].url).origin; } catch {}
+  const eligible = crawlerResults.filter(r => {
+    if (r.status_code !== 200) return false;
+    if (r.error) return false;
+    if (r.redirect_url) return false;
+    if (r.indexable === false) return false;
+    if (r.canonical_kind === 'canonicalised') return false;
+    if (r.is_pagination) return false;
+    const ct = (r.content_type || '').toLowerCase();
+    if (ct && !ct.includes('html') && !ct.includes('xml')) return false;
+    const u = (r.url || '').trim();
+    if (!u || !(u.startsWith('http://') || u.startsWith('https://'))) return false;
+    return true;
+  });
+  if (!eligible.length) {
+    if (typeof showToast === 'function') showToast('No indexable 200 pages to include in sitemap', 'warning');
+    else alert('No indexable 200 pages to include in sitemap');
+    return;
+  }
+  const labelSpan = btn.querySelector('span');
+  const origLabel = labelSpan ? labelSpan.textContent : '';
+  if (labelSpan) labelSpan.textContent = `Exporting ${eligible.length}…`;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/export-crawl-sitemap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: crawlerResults, domain })
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    // Server returns either application/xml (single file) or application/zip
+    // (>50K URLs split across child sitemaps + index). Pick the right
+    // extension from the response's Content-Type.
+    const ct = (resp.headers.get('Content-Type') || '').toLowerCase();
+    const ext = ct.includes('zip') ? 'zip' : 'xml';
+    const safeDomain = (domain || '').replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9.-]/g, '');
+    const ts = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = ['sitemap', safeDomain, ts].filter(Boolean).join('-') + '.' + ext;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    if (typeof showToast === 'function') showToast(`Exported sitemap with ${eligible.length} URLs`, 'success');
+  } catch (e) {
+    if (typeof showToast === 'function') showToast('Sitemap export failed', 'error');
+    else alert('Sitemap export failed: ' + (e && e.message));
+  }
+  if (labelSpan) labelSpan.textContent = origLabel;
+  btn.disabled = false;
+}
+
 function crawlFinished() {
   if (crawlerTimer) { clearInterval(crawlerTimer); crawlerTimer = null; }
   document.getElementById('crawler-start-btn').style.display = '';
@@ -1300,6 +1360,11 @@ function crawlFinished() {
   if (typeof crawlerHideQueuePanel === 'function') crawlerHideQueuePanel();
   const queuedEl = document.getElementById('cs-queued');
   if (queuedEl) queuedEl.textContent = '0';
+  // Show sitemap export button now that the crawl has produced results.
+  if (Array.isArray(crawlerResults) && crawlerResults.length) {
+    const _smBtn = document.getElementById('crawler-export-sitemap-btn');
+    if (_smBtn) _smBtn.style.display = 'inline-flex';
+  }
   // Sitemap analysis is opt-in via the 'Sitemap analysis' checkbox.
   if (Array.isArray(crawlerResults) && crawlerResults.length) {
     const _smCheckbox = document.getElementById('crawler-run-sitemap');
@@ -1857,6 +1922,7 @@ function loadSavedCrawl(file) {
       if (csCrawled) csCrawled.textContent = String(crawlerResults.length);
       const post = document.getElementById('crawler-post-crawl-actions');
       if (post) post.style.display = 'flex';
+      { const _smBtn = document.getElementById('crawler-export-sitemap-btn'); if (_smBtn && crawlerResults.length) _smBtn.style.display = 'inline-flex'; }
       if (typeof updateCounts === 'function') updateCounts();
       if (typeof window.selectCategory === 'function') window.selectCategory('all');
       showToast(`Loaded "${d.name}" · ${crawlerResults.length} pages`, 'success');
