@@ -1315,23 +1315,28 @@ def sitemap_analyse():
     """
     data = request.get_json() or {}
     domain = (data.get('domain') or '').rstrip('/')
-    # Tolerate scheme-less domain (urlparse needs http(s):// prefix to
-    # populate netloc — otherwise discovery silently fails).
     if domain and not domain.startswith('http'):
         domain = 'https://' + domain
     results = data.get('results') or []
     inlinks_map = data.get('inlinks') or {}
+    manual_sm = (data.get('sitemap_url') or '').strip()
 
     if not domain:
         return jsonify({'error': 'domain required'}), 400
 
-    discovered, discovery_warnings = _discover_sitemaps(domain)
-    if not discovered:
-        return jsonify({
-            'sitemaps_found': [],
-            'warnings': discovery_warnings + ['No sitemap could be discovered. Tried robots.txt and common default paths.'],
-            'tried_paths': list(_SITEMAP_DEFAULT_PATHS),
-        }), 200
+    if manual_sm:
+        if not manual_sm.startswith('http'):
+            manual_sm = 'https://' + manual_sm.lstrip('/')
+        discovered = [{'url': manual_sm, 'source': 'manual'}]
+        discovery_warnings = []
+    else:
+        discovered, discovery_warnings = _discover_sitemaps(domain)
+        if not discovered:
+            return jsonify({
+                'sitemaps_found': [],
+                'warnings': discovery_warnings + ['No sitemap could be discovered. Tried robots.txt and common default paths.'],
+                'tried_paths': list(_SITEMAP_DEFAULT_PATHS),
+            }), 200
 
     seed = [d['url'] for d in discovered]
     sm_urls, sitemaps_meta, sm_errors = _fetch_sitemap_recursive(seed)
