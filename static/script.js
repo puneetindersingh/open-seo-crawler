@@ -1778,11 +1778,18 @@ function _renderCompareModal(d, savedName) {
     </details>`;
 
   const issues = d.issues || [];
-  const issueRow = (it) => {
+  const issueRow = (it, idx) => {
     const sev = (typeof sevOf === 'function' ? sevOf(it.issue) : 'warn');
     const sevColor = sev === 'error' ? '#ef4444' : sev === 'warn' ? '#f59e0b' : '#3b82f6';
-    return `<tr style="border-bottom:1px solid #e2e8f0;">
-      <td style="padding:7px 14px;"><span style="display:inline-block;padding:1px 6px;border-radius:3px;background:rgba(0,0,0,0.04);color:${sevColor};font-size:10px;font-weight:600;text-transform:uppercase;margin-right:6px;">${sev}</span><span style="font-size:12px;">${escHtml(it.issue)}</span></td>
+    const resolved = it.only_a_total != null ? it.only_a_total : (it.only_a || []).length;
+    const introduced = it.only_b_total != null ? it.only_b_total : (it.only_b || []).length;
+    const still = it.both_total != null ? it.both_total : (it.both || []).length;
+    const hasDrill = (resolved + introduced + still) > 0;
+    return `<tr data-issue-idx="${idx}" data-expanded="0" style="border-bottom:1px solid #e2e8f0;${hasDrill ? 'cursor:pointer;' : ''}" ${hasDrill ? `onclick="_compareToggleIssueDrill(${idx})"` : ''}>
+      <td style="padding:7px 14px;">
+        ${hasDrill ? `<span class="ci-arrow" style="display:inline-block;width:10px;color:#64748b;font-size:10px;margin-right:4px;transition:transform .12s;">▶</span>` : '<span style="display:inline-block;width:14px;"></span>'}
+        <span style="display:inline-block;padding:1px 6px;border-radius:3px;background:rgba(0,0,0,0.04);color:${sevColor};font-size:10px;font-weight:600;text-transform:uppercase;margin-right:6px;">${sev}</span><span style="font-size:12px;">${escHtml(it.issue)}</span>
+      </td>
       <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b;">${it.a}</td>
       <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${it.b}</td>
       <td style="padding:7px 14px;text-align:right;">${delta(it.a, it.b)}</td>
@@ -1790,16 +1797,16 @@ function _renderCompareModal(d, savedName) {
   };
   const issuesHtml = `
     <details open style="border-bottom:1px solid #e2e8f0;">
-      <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Issues (${issues.length})</summary>
+      <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Issues (${issues.length}) <span style="font-weight:400;color:#64748b;font-size:11.5px;margin-left:6px;">click any row to see the URLs</span></summary>
       ${issues.length === 0 ? `<div style="padding:14px 18px;color:#64748b;font-size:12px;">No issues seen in either crawl.</div>` : `
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <table id="cmp-issues-table" style="width:100%;border-collapse:collapse;font-size:12px;">
         <thead><tr style="background:#f8fafc;">
           <th style="padding:7px 14px;text-align:left;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Issue</th>
           <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Old</th>
           <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">New</th>
           <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;">Δ</th>
         </tr></thead>
-        <tbody>${issues.map(issueRow).join('')}</tbody>
+        <tbody>${issues.map((it, i) => issueRow(it, i)).join('')}</tbody>
       </table>`}
     </details>`;
 
@@ -1958,6 +1965,59 @@ function _closeCompareModal() {
   if (ov) ov.style.display = 'none';
   document.body.style.overflow = '';
 }
+
+window._compareToggleIssueDrill = function(idx) {
+  const tr = document.querySelector(`#cmp-issues-table tr[data-issue-idx="${idx}"]`);
+  if (!tr) return;
+  const expanded = tr.dataset.expanded === '1';
+  const existing = tr.nextElementSibling;
+  if (existing && existing.classList.contains('cmp-issue-drill')) existing.remove();
+  const arrow = tr.querySelector('.ci-arrow');
+  if (expanded) { tr.dataset.expanded = '0'; if (arrow) arrow.style.transform = ''; return; }
+  tr.dataset.expanded = '1';
+  if (arrow) arrow.style.transform = 'rotate(90deg)';
+
+  const it = (window._compareData && (window._compareData.issues || [])[idx]) || null;
+  if (!it) return;
+  const escHtml = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const renderList = (urls, total, emptyMsg, color) => {
+    const safeUrls = Array.isArray(urls) ? urls : [];
+    if (!safeUrls.length) return `<div style="padding:10px 12px;color:#64748b;font-size:11px;font-style:italic;">${emptyMsg}</div>`;
+    const more = (total != null && total > safeUrls.length)
+      ? `<div style="padding:6px 12px;font-size:10.5px;color:#64748b;">…and ${total - safeUrls.length} more</div>`
+      : '';
+    return safeUrls.map(u => `
+      <div style="padding:5px 12px;font-size:11.5px;font-family:'SF Mono','Menlo',monospace;border-bottom:1px solid #e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        <span style="color:${color};font-weight:700;margin-right:6px;">●</span><a href="${u}" target="_blank" rel="noopener" style="color:#6366f1;text-decoration:none;">${escHtml(u)}</a>
+      </div>`).join('') + more;
+  };
+  const onlyA = it.only_a || [];
+  const onlyB = it.only_b || [];
+  const both  = it.both  || [];
+  const oat = it.only_a_total != null ? it.only_a_total : onlyA.length;
+  const obt = it.only_b_total != null ? it.only_b_total : onlyB.length;
+  const bt  = it.both_total   != null ? it.both_total   : both.length;
+  const drill = document.createElement('tr');
+  drill.className = 'cmp-issue-drill';
+  drill.innerHTML = `
+    <td colspan="4" style="padding:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#e2e8f0;">
+        <div style="background:#fff;">
+          <div style="padding:8px 12px;font-size:10.5px;font-weight:700;color:#10b981;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #e2e8f0;background:#f8fafc;">Resolved <span style="color:#64748b;font-weight:500;">(${oat})</span></div>
+          <div style="max-height:340px;overflow:auto;">${renderList(onlyA, oat, 'No URLs resolved', '#10b981')}</div>
+        </div>
+        <div style="background:#fff;">
+          <div style="padding:8px 12px;font-size:10.5px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #e2e8f0;background:#f8fafc;">Newly broken <span style="color:#64748b;font-weight:500;">(${obt})</span></div>
+          <div style="max-height:340px;overflow:auto;">${renderList(onlyB, obt, 'No new URLs broken', '#ef4444')}</div>
+        </div>
+        <div style="background:#fff;">
+          <div style="padding:8px 12px;font-size:10.5px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #e2e8f0;background:#f8fafc;">Still failing <span style="color:#64748b;font-weight:500;">(${bt})</span></div>
+          <div style="max-height:340px;overflow:auto;">${renderList(both, bt, 'None — issue cleared', '#f59e0b')}</div>
+        </div>
+      </div>
+    </td>`;
+  tr.parentNode.insertBefore(drill, tr.nextSibling);
+};
 
 // Auto-save on crawl finish + reveal manual Save button.
 (function _wireSiteCrawlerSave() {

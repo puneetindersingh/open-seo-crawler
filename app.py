@@ -2320,23 +2320,36 @@ def crawl_compare():
         out = _re.sub(r'\s*\([^)]*\)\s*$', '', s).strip()
         out = _re.sub(r'^\d+\s+', '', out).strip()
         return out or s
-    def _issue_counts(rows):
-        counts = {}
+    def _issue_url_sets(rows):
+        m = {}
         for r in rows:
+            url = r.get('url') or ''
             seen = set()
             for issue in (r.get('issues') or []):
                 norm = _normalize_issue(issue)
-                if norm in seen: continue
+                if not norm or norm in seen: continue
                 seen.add(norm)
-                counts[norm] = counts.get(norm, 0) + 1
-        return counts
-    issues_a = _issue_counts(a_results); issues_b = _issue_counts(b_results)
+                m.setdefault(norm, set()).add(url)
+        return m
+    urls_a_by_issue = _issue_url_sets(a_results)
+    urls_b_by_issue = _issue_url_sets(b_results)
     issues_compare = []
-    for iss in sorted(set(issues_a) | set(issues_b)):
-        ia = issues_a.get(iss, 0); ib = issues_b.get(iss, 0)
+    _URL_CAP = 500
+    for iss in sorted(set(urls_a_by_issue) | set(urls_b_by_issue)):
+        ua = urls_a_by_issue.get(iss, set()); ub = urls_b_by_issue.get(iss, set())
+        ia = len(ua); ib = len(ub)
         if ia == ib == 0: continue
-        issues_compare.append({'issue': iss, 'a': ia, 'b': ib, 'delta': ib - ia})
-    issues_compare.sort(key=lambda x: abs(x['delta']), reverse=True)
+        only_a = sorted(ua - ub)[:_URL_CAP]
+        only_b = sorted(ub - ua)[:_URL_CAP]
+        both   = sorted(ua & ub)[:_URL_CAP]
+        issues_compare.append({
+            'issue': iss, 'a': ia, 'b': ib, 'delta': ib - ia,
+            'only_a': only_a, 'only_b': only_b, 'both': both,
+            'only_a_total': len(ua - ub),
+            'only_b_total': len(ub - ua),
+            'both_total':   len(ua & ub),
+        })
+    issues_compare.sort(key=lambda x: (abs(x['delta']), x['a'] + x['b']), reverse=True)
 
     from urllib.parse import urlparse as _urlp
     def _dir_counts(rows):
