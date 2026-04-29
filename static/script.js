@@ -1553,6 +1553,11 @@ function openCrawlLoader(opts) {
         ? `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Showing last 30 days · Current crawl loaded (${crawlerResults.length} pages) — use <strong>Compare</strong> to diff against any saved crawl.</div>`
         : `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Showing last 30 days · Load a crawl to view it, then open this list again to compare.</div>`;
     }
+    const search = `
+      <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;background:#fff;">
+        <input type="search" id="crawl-loader-search" placeholder="Filter by domain, name, or saved by…" oninput="_filterCrawlLoader(this.value)" style="width:100%;padding:8px 12px;font-size:12.5px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;color:#0f172a;outline:none;" autocomplete="off" spellcheck="false" />
+        <div id="crawl-loader-search-count" style="font-size:11px;color:#64748b;margin-top:6px;display:none;"></div>
+      </div>`;
     const header = `
       <div style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:600;">
         <div>Date</div><div>Time</div><div>Website</div><div>Saved by</div><div style="text-align:right;">Pages</div><div></div>
@@ -1572,8 +1577,9 @@ function openCrawlLoader(opts) {
       const delBtn = compareOnly
         ? ''
         : `<button onclick='deleteSavedCrawl(${JSON.stringify(c.file)})' title="Delete" style="padding:6px 8px;font-size:11px;background:transparent;color:#64748b;border:1px solid #e2e8f0;border-radius:4px;cursor:pointer;">✕</button>`;
+      const searchBlob = (`${seed} ${c.name || ''} ${savedBy}`).toLowerCase().replace(/"/g,'&quot;');
       return `
-        <div data-crawl-row="${c.file}" style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;">
+        <div data-crawl-row="${c.file}" data-search="${searchBlob}" style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;">
           <div style="color:#0f172a;font-variant-numeric:tabular-nums;">${dateStr}</div>
           <div style="color:#64748b;font-variant-numeric:tabular-nums;font-family:'SF Mono','Menlo',monospace;">${timeStr}</div>
           <div style="min-width:0;">
@@ -1590,11 +1596,32 @@ function openCrawlLoader(opts) {
         </div>
       `;
     }).join('');
-    body.innerHTML = headerNote + header + rows;
+    body.innerHTML = headerNote + search + header + rows;
   }).catch(e => {
     body.innerHTML = `<div style="padding:20px;color:#ef4444;font-size:12px;">Error: ${e.message}</div>`;
   });
 }
+
+window._filterCrawlLoader = function(q) {
+  const term = (q || '').trim().toLowerCase();
+  const rows = document.querySelectorAll('#crawl-loader-body [data-crawl-row]');
+  let shown = 0;
+  rows.forEach(r => {
+    const blob = (r.dataset.search || '');
+    const match = !term || blob.indexOf(term) !== -1;
+    r.style.display = match ? '' : 'none';
+    if (match) shown++;
+  });
+  const countEl = document.getElementById('crawl-loader-search-count');
+  if (countEl) {
+    if (term) {
+      countEl.style.display = '';
+      countEl.textContent = `${shown} of ${rows.length} crawls match "${q}"`;
+    } else {
+      countEl.style.display = 'none';
+    }
+  }
+};
 
 function openCompareCrawlsPicker() {
   if (!crawlerResults || !crawlerResults.length) {
@@ -1631,8 +1658,8 @@ function loadSavedCrawl(file) {
       crawlerResults.forEach(r => { try { renderRow(r); } catch(e){} });
       const csCrawled = document.getElementById('cs-crawled');
       if (csCrawled) csCrawled.textContent = String(crawlerResults.length);
-      const saveBtn = document.getElementById('crawler-save-btn');
-      if (saveBtn) saveBtn.style.display = '';
+      const post = document.getElementById('crawler-post-crawl-actions');
+      if (post) post.style.display = 'flex';
       if (typeof updateCounts === 'function') updateCounts();
       if (typeof window.selectCategory === 'function') window.selectCategory('all');
       showToast(`Loaded "${d.name}" · ${crawlerResults.length} pages`, 'success');
@@ -2032,8 +2059,8 @@ window._compareToggleIssueDrill = function(idx) {
   window.crawlFinished = function() {
     _origCrawlFinished.apply(this, arguments);
     if (!Array.isArray(crawlerResults) || !crawlerResults.length) return;
-    const btn = document.getElementById('crawler-save-btn');
-    if (btn) btn.style.display = '';
+    const post = document.getElementById('crawler-post-crawl-actions');
+    if (post) post.style.display = 'flex';
     try {
       const host = (crawlerResults[0].url || '').replace(/^https?:\/\//,'').replace(/\/.*$/,'');
       const d = new Date();
