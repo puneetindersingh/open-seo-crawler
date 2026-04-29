@@ -171,17 +171,28 @@
         <div class="cs-expand-hint" style="font-size:11px;color:#64748b;padding:4px 14px 0;font-style:italic;">Tip: double-click any cell to expand and read the full URL / title / meta. Drag column edges to resize.</div>
         <div class="table-wrap">
           <table id="crawler-table">
-            <thead>
+            <colgroup>
+              <col data-col="url" style="width:280px;" />
+              <col data-col="status" style="width:70px;" />
+              <col data-col="title" style="width:220px;" />
+              <col data-col="tlen" style="width:60px;" />
+              <col data-col="meta" style="width:200px;" />
+              <col data-col="h1" style="width:170px;" />
+              <col data-col="words" style="width:70px;" />
+              <col data-col="speed" style="width:70px;" />
+              <col data-col="issues" style="width:240px;" />
+            </colgroup>
+            <thead id="crawler-thead">
               <tr>
-                <th onclick="scSortTable(0)" style="cursor:pointer;user-select:none;">URL <span class="sc-sort-ind" data-col="0"></span></th>
-                <th onclick="scSortTable(1)" style="cursor:pointer;user-select:none;">Status <span class="sc-sort-ind" data-col="1"></span></th>
-                <th onclick="scSortTable(2)" style="cursor:pointer;user-select:none;">Title <span class="sc-sort-ind" data-col="2"></span></th>
-                <th onclick="scSortTable(3)" style="cursor:pointer;user-select:none;">TLen <span class="sc-sort-ind" data-col="3"></span></th>
-                <th onclick="scSortTable(4)" style="cursor:pointer;user-select:none;">Meta <span class="sc-sort-ind" data-col="4"></span></th>
-                <th onclick="scSortTable(5)" style="cursor:pointer;user-select:none;">H1 <span class="sc-sort-ind" data-col="5"></span></th>
-                <th onclick="scSortTable(6)" style="cursor:pointer;user-select:none;">Words <span class="sc-sort-ind" data-col="6"></span></th>
-                <th onclick="scSortTable(7)" style="cursor:pointer;user-select:none;">Time <span class="sc-sort-ind" data-col="7"></span></th>
-                <th onclick="scSortTable(8)" style="cursor:pointer;user-select:none;">Issues <span class="sc-sort-ind" data-col="8"></span></th>
+                <th data-col-idx="0"><span class="th-label" onclick="scSortTable(0)">URL <span class="sc-sort-ind" data-col="0"></span></span><span class="th-resize" data-col-idx="0"></span></th>
+                <th data-col-idx="1"><span class="th-label" onclick="scSortTable(1)">Status <span class="sc-sort-ind" data-col="1"></span></span><span class="th-resize" data-col-idx="1"></span></th>
+                <th data-col-idx="2"><span class="th-label" onclick="scSortTable(2)">Title <span class="sc-sort-ind" data-col="2"></span></span><span class="th-resize" data-col-idx="2"></span></th>
+                <th data-col-idx="3"><span class="th-label" onclick="scSortTable(3)">TLen <span class="sc-sort-ind" data-col="3"></span></span><span class="th-resize" data-col-idx="3"></span></th>
+                <th data-col-idx="4"><span class="th-label" onclick="scSortTable(4)">Meta <span class="sc-sort-ind" data-col="4"></span></span><span class="th-resize" data-col-idx="4"></span></th>
+                <th data-col-idx="5"><span class="th-label" onclick="scSortTable(5)">H1 <span class="sc-sort-ind" data-col="5"></span></span><span class="th-resize" data-col-idx="5"></span></th>
+                <th data-col-idx="6"><span class="th-label" onclick="scSortTable(6)">Words <span class="sc-sort-ind" data-col="6"></span></span><span class="th-resize" data-col-idx="6"></span></th>
+                <th data-col-idx="7"><span class="th-label" onclick="scSortTable(7)">Time <span class="sc-sort-ind" data-col="7"></span></span><span class="th-resize" data-col-idx="7"></span></th>
+                <th data-col-idx="8"><span class="th-label" onclick="scSortTable(8)">Issues <span class="sc-sort-ind" data-col="8"></span></span><span class="th-resize" data-col-idx="8"></span></th>
               </tr>
             </thead>
             <tbody id="crawler-tbody"></tbody>
