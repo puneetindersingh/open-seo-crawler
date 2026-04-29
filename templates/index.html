@@ -85,12 +85,14 @@
         </div>
       </details>
 
-      <div class="actions" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-        <button id="crawler-start-btn" onclick="startCrawl()">Start crawl</button>
-        <button id="crawler-stop-btn" onclick="stopCrawl()" style="display:none">Stop</button>
-        <button id="crawler-save-btn" type="button" onclick="saveCurrentCrawl()" style="display:none;padding:7px 12px;font-size:12px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;font-weight:500;" title="Save the current crawl (auto-saved by default — use this to rename)">Save</button>
-        <button id="crawler-load-btn" type="button" onclick="openCrawlLoader()" style="padding:7px 12px;font-size:12px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;font-weight:500;" title="Open a saved crawl">Load saved</button>
-        <button id="crawler-compare-btn" type="button" onclick="openCompareCrawlsPicker()" style="padding:7px 12px;font-size:12px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;font-weight:500;" title="Pick a saved crawl to diff against the current crawl">Compare crawls</button>
+      <div class="actions" style="display:flex;flex-direction:column;gap:6px;align-items:stretch;">
+        <button id="crawler-start-btn" onclick="startCrawl()" style="width:100%;">Start crawl</button>
+        <button id="crawler-stop-btn" onclick="stopCrawl()" style="display:none;width:100%;">Stop</button>
+        <button id="crawler-load-btn" type="button" onclick="openCrawlLoader()" style="width:100%;padding:8px 12px;font-size:13px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;font-weight:500;" title="Open a saved crawl">Load saved</button>
+        <div id="crawler-post-crawl-actions" style="display:none;flex-direction:column;gap:6px;">
+          <button id="crawler-save-btn" type="button" onclick="saveCurrentCrawl()" style="width:100%;padding:8px 12px;font-size:13px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;font-weight:500;" title="Save the current crawl (auto-saved by default — use this to rename)">Save crawl</button>
+          <button id="crawler-compare-btn" type="button" onclick="openCompareCrawlsPicker()" style="width:100%;padding:8px 12px;font-size:13px;background:transparent;color:#0f172a;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;font-weight:500;" title="Pick a saved crawl to diff against the current crawl">Compare crawls</button>
+        </div>
       </div>
 
       <div class="stats" id="crawler-stats" style="display:none">
