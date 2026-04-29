@@ -1573,7 +1573,7 @@ function openCrawlLoader(opts) {
         ? ''
         : `<button onclick='deleteSavedCrawl(${JSON.stringify(c.file)})' title="Delete" style="padding:6px 8px;font-size:11px;background:transparent;color:#64748b;border:1px solid #e2e8f0;border-radius:4px;cursor:pointer;">✕</button>`;
       return `
-        <div style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;">
+        <div data-crawl-row="${c.file}" style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;">
           <div style="color:#0f172a;font-variant-numeric:tabular-nums;">${dateStr}</div>
           <div style="color:#64748b;font-variant-numeric:tabular-nums;font-family:'SF Mono','Menlo',monospace;">${timeStr}</div>
           <div style="min-width:0;">
@@ -1649,7 +1649,13 @@ function deleteSavedCrawl(file) {
     body: JSON.stringify({ file })
   }).then(r => r.json()).then(d => {
     if (d.error) { showToast('Delete failed: ' + d.error, 'error'); return; }
-    openCrawlLoader();
+    const row = document.querySelector(`#crawl-loader-body [data-crawl-row="${CSS.escape(file)}"]`);
+    if (row) row.remove();
+    const left = document.querySelectorAll('#crawl-loader-body [data-crawl-row]').length;
+    if (left === 0) {
+      const body = document.getElementById('crawl-loader-body');
+      if (body) body.innerHTML = '<div style="padding:32px;text-align:center;color:#64748b;font-size:13px;">No saved crawls left.</div>';
+    }
   });
 }
 
