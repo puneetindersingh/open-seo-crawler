@@ -425,23 +425,36 @@ window.selectCategory = function(cat) {
     '__sm_only': 'Sitemap Only — Not Reached by Crawl', '__sm_noindex': 'Non-Indexable in Sitemap',
     '__sm_non200': 'Non-200 in Sitemap', '__sm_redirects': 'Redirects in Sitemap',
     '__sm_pagination': 'Pagination in Sitemap',
+    '__schema_by_page': 'Schema by Page — every crawled page with the schema types it emits',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
-  // Sitemap categories render their own list view (no table); other
-  // categories use the standard crawler table.
-  if (typeof cat === 'string' && cat.startsWith('__sm_')) {
+  // Report-style categories (sitemap analysis, schema-by-page) render
+  // their own panel. Hide the standard crawler table entirely so its
+  // empty thead (URL/Status/Title/Issues) doesn't sit above the report.
+  const _crawlerTable = document.getElementById('crawler-table');
+  const _isReportPanel = (typeof cat === 'string') &&
+    (cat.startsWith('__sm_') || cat === '__schema_by_page');
+  if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
     tbody.innerHTML = '';
-    _renderSitemapPanel(cat);
+    if (_crawlerTable) _crawlerTable.style.display = 'none';
+    if (cat === '__schema_by_page') {
+      _renderSchemaByPagePanel();
+    } else {
+      _renderSitemapPanel(cat);
+    }
     const bulkBtn = document.getElementById('crawler-bulk-recrawl-btn');
     if (bulkBtn) bulkBtn.style.display = 'none';
     return;
   }
-  // Drop any sitemap-panel content when switching back to a normal category.
+  // Drop any sitemap/schema panel content when switching back.
   const smPanel = document.getElementById('sitemap-panel');
   if (smPanel) smPanel.remove();
+  const schemaPanel = document.getElementById('schema-by-page-panel');
+  if (schemaPanel) schemaPanel.remove();
+  if (_crawlerTable) _crawlerTable.style.display = '';
 
   // Info box
   renderIssueInfo(cat);
@@ -513,6 +526,67 @@ window.analyseSitemap = async function() {
     if (btn) { btn.disabled = false; btn.textContent = 'Re-analyse'; btn.style.opacity = ''; }
   }
 };
+
+// Per-page schema breakdown: every crawled page with its schema-type
+// chips, plus an aggregate "type X appears on Y pages" header. Helps
+// spot missing-but-expected types (no Product on a WC product page,
+// no LocalBusiness on a contact page, etc.). Pure crawler data — no
+// AI calls — so it's fine to live in the public site-crawler.
+function _renderSchemaByPagePanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('schema-by-page-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'schema-by-page-panel';
+  panel.style.cssText = 'padding:0 14px 14px;font-size:12px;';
+  const rows = (crawlerResults || []).filter(r => !r.error);
+  if (!rows.length) {
+    panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No crawled pages yet.</div>';
+    main.appendChild(panel);
+    return;
+  }
+  const withSchema = rows.filter(r => Array.isArray(r.schema_types) && r.schema_types.length);
+  const withoutSchema = rows.length - withSchema.length;
+  const typeCounts = {};
+  withSchema.forEach(r => r.schema_types.forEach(t => { typeCounts[t] = (typeCounts[t] || 0) + 1; }));
+  const sortedTypes = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+  const escapeHtml = (s) => {
+    if (s == null) return '';
+    if (typeof s !== 'string') {
+      try { s = Array.isArray(s) ? s.join(', ') : String(s); } catch { return ''; }
+    }
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
+  const typeChip = (t, n) =>
+    `<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:var(--surface);border:1px solid var(--border);border-radius:999px;font-size:11px;">
+       <code style="font-size:10.5px;font-weight:600;color:var(--text);">${escapeHtml(t)}</code>
+       <span style="color:var(--text-muted);">×${n}</span>
+     </span>`;
+  const summary = `
+    <div style="padding:14px 0;border-bottom:1px solid var(--border);">
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;align-items:center;margin-bottom:10px;">
+        <span><b style="color:#22c55e;font-size:16px;font-variant-numeric:tabular-nums;">${withSchema.length}</b> <span style="color:var(--text-muted);">with schema</span></span>
+        <span><b style="color:#f59e0b;font-size:16px;font-variant-numeric:tabular-nums;">${withoutSchema}</b> <span style="color:var(--text-muted);">without</span></span>
+        <span style="color:var(--text-muted);">·</span>
+        <span><b style="color:var(--text);font-size:16px;font-variant-numeric:tabular-nums;">${Object.keys(typeCounts).length}</b> <span style="color:var(--text-muted);">unique type${Object.keys(typeCounts).length === 1 ? '' : 's'}</span></span>
+      </div>
+      ${sortedTypes.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;">${sortedTypes.map(([t, n]) => typeChip(t, n)).join('')}</div>` : ''}
+    </div>`;
+  const list = rows.map(r => {
+    const types = Array.isArray(r.schema_types) ? r.schema_types : [];
+    const path = (r.url || '').replace(/^https?:\/\/[^\/]+/, '') || '/';
+    const cells = types.length
+      ? types.map(t => `<code style="display:inline-block;font-size:10.5px;background:var(--surface2);color:var(--text);padding:2px 7px;border-radius:4px;margin:1px;border:1px solid var(--border);">${escapeHtml(t)}</code>`).join(' ')
+      : '<span style="color:#f59e0b;font-style:italic;font-size:11px;">no schema</span>';
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border);display:grid;grid-template-columns:42% 1fr;gap:12px;align-items:start;font-size:11.5px;">
+      <div style="word-break:break-all;"><a href="${r.url}" target="_blank" style="color:#4f46e5;" title="${escapeHtml(r.url)}">${escapeHtml(path)}</a></div>
+      <div>${cells}</div>
+    </div>`;
+  }).join('');
+  panel.innerHTML = summary + list;
+  main.appendChild(panel);
+}
 
 function _renderSitemapPanel(cat) {
   const d = crawlerSitemap;
@@ -626,6 +700,14 @@ function updateCounts() {
       if (matchesCategory(page, key)) counts[key]++;
     }
   }
+  // __schema_by_page count: pages that emit at least one schema type.
+  // Lives outside the matchesCategory loop because it's a report view,
+  // not a per-page filter.
+  if ('__schema_by_page' in counts) {
+    counts.__schema_by_page = (crawlerResults || []).filter(
+      r => !r.error && Array.isArray(r.schema_types) && r.schema_types.length
+    ).length;
+  }
 
   document.querySelectorAll('.ci-count, .sev-num').forEach(el => {
     const k = el.dataset.count;
@@ -645,6 +727,15 @@ function crawlFinished() {
   if (applyBtn) applyBtn.disabled = true;
   crawlerCrawlId = null;
   clearBusy('site-crawler');
+  // Auto-run sitemap analysis once the crawl settles. Saves a click on
+  // every audit and pre-populates the sm_* sidebar entries. Defer briefly
+  // so the host has a moment to recover from the crawl burst rate-limit
+  // before we re-fetch robots.txt.
+  if (Array.isArray(crawlerResults) && crawlerResults.length && typeof window.analyseSitemap === 'function') {
+    setTimeout(() => {
+      try { window.analyseSitemap(); } catch (e) { console.warn('auto-analyseSitemap failed:', e); }
+    }, 1500);
+  }
 }
 
 function applyCrawlRules() {
