@@ -94,22 +94,118 @@ function renderRow(d) {
   const issues = (d.issues || []).map(i => `<span class="badge ${sevOf(i)}" title="${sevOf(i).toUpperCase()}">${escapeHtml(i)}</span>`).join('');
   const safe = d.url.replace(/"/g, '&quot;').replace(/'/g, "\\'");
   tr.innerHTML = `
-    <td style="max-width:300px" title="${escapeHtml(d.url)}">
+    <td title="${escapeHtml(d.url)}">
       <span style="display:flex;align-items:center;gap:2px;min-width:0;">
-        <span class="url-cell" onclick="openDock('${safe}')" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(path)}</span>
-        ${_scOpenIcon(d.url)}${_scRefetchIcon(d.url)}
+        <span class="url-cell" onclick="openDock('${safe}')" style="flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(path)}</span>
+        <span class="cs-cell-actions" style="display:inline-flex;align-items:center;gap:2px;flex-shrink:0;">${_scOpenIcon(d.url)}${_scRefetchIcon(d.url)}</span>
       </span>
     </td>
     <td style="color:${statusColor};font-weight:700">${d.status_code}</td>
-    <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:#ef4444">missing</em>'}</td>
+    <td title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:#ef4444">missing</em>'}</td>
     <td>${d.title_len || 0}</td>
-    <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.meta_description ? escapeHtml(d.meta_description.substring(0,60)) : '<em style="color:#ef4444">missing</em>'}</td>
-    <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.h1 ? escapeHtml(d.h1) : '<em style="color:#ef4444">missing</em>'}</td>
+    <td>${d.meta_description ? escapeHtml(d.meta_description.substring(0,60)) : '<em style="color:#ef4444">missing</em>'}</td>
+    <td>${d.h1 ? escapeHtml(d.h1) : '<em style="color:#ef4444">missing</em>'}</td>
     <td>${d.word_count || 0}</td>
     <td>${d.response_time || 0}s</td>
     <td>${issues || '<span style="color:#22c55e">OK</span>'}</td>
   `;
   tbody.appendChild(tr);
+}
+
+// =============================================================================
+// Column resize — drag .th-resize handles to adjust column widths.
+// Double-click handle to auto-fit column to content (icons included).
+// Widths persist in localStorage.
+// =============================================================================
+const _SC_COL_KEY = 'sc_crawler_col_widths_v1';
+function _scLoadColWidths() {
+  try {
+    const raw = localStorage.getItem(_SC_COL_KEY);
+    if (!raw) return;
+    const widths = JSON.parse(raw);
+    document.querySelectorAll('#crawler-table colgroup col').forEach((col, i) => {
+      if (typeof widths[i] === 'number' && widths[i] > 20) col.style.width = widths[i] + 'px';
+    });
+  } catch {}
+}
+function _scSaveColWidths() {
+  try {
+    const cols = document.querySelectorAll('#crawler-table colgroup col');
+    const widths = Array.from(cols).map(c => parseInt(c.style.width, 10) || c.offsetWidth);
+    localStorage.setItem(_SC_COL_KEY, JSON.stringify(widths));
+  } catch {}
+}
+function _scAutoFitColumn(idx) {
+  const tbody = document.getElementById('crawler-tbody');
+  const thead = document.getElementById('crawler-thead');
+  if (!tbody || !thead) return;
+  const stage = document.createElement('div');
+  stage.style.cssText = 'position:absolute;left:-99999px;top:-99999px;visibility:hidden;white-space:nowrap;';
+  document.body.appendChild(stage);
+  const measure = (sourceCell) => {
+    const wrap = document.createElement('div');
+    const cs = getComputedStyle(sourceCell);
+    wrap.style.cssText = `display:inline-block;white-space:nowrap;font:${cs.font};letter-spacing:${cs.letterSpacing};padding:${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft};box-sizing:border-box;`;
+    wrap.innerHTML = sourceCell.innerHTML;
+    wrap.querySelectorAll('*').forEach(el => {
+      el.style.overflow = 'visible';
+      el.style.textOverflow = 'clip';
+      el.style.maxWidth = 'none';
+      el.style.width = 'auto';
+      el.style.flex = '0 0 auto';
+      el.style.minWidth = '0';
+    });
+    stage.appendChild(wrap);
+    const w = wrap.offsetWidth;
+    stage.removeChild(wrap);
+    return w;
+  };
+  let max = 0;
+  const headerTh = thead.querySelector(`th:nth-child(${idx + 1})`);
+  if (headerTh) max = Math.max(max, measure(headerTh));
+  tbody.querySelectorAll(`tr td:nth-child(${idx + 1})`).forEach(td => { max = Math.max(max, measure(td)); });
+  stage.remove();
+  const targetPx = Math.min(1400, Math.max(60, Math.ceil(max) + 14));
+  const col = document.querySelectorAll('#crawler-table colgroup col')[idx];
+  if (col) col.style.width = targetPx + 'px';
+  _scSaveColWidths();
+}
+function _scInitResizers() {
+  const thead = document.getElementById('crawler-thead');
+  if (!thead || thead.dataset.resizersWired === '1') return;
+  thead.dataset.resizersWired = '1';
+  _scLoadColWidths();
+  thead.querySelectorAll('.th-resize').forEach(handle => {
+    const idx = parseInt(handle.dataset.colIdx, 10);
+    handle.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); _scAutoFitColumn(idx); });
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const col = document.querySelectorAll('#crawler-table colgroup col')[idx];
+      if (!col) return;
+      const startX = e.clientX;
+      const startWidth = parseInt(col.style.width, 10) || col.offsetWidth;
+      handle.classList.add('is-dragging');
+      document.body.classList.add('is-col-resizing');
+      const onMove = (ev) => {
+        const maxW = Math.max(1200, (window.innerWidth || 4000) - 60);
+        const w = Math.max(40, Math.min(maxW, startWidth + (ev.clientX - startX)));
+        col.style.width = w + 'px';
+      };
+      const onUp = () => {
+        handle.classList.remove('is-dragging');
+        document.body.classList.remove('is-col-resizing');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        _scSaveColWidths();
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _scInitResizers);
+  else _scInitResizers();
 }
 
 window.copyUrl = function(btn, url) {
