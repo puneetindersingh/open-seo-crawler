@@ -269,8 +269,9 @@ function startCrawl() {
   crawlerInlinks = {};
   // Reset sitemap analysis from a previous crawl + hide its sidebar entries.
   if (typeof crawlerSitemap !== 'undefined') crawlerSitemap = null;
-  const _smBtn = document.getElementById('sitemap-analyse-btn');
-  if (_smBtn) { _smBtn.textContent = 'Analyse'; _smBtn.disabled = false; _smBtn.style.opacity = ''; }
+  window.sitemapAnalysisSkipped = false;
+  const _smStatus = document.getElementById('sitemap-status');
+  if (_smStatus) { _smStatus.style.display = 'none'; _smStatus.innerHTML = ''; }
   ['sm-cat-missing','sm-cat-orphan','sm-cat-only','sm-cat-noindex','sm-cat-non200','sm-cat-redirects','sm-cat-pagination'].forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.style.display = 'none'; const cnt = el.querySelector('.ci-count'); if (cnt) cnt.textContent = '0'; }
@@ -485,28 +486,84 @@ window.selectCategory = function(cat) {
 // In-memory result of the last sitemap analysis. Cleared on every new crawl.
 let crawlerSitemap = null;
 
-window.analyseSitemap = async function() {
-  if (!Array.isArray(crawlerResults) || !crawlerResults.length) {
-    alert('Run a crawl first.');
-    return;
+window.sitemapAnalysisSkipped = false;
+
+function _smEscape(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _smSetStatus(state, payload) {
+  const el = document.getElementById('sitemap-status');
+  if (!el) return;
+  el.className = 'sitemap-status';
+  el.style.display = '';
+  if (state === 'loading') {
+    el.classList.add('is-loading');
+    el.innerHTML = `<div class="ss-row"><div class="ss-spinner"></div><span>Analysing sitemap…</span></div>`;
+  } else if (state === 'success') {
+    const t = payload || {};
+    el.innerHTML = `<div class="ss-row"><span style="color:#22c55e;">✓</span><span><b>${t.urls_in_sitemap || 0}</b> URLs in sitemap · <b>${t.urls_in_crawl || 0}</b> crawled</span></div>`;
+  } else if (state === 'prompt') {
+    const reason = payload && payload.reason ? payload.reason : "Couldn't find a sitemap.";
+    const prefill = (payload && payload.prefill) || '';
+    el.classList.add('is-error');
+    el.innerHTML = `
+      <div style="margin-bottom:4px;">${_smEscape(reason)} Enter the sitemap URL or skip.</div>
+      <input class="ss-input" id="ss-input" type="text" placeholder="https://example.com/sitemap.xml" value="${_smEscape(prefill)}" />
+      <div class="ss-btn-row">
+        <button class="ss-btn ss-btn-primary" onclick="_smSubmitManual()">Analyse</button>
+        <button class="ss-btn ss-btn-secondary" onclick="_smSkip()">Skip</button>
+      </div>`;
+    setTimeout(() => { const i = document.getElementById('ss-input'); if (i) i.focus(); }, 30);
+  } else if (state === 'skipped') {
+    el.classList.add('is-skipped');
+    el.innerHTML = `Skipped. <a href="#" onclick="event.preventDefault();window.sitemapAnalysisSkipped=false;analyseSitemap();" style="color:var(--accent);">Re-run</a>`;
+  } else {
+    el.style.display = 'none';
   }
+}
+
+window._smSkip = function() {
+  window.sitemapAnalysisSkipped = true;
+  ['sm-cat-missing','sm-cat-orphan','sm-cat-only','sm-cat-noindex','sm-cat-non200','sm-cat-redirects','sm-cat-pagination'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
+  _smSetStatus('skipped');
+};
+
+window._smSubmitManual = function() {
+  const i = document.getElementById('ss-input');
+  const url = (i && i.value || '').trim();
+  if (!url) { if (i) i.focus(); return; }
+  analyseSitemap({ sitemap_url: url });
+};
+
+window.analyseSitemap = async function(opts) {
+  if (!Array.isArray(crawlerResults) || !crawlerResults.length) return;
+  if (window.sitemapAnalysisSkipped && !(opts && opts.sitemap_url)) return;
   let domain = '';
-  try { domain = new URL(crawlerResults[0].url).origin; } catch { alert('Could not detect domain.'); return; }
-  const btn = document.getElementById('sitemap-analyse-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Analysing…'; btn.style.opacity = '0.6'; }
+  try { domain = new URL(crawlerResults[0].url).origin; }
+  catch { _smSetStatus('prompt', { reason: 'Could not detect domain from crawl results.' }); return; }
+  _smSetStatus('loading');
+  const body = { domain, results: crawlerResults, inlinks: crawlerInlinks || {} };
+  if (opts && opts.sitemap_url) body.sitemap_url = opts.sitemap_url;
   try {
     const r = await fetch('/sitemap-analyse', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ domain, results: crawlerResults, inlinks: crawlerInlinks || {} }),
+      body: JSON.stringify(body),
     });
-    const d = await r.json();
-    if (!r.ok) { alert('Sitemap analysis failed: ' + (d.error || ('http ' + r.status))); return; }
-    crawlerSitemap = d;
-    if (!d.sitemaps_found || !d.sitemaps_found.length) {
-      alert('No sitemap discovered. Tried robots.txt + common paths.');
+    let d = null; try { d = await r.json(); } catch {}
+    if (!r.ok) {
+      _smSetStatus('prompt', { reason: `Server returned ${r.status}` + (d && d.error ? ` — ${d.error}` : '') });
       return;
     }
+    if (!d || !d.sitemaps_found || !d.sitemaps_found.length) {
+      _smSetStatus('prompt', { reason: 'No sitemap discovered (tried robots.txt + common paths).', prefill: domain.replace(/\/$/, '') + '/sitemap.xml' });
+      return;
+    }
+    crawlerSitemap = d;
     const r0 = d.reports || {};
     const setCat = (id, key) => {
       const el = document.getElementById(id);
@@ -522,12 +579,9 @@ window.analyseSitemap = async function() {
     setCat('sm-cat-non200',     'non_200_in_sitemap');
     setCat('sm-cat-redirects',  'redirects_in_sitemap');
     setCat('sm-cat-pagination', 'pagination_in_sitemap');
-    const tot = d.totals || {};
-    alert(`Sitemap analysed — ${tot.urls_in_sitemap || 0} URLs in sitemap, ${tot.urls_in_crawl || 0} crawled. Click any sitemap category to see the list.`);
+    _smSetStatus('success', d.totals || {});
   } catch (e) {
-    alert('Sitemap analysis failed: ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Re-analyse'; btn.style.opacity = ''; }
+    _smSetStatus('prompt', { reason: 'Network error: ' + (e && e.message || 'fetch failed') + '.', prefill: domain.replace(/\/$/, '') + '/sitemap.xml' });
   }
 };
 
