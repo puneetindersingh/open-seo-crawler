@@ -6,8 +6,11 @@
   --border: #475569;
   --text: #f1f5f9;
   --text-muted: #94a3b8;
-  --accent: #3b82f6;
-  --accent-hover: #2563eb;
+  /* --accent bumped from #3b82f6 (blue-500, ~3.68:1 with white text — fails
+     body 4.5) to #2563eb (blue-600, ~5.17:1) so primary CTAs (Start crawl,
+     Apply, Analyse) and ci-count badges pass WCAG body. */
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -59,10 +62,11 @@ body {
 .sidebar input[type=url], .sidebar textarea {
   width: 100%;
   padding: 8px 10px;
-  /* Use surface (one step lighter than bg) so the field clearly sits
-     above the panel background in dark mode. The previous --bg made
-     the input invisible until focused. */
-  background: var(--surface);
+  /* Use surface2 (one step lighter than the sidebar's own surface) so
+     the field clearly sits above the panel background in dark mode.
+     Earlier --bg = same as page bg, --surface = same as sidebar; both
+     made the field invisible until focused. */
+  background: var(--surface2);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
@@ -99,6 +103,33 @@ body {
 .filters summary { font-size: 11px; font-weight: 600; color: var(--text-muted); padding: 8px 0; cursor: pointer; }
 .filters label { margin-top: 8px; }
 .filters small { color: var(--text-muted); font-size: 10px; }
+/* Secondary buttons (Apply to current crawl etc.) — match the visual
+   weight of the primary CTA without competing with it. */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color .12s, background-color .12s, color .12s;
+}
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface2);
+}
+.btn-secondary:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 .actions button {
   flex: 1;

@@ -430,16 +430,19 @@ window.selectCategory = function(cat) {
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
   // Report-style categories (sitemap analysis, schema-by-page) render
-  // their own panel. Hide the standard crawler table entirely so its
-  // empty thead (URL/Status/Title/Issues) doesn't sit above the report.
-  const _crawlerTable = document.getElementById('crawler-table');
+  // their own panel. Hide the entire table-wrap (not just the table)
+  // because the wrap has flex:1 and would keep the empty layout space.
+  // Also hide the "double-click to expand" hint — doesn't apply.
+  const _tableWrap = document.querySelector('.table-wrap');
+  const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
     (cat.startsWith('__sm_') || cat === '__schema_by_page');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
     tbody.innerHTML = '';
-    if (_crawlerTable) _crawlerTable.style.display = 'none';
+    if (_tableWrap) _tableWrap.style.display = 'none';
+    if (_expandHint) _expandHint.style.display = 'none';
     if (cat === '__schema_by_page') {
       _renderSchemaByPagePanel();
     } else {
@@ -454,7 +457,8 @@ window.selectCategory = function(cat) {
   if (smPanel) smPanel.remove();
   const schemaPanel = document.getElementById('schema-by-page-panel');
   if (schemaPanel) schemaPanel.remove();
-  if (_crawlerTable) _crawlerTable.style.display = '';
+  if (_tableWrap) _tableWrap.style.display = '';
+  if (_expandHint) _expandHint.style.display = '';
 
   // Info box
   renderIssueInfo(cat);
