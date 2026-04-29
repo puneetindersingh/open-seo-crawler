@@ -98,7 +98,13 @@ body {
 }
 .sidebar textarea { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
 .slider-row input[type=range] { width: 100%; margin-top: 3px; }
-.sidebar .check { display: flex; align-items: center; gap: 7px; margin-top: 2px; cursor: pointer; }
+/* Block layout (not flex) so the label text + <small> flow as inline
+   text and wrap naturally — flex made each child its own column and
+   broke "Ignore noindex" / "Sitemap analysis" labels into stacked
+   blocks that wrapped weirdly. */
+.sidebar .check { display: block; padding: 5px 0; line-height: 1.45; cursor: pointer; font-size: 12.5px; color: var(--text); }
+.sidebar .check input[type="checkbox"] { vertical-align: middle; margin-right: 7px; transform: translateY(-1px); }
+.sidebar .check small { color: var(--text-muted); font-size: 11.5px; font-weight: 400; }
 .filters { margin: 10px 0; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; }
 .filters summary { font-size: 11px; font-weight: 600; color: var(--text-muted); padding: 8px 0; cursor: pointer; }
 .filters label { margin-top: 8px; }
