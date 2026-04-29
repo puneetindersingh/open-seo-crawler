@@ -45,17 +45,24 @@
       <label class="check"><input type="checkbox" id="crawler-ignore-noindex" /> Ignore noindex <small>(audit noindex pages as if indexable)</small></label>
 
       <details class="filters">
-        <summary>URL filters (include / exclude)</summary>
-        <small>robots.txt syntax: <code>*</code> = any chars, <code>$</code> = end-of-URL anchor. <code>?</code> is literal. e.g. <code>/*?*</code> skip query strings · <code>/page/*</code> skip pagination · <code>/*.pdf$</code> skip PDFs.</small>
+        <summary>URL filters (robots.txt + custom rules)</summary>
+        <label>Live robots.txt
+          <span style="display:flex;align-items:center;gap:6px;">
+            <small id="crawler-robots-status" style="flex:1;"></small>
+            <button type="button" id="crawler-robots-refetch" onclick="crawlerFetchRobots()" title="Re-fetch robots.txt" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:13px;line-height:1;">↻</button>
+          </span>
+          <textarea id="crawler-robots-preview" rows="5" readonly placeholder="Enter a URL above and robots.txt will load here."></textarea>
+        </label>
+        <small>Add your own rules below. Syntax: <code>*</code> = any chars, <code>$</code> = end-of-URL anchor. e.g. <code>/*?*</code> skip query strings · <code>/page/*</code> skip pagination · <code>/*.pdf$</code> skip PDFs.</small>
         <label>Exclude patterns<br><small>One per line</small>
           <textarea id="crawler-exclude" rows="5" placeholder="*/page/*&#10;*?add-to-cart=*&#10;*?replytocom=*&#10;*?utm_*&#10;/*.pdf$"></textarea>
         </label>
         <label>Include patterns<br><small>If set, URLs must match at least one</small>
           <textarea id="crawler-include" rows="3"></textarea>
         </label>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
-          <button type="button" id="crawler-apply-rules" class="btn-secondary" onclick="applyCrawlRules()" disabled>Apply to current crawl</button>
-          <small id="crawler-apply-rules-msg"></small>
+        <div style="display:flex;align-items:flex-start;gap:8px;margin-top:6px;">
+          <button type="button" id="crawler-apply-rules" class="btn-secondary" onclick="applyCrawlRules()" style="white-space:nowrap;flex-shrink:0;" disabled>Apply rules</button>
+          <small id="crawler-apply-rules-msg" style="flex:1;min-width:0;line-height:1.4;"></small>
         </div>
       </details>
 
