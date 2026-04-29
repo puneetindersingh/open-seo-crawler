@@ -1,4 +1,28 @@
 // Open SEO Crawler — client.
+
+// ─── Refresh / close guard for in-flight crawls ─────────────────────
+// Trip the browser's native "Leave site?" dialog if the user hits
+// refresh or closes the tab while a crawl is mid-flight. The crawl
+// loop is fully client-side — a refresh kills the SSE stream and any
+// pages not yet rendered are lost.
+window._activeProcesses = window._activeProcesses || new Map();
+window.markBusy = function(key, label) {
+  if (!key) return;
+  window._activeProcesses.set(key, label || key);
+};
+window.clearBusy = function(key) {
+  if (!key) return;
+  window._activeProcesses.delete(key);
+};
+window.addEventListener('beforeunload', function(e) {
+  if (window._activeProcesses && window._activeProcesses.size > 0) {
+    const msg = 'A process is still running. Leaving now will stop it midway.';
+    e.preventDefault();
+    e.returnValue = msg;
+    return msg;
+  }
+});
+
 let crawlerAbort = null;
 let crawlerTimer = null;
 let crawlerStart = 0;
@@ -239,6 +263,7 @@ function startCrawl() {
   if (!url) { document.getElementById('crawler-url').focus(); return; }
 
   crawlerAbort = new AbortController();
+  markBusy('site-crawler', `Crawling ${url}`);
   crawlerStart = Date.now();
   crawlerResults = [];
   crawlerInlinks = {};
@@ -619,6 +644,7 @@ function crawlFinished() {
   const applyBtn = document.getElementById('crawler-apply-rules');
   if (applyBtn) applyBtn.disabled = true;
   crawlerCrawlId = null;
+  clearBusy('site-crawler');
 }
 
 function applyCrawlRules() {
