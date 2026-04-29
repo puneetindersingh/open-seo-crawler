@@ -82,6 +82,59 @@ def _robots_pattern_match(pattern, url):
     return False
 
 
+def _build_robots_checker(robots_text):
+    """Parse robots.txt and return a fn(url) -> bool that honours
+    Google's wildcard spec (* and $) and longest-match-wins precedence.
+
+    Python's stdlib urllib.robotparser does NOT support wildcards or end-
+    of-URL anchors, so rules like 'Disallow: *?swoof*' or 'Disallow: *?*'
+    silently turn into no-ops and the crawler picks up the dynamic URLs
+    they were meant to keep out. Common on WooCommerce sites with the
+    WOOF/Yoast filter combo. We use the existing _robots_pattern_match
+    (which is already Google-spec) and apply longest-pattern-wins so a
+    more specific Allow can lift a broader Disallow.
+
+    Reads the User-agent: * block only - we crawl as a generic bot.
+    """
+    if not robots_text:
+        return lambda u: True
+    allows, disallows = [], []
+    in_star_block = False
+    for line in robots_text.splitlines():
+        line = line.split('#', 1)[0].strip()
+        if not line or ':' not in line:
+            continue
+        key, _, value = line.partition(':')
+        key = key.strip().lower()
+        value = value.strip()
+        if key == 'user-agent':
+            in_star_block = (value == '*')
+            continue
+        if not in_star_block:
+            continue
+        if key == 'disallow' and value:
+            disallows.append(value)
+        elif key == 'allow' and value:
+            allows.append(value)
+    if not disallows and not allows:
+        return lambda u: True
+
+    def can_fetch(url):
+        best_allow = -1
+        best_disallow = -1
+        for a in allows:
+            if len(a) > best_allow and _robots_pattern_match(a, url):
+                best_allow = len(a)
+        for d in disallows:
+            if len(d) > best_disallow and _robots_pattern_match(d, url):
+                best_disallow = len(d)
+        # Tie or longer Allow wins; only block when Disallow is strictly
+        # more specific. This matches Google's robots.txt parser.
+        return best_disallow <= best_allow
+
+    return can_fetch
+
+
 _DUP_NOISE_PARAMS = frozenset({
     'add-to-cart', 'replytocom', 'fbclid', 'gclid', 'gad_source', 'gbraid',
     'wbraid', 'mc_cid', 'mc_eid', '_ga', 'msclkid', 'yclid', 'dclid',
@@ -1651,7 +1704,6 @@ def crawl_site():
     """BFS site crawl with SSE streaming of per-page results."""
     from collections import deque
     from urllib.parse import urlparse
-    import urllib.robotparser
 
     data = request.json
 
@@ -1778,14 +1830,18 @@ def crawl_site():
     def generate():
         # Fetch robots.txt up-front so the user sees what we're following.
         # If ignore_robots is set, we still fetch (informational) but won't enforce.
-        rp = urllib.robotparser.RobotFileParser()
+        # We replace stdlib urllib.robotparser with our own wildcard-aware
+        # checker because stdlib silently drops '*' and '$' patterns - any
+        # site whose robots.txt uses 'Disallow: *?swoof*' or 'Disallow: *.pdf*'
+        # would otherwise leak those URLs into the crawl.
+        robots_can_fetch = lambda u: True
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         robots_status = 'fetching'
         robots_rules = 0
         try:
             resp = requests.get(robots_url, timeout=8, headers={'User-Agent': 'SEO-Audit-Bot'})
             if resp.status_code == 200:
-                rp.parse(resp.text.splitlines())
+                robots_can_fetch = _build_robots_checker(resp.text)
                 robots_rules = resp.text.count('Disallow')
                 robots_status = 'ignored' if ignore_robots else 'respecting'
                 yield f"data: {json.dumps({'type':'info','msg':f'Downloaded robots.txt ({robots_rules} Disallow rules) — {robots_status}'})}\n\n"
@@ -1932,7 +1988,7 @@ def crawl_site():
                     continue
                 if not ignore_robots:
                     try:
-                        if not rp.can_fetch('*', url):
+                        if not robots_can_fetch(url):
                             continue
                     except Exception:
                         pass
