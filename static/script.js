@@ -362,7 +362,8 @@ function startCrawl() {
                 renderDock();
               }
             } else if (p.type === 'cms_detected') {
-              renderCmsBanner(p);
+              // CMS-recommendations banner removed — see live robots.txt
+              // preview in the URL filters panel instead.
             } else if (p.type === 'start') {
               crawlerCrawlId = p.crawl_id || null;
               const applyBtn = document.getElementById('crawler-apply-rules');
@@ -823,6 +824,18 @@ function crawlFinished() {
   if (applyBtn) applyBtn.disabled = true;
   crawlerCrawlId = null;
   clearBusy('site-crawler');
+  // Anything left in the queue after the crawl is over is irrelevant.
+  // Surface a 'didn't drain' notice so the user knows WHY (max_pages cap)
+  // and zero the counter so it doesn't look like the crawl is still
+  // running.
+  const queuedEl = document.getElementById('cs-queued');
+  const stragglers = parseInt((queuedEl && queuedEl.textContent) || '0', 10) || 0;
+  if (stragglers > 0 && Array.isArray(crawlerResults) && crawlerResults.length > 0) {
+    if (typeof showToast === 'function') {
+      showToast(`Crawl finished with ${stragglers} URL${stragglers === 1 ? '' : 's'} still queued — likely hit the Max pages cap. Bump it in the sidebar and re-run if you need them.`, 'info');
+    }
+  }
+  if (queuedEl) queuedEl.textContent = '0';
   // Auto-run sitemap analysis once the crawl settles. Saves a click on
   // every audit and pre-populates the sm_* sidebar entries. Defer briefly
   // so the host has a moment to recover from the crawl burst rate-limit
@@ -833,6 +846,61 @@ function crawlFinished() {
     }, 1500);
   }
 }
+
+// Auto-fetch the live robots.txt for the URL the user typed and show it
+// in the URL filters panel. Replaces the old CMS-detection banner —
+// instead of guessing exclude patterns from the platform, just SHOW what
+// robots.txt says so the user can see and add their own rules below.
+let _crawlerRobotsLast = '';
+async function crawlerFetchRobots() {
+  const inp = document.getElementById('crawler-url');
+  const out = document.getElementById('crawler-robots-preview');
+  const status = document.getElementById('crawler-robots-status');
+  if (!inp || !out) return;
+  const url = (inp.value || '').trim();
+  if (!url) {
+    out.value = '';
+    if (status) status.textContent = '';
+    _crawlerRobotsLast = '';
+    return;
+  }
+  let origin = '';
+  try { origin = new URL(url.startsWith('http') ? url : 'https://' + url).origin; } catch { return; }
+  if (origin === _crawlerRobotsLast) return;
+  _crawlerRobotsLast = origin;
+  if (status) status.textContent = 'fetching…';
+  try {
+    const r = await fetch('/fetch-robots-txt?url=' + encodeURIComponent(origin));
+    const d = await r.json();
+    if (d.error) {
+      out.value = '';
+      if (status) status.textContent = `error: ${d.error}`;
+      return;
+    }
+    if (d.status >= 400) {
+      out.value = `# ${d.url} returned HTTP ${d.status} — site has no robots.txt or it's blocked.`;
+      if (status) status.textContent = `HTTP ${d.status}`;
+      return;
+    }
+    out.value = d.content || '# (empty robots.txt)';
+    if (status) status.textContent = `${d.length} chars · HTTP ${d.status}`;
+  } catch (e) {
+    out.value = '';
+    if (status) status.textContent = 'fetch failed';
+  }
+}
+
+(function _wireRobotsAutoFetch() {
+  const inp = document.getElementById('crawler-url');
+  if (!inp) return;
+  let t = null;
+  inp.addEventListener('input', () => {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => crawlerFetchRobots(), 600);
+  });
+  inp.addEventListener('blur', crawlerFetchRobots);
+  if (inp.value && inp.value.trim()) setTimeout(crawlerFetchRobots, 200);
+})();
 
 function applyCrawlRules() {
   const msg = document.getElementById('crawler-apply-rules-msg');

@@ -1020,7 +1020,12 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         # any content issues belong on that row, not on the 301 source.
         # When ignore_noindex is set, treat noindex pages like indexable ones for
         # the audit so the user sees the full warning/info list, not just the flag.
-        if (result['indexable'] or ignore_noindex) and not result.get('is_pagination') and not result.get('redirect_url'):
+        # ALSO skip canonicalised pages — they're declared duplicates so any
+        # 'Missing meta' / 'Missing title' / 'Thin content' on them is noise;
+        # those issues are real on the canonical page and would surface there.
+        # The page itself still appears under the 'Canonicalised' report.
+        is_canonicalised = result.get('canonical_kind') == 'canonicalised'
+        if (result['indexable'] or ignore_noindex) and not result.get('is_pagination') and not result.get('redirect_url') and not is_canonicalised:
             if not result['title']:
                 result['issues'].append('Missing title')
             elif result['title_len'] > 60:
@@ -1087,6 +1092,10 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
                     result['issues'].append('No analytics detected')
 
         # --- Issues that apply regardless of indexability ---
+        # Canonicalised flag — surfaced even when content checks are skipped
+        # so the page still appears under the Canonicalised report.
+        if is_canonicalised:
+            result['issues'].append('Canonicalised (points elsewhere)')
         if result['response_time'] > 3:
             result['issues'].append(f'Slow ({result["response_time"]}s)')
 
@@ -1304,6 +1313,33 @@ def _norm_url(u):
         return f"{p.scheme}://{host}{path}".lower()
     except Exception:
         return u.rstrip('/').lower()
+
+
+@app.route('/fetch-robots-txt', methods=['GET'])
+def fetch_robots_txt():
+    """Fetch a site's robots.txt for the URL filters preview panel."""
+    target = (request.args.get('url') or '').strip()
+    if not target:
+        return jsonify({'error': 'url required'}), 400
+    if not target.startswith('http'):
+        target = 'https://' + target.lstrip('/')
+    try:
+        parsed = urlparse(target)
+        if not parsed.netloc:
+            return jsonify({'error': 'invalid URL'}), 400
+        robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+        resp = requests.get(robots_url, timeout=10,
+                            headers={'User-Agent': 'Mozilla/5.0 (compatible; OpenSEOCrawler-RobotsPreview)'},
+                            allow_redirects=True)
+        body = (resp.text or '')[:20000]
+        return jsonify({
+            'url': robots_url,
+            'status': resp.status_code,
+            'content': body,
+            'length': len(resp.text or ''),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)[:200]}), 200
 
 
 @app.route('/sitemap-analyse', methods=['POST'])
