@@ -109,6 +109,21 @@ Concurrency scales linearly up to about 8 workers before target server rate limi
 
 Runs entirely on your machine. No API calls, no accounts, no telemetry. The only HTTP requests made are to the target site you're crawling.
 
+## Responsible use
+
+You are responsible for the targets you crawl. Before pointing this tool at a site you don't own:
+
+- **Respect `robots.txt`.** It's on by default for a reason. Disabling it on a site you don't own may violate that site's terms of service.
+- **Respect rate limits.** The default `0.4 s` per-host delay and 5-worker concurrency are conservative — keep them, or raise them, when crawling production sites. Hammering a server can be treated as abuse.
+- **Honour the target's terms of service.** Some sites explicitly prohibit automated crawling. Read their ToS before scanning.
+- **Personal / private data.** If a crawled page contains personal data, applicable privacy law (GDPR / UK GDPR / Australian Privacy Act / CCPA, etc.) may apply to anything you do with it afterwards. This tool stores results only in your local browser / process — what you do next is your responsibility.
+
+The authors accept no liability for misuse. See the LICENSE for the full disclaimer.
+
+## Trademarks
+
+Screaming Frog, Sitebulb, Ahrefs, Shopify, WordPress, Yoast SEO, Rank Math, Webflow, Wix, Squarespace, Kajabi, Ghost, Drupal, HubSpot, and Joomla are trademarks of their respective owners. This project is an independent open-source tool and is not affiliated with, endorsed by, or sponsored by any of them. References to these names are descriptive comparisons / compatibility lists only.
+
 ## Licence
 
 MIT. See [LICENSE](./LICENSE).
