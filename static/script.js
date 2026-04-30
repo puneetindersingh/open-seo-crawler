@@ -171,16 +171,54 @@ function _scAutoFitColumn(idx) {
   _scSaveColWidths();
 }
 function _scInitResizers() {
-  const thead = document.getElementById('crawler-thead');
+  const tbl = document.getElementById('crawler-table');
+  if (tbl) _initTableResizers(tbl);
+}
+
+// Generic resizer wiring — works on any <table> with a <colgroup>, .th-resize
+// spans in <thead>, and optionally data-resize-key for localStorage. Lets
+// every report panel opt in by emitting class="crawler-grid" + the markup.
+// Mirrors seo-tool's helper. Kept identical so future fixes apply to both.
+function _initTableResizers(table) {
+  if (!table) return;
+  const thead = table.querySelector('thead');
   if (!thead || thead.dataset.resizersWired === '1') return;
   thead.dataset.resizersWired = '1';
-  _scLoadColWidths();
+  const cols = table.querySelectorAll('colgroup col');
+  const key = table.dataset.resizeKey || '';
+  const lsKey = key ? 'sc_table_col_widths_' + key : '';
+
+  if (lsKey) {
+    try {
+      const raw = localStorage.getItem(lsKey);
+      if (raw) {
+        const widths = JSON.parse(raw);
+        cols.forEach((col, i) => {
+          if (typeof widths[i] === 'number' && widths[i] > 20) col.style.width = widths[i] + 'px';
+        });
+      }
+    } catch {}
+  }
+  if (table.id === 'crawler-table') _scLoadColWidths();
+
+  const save = () => {
+    if (table.id === 'crawler-table') { _scSaveColWidths(); return; }
+    if (!lsKey) return;
+    try {
+      const widths = Array.from(cols).map(c => parseInt(c.style.width, 10) || c.offsetWidth);
+      localStorage.setItem(lsKey, JSON.stringify(widths));
+    } catch {}
+  };
+
   thead.querySelectorAll('.th-resize').forEach(handle => {
     const idx = parseInt(handle.dataset.colIdx, 10);
-    handle.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); _scAutoFitColumn(idx); });
+    handle.addEventListener('dblclick', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (table.id === 'crawler-table') _scAutoFitColumn(idx);
+    });
     handle.addEventListener('mousedown', (e) => {
       e.preventDefault(); e.stopPropagation();
-      const col = document.querySelectorAll('#crawler-table colgroup col')[idx];
+      const col = cols[idx];
       if (!col) return;
       const startX = e.clientX;
       const startWidth = parseInt(col.style.width, 10) || col.offsetWidth;
@@ -196,13 +234,47 @@ function _scInitResizers() {
         document.body.classList.remove('is-col-resizing');
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
-        _scSaveColWidths();
+        save();
       };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     });
   });
 }
+
+// Helpers for building resizable crawler-grid tables. Call _scWireNestedGrids
+// on any container after mounting a panel — it scans for nested resizable
+// tables and wires them automatically.
+function _scEscapeHtml(s) {
+  if (s == null) return '';
+  if (typeof s !== 'string') {
+    try { s = Array.isArray(s) ? s.join(', ') : String(s); } catch { return ''; }
+  }
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function _scGridColgroup(cols) {
+  return `<colgroup>${cols.map(c => c.width ? `<col style="width:${c.width}px">` : '<col>').join('')}</colgroup>`;
+}
+function _scGridHead(cols) {
+  return `<thead><tr>${cols.map((c, i) =>
+    `<th style="position:relative;${c.alignRight ? 'text-align:right;' : ''}">
+      <span class="th-label${c.center ? ' th-center' : ''}">${_scEscapeHtml(c.label || '')}</span>
+      <span class="th-resize" data-col-idx="${i}"></span>
+    </th>`
+  ).join('')}</tr></thead>`;
+}
+function _scGridTable(key, cols, rowsHtml, extraStyle) {
+  return `<table class="crawler-grid" data-resize-key="${key}"${extraStyle ? ` style="${extraStyle}"` : ''}>
+    ${_scGridColgroup(cols)}
+    ${_scGridHead(cols)}
+    <tbody>${rowsHtml}</tbody>
+  </table>`;
+}
+function _scWireNestedGrids(container) {
+  if (!container) return;
+  container.querySelectorAll('table.crawler-grid[data-resize-key]').forEach(t => _initTableResizers(t));
+}
+
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _scInitResizers);
   else _scInitResizers();
@@ -950,23 +1022,20 @@ function _renderSchemaByPagePanel() {
     main.appendChild(panel);
     return;
   }
+  // Reset filter state on every render
+  window._scSchemaPageFilter = { types: new Set(), q: '' };
   const withSchema = rows.filter(r => Array.isArray(r.schema_types) && r.schema_types.length);
   const withoutSchema = rows.length - withSchema.length;
   const typeCounts = {};
   withSchema.forEach(r => r.schema_types.forEach(t => { typeCounts[t] = (typeCounts[t] || 0) + 1; }));
   const sortedTypes = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
-  const escapeHtml = (s) => {
-    if (s == null) return '';
-    if (typeof s !== 'string') {
-      try { s = Array.isArray(s) ? s.join(', ') : String(s); } catch { return ''; }
-    }
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  };
+  const escapeHtml = _scEscapeHtml;
+  // Clickable chips — toggle the type in window._scSchemaPageFilter.types
   const typeChip = (t, n) =>
-    `<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:var(--surface);border:1px solid var(--border);border-radius:999px;font-size:11px;">
+    `<button type="button" data-schema-chip="${escapeHtml(t)}" onclick="_scSchemaPageToggleChip('${(t || '').replace(/'/g, "\\'")}')" style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:var(--surface);border:1px solid var(--border);border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;">
        <code style="font-size:10.5px;font-weight:600;color:var(--text);">${escapeHtml(t)}</code>
        <span style="color:var(--text-muted);">×${n}</span>
-     </span>`;
+     </button>`;
   const summary = `
     <div style="padding:14px 0;border-bottom:1px solid var(--border);">
       <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;align-items:center;margin-bottom:10px;">
@@ -974,23 +1043,99 @@ function _renderSchemaByPagePanel() {
         <span><b style="color:#f59e0b;font-size:16px;font-variant-numeric:tabular-nums;">${withoutSchema}</b> <span style="color:var(--text-muted);">without</span></span>
         <span style="color:var(--text-muted);">·</span>
         <span><b style="color:var(--text);font-size:16px;font-variant-numeric:tabular-nums;">${Object.keys(typeCounts).length}</b> <span style="color:var(--text-muted);">unique type${Object.keys(typeCounts).length === 1 ? '' : 's'}</span></span>
+        <span style="color:var(--text-muted);">·</span>
+        <span style="color:var(--text-muted);">Showing <b id="sc-schema-page-count" style="color:var(--text);">${rows.length}</b> of ${rows.length}</span>
+        <input id="sc-schema-page-url-filter" type="search" placeholder="Filter by URL…" oninput="_scSchemaPageSetQuery(this.value)"
+               style="margin-left:auto;padding:5px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg, #fff);color:var(--text);font-size:12px;min-width:220px;" />
       </div>
-      ${sortedTypes.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;">${sortedTypes.map(([t, n]) => typeChip(t, n)).join('')}</div>` : ''}
+      ${sortedTypes.length ? `<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+        <span style="font-size:11px;color:var(--text-muted);margin-right:4px;">Click to filter:</span>
+        ${sortedTypes.map(([t, n]) => typeChip(t, n)).join('')}
+        <button type="button" id="sc-schema-chip-clear" onclick="_scSchemaPageClearFilters()" style="display:none;margin-left:6px;padding:2px 8px;background:none;border:1px solid var(--border);border-radius:999px;font-size:10.5px;color:var(--text-muted);cursor:pointer;">Clear filters</button>
+      </div>` : ''}
     </div>`;
-  const list = rows.map(r => {
+  const rowsHtml = rows.map(r => {
     const types = Array.isArray(r.schema_types) ? r.schema_types : [];
     const path = (r.url || '').replace(/^https?:\/\/[^\/]+/, '') || '/';
     const cells = types.length
       ? types.map(t => `<code style="display:inline-block;font-size:10.5px;background:var(--surface2);color:var(--text);padding:2px 7px;border-radius:4px;margin:1px;border:1px solid var(--border);">${escapeHtml(t)}</code>`).join(' ')
       : '<span style="color:#f59e0b;font-style:italic;font-size:11px;">no schema</span>';
-    return `<div style="padding:8px 0;border-bottom:1px solid var(--border);display:grid;grid-template-columns:42% 1fr;gap:12px;align-items:start;font-size:11.5px;">
-      <div style="word-break:break-all;"><a href="${r.url}" target="_blank" style="color:#4f46e5;" title="${escapeHtml(r.url)}">${escapeHtml(path)}</a></div>
-      <div>${cells}</div>
-    </div>`;
+    return `<tr data-types="${escapeHtml(types.join('|'))}" data-url-lower="${escapeHtml((r.url || '').toLowerCase())}">
+      <td title="${escapeHtml(r.url)}"><a href="${r.url}" target="_blank" style="color:#4f46e5;">${escapeHtml(path)}</a></td>
+      <td>${cells}</td>
+    </tr>`;
   }).join('');
-  panel.innerHTML = summary + list;
+  panel.innerHTML = summary + _scGridTable('schema-by-page', [
+    {label:'URL', width:520},
+    {label:'Schema types'},
+  ], rowsHtml, 'font-size:.78rem;');
   main.appendChild(panel);
+  _scWireNestedGrids(panel);
 }
+
+// Schema-by-Page filter handlers — chips OR-filter by type, URL input
+// substring-filters; both AND together. Mirrors seo-tool exactly so the
+// behaviour is consistent across both crawlers.
+window._scSchemaPageFilter = window._scSchemaPageFilter || { types: new Set(), q: '' };
+
+window._scSchemaPageApplyFilter = function() {
+  const state = window._scSchemaPageFilter;
+  const tbody = document.querySelector('table.crawler-grid[data-resize-key="schema-by-page"] tbody');
+  if (!tbody) return;
+  const q = (state.q || '').toLowerCase().trim();
+  let visible = 0;
+  tbody.querySelectorAll('tr').forEach(tr => {
+    const types = (tr.dataset.types || '').split('|').filter(Boolean);
+    const url = tr.dataset.urlLower || '';
+    let show = true;
+    if (state.types.size > 0) show = Array.from(state.types).some(t => types.includes(t));
+    if (show && q) show = url.includes(q);
+    tr.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  const countEl = document.getElementById('sc-schema-page-count');
+  if (countEl) countEl.textContent = visible;
+  const clearBtn = document.getElementById('sc-schema-chip-clear');
+  if (clearBtn) clearBtn.style.display = (state.types.size > 0 || q) ? 'inline-block' : 'none';
+};
+
+window._scSchemaPageToggleChip = function(type) {
+  const state = window._scSchemaPageFilter;
+  if (state.types.has(type)) state.types.delete(type);
+  else state.types.add(type);
+  document.querySelectorAll('[data-schema-chip]').forEach(c => {
+    const active = state.types.has(c.dataset.schemaChip);
+    if (active) {
+      c.style.background = 'var(--accent, #6366f1)';
+      c.style.borderColor = 'var(--accent, #6366f1)';
+      c.querySelectorAll('code, span').forEach(el => el.style.color = '#fff');
+    } else {
+      c.style.background = 'var(--surface)';
+      c.style.borderColor = 'var(--border)';
+      c.querySelectorAll('code').forEach(el => el.style.color = 'var(--text)');
+      c.querySelectorAll('span').forEach(el => el.style.color = 'var(--text-muted)');
+    }
+  });
+  window._scSchemaPageApplyFilter();
+};
+
+window._scSchemaPageSetQuery = function(q) {
+  window._scSchemaPageFilter.q = q || '';
+  window._scSchemaPageApplyFilter();
+};
+
+window._scSchemaPageClearFilters = function() {
+  window._scSchemaPageFilter = { types: new Set(), q: '' };
+  document.querySelectorAll('[data-schema-chip]').forEach(c => {
+    c.style.background = 'var(--surface)';
+    c.style.borderColor = 'var(--border)';
+    c.querySelectorAll('code').forEach(el => el.style.color = 'var(--text)');
+    c.querySelectorAll('span').forEach(el => el.style.color = 'var(--text-muted)');
+  });
+  const inp = document.getElementById('sc-schema-page-url-filter');
+  if (inp) inp.value = '';
+  window._scSchemaPageApplyFilter();
+};
 
 // =============================================================================
 // Near-duplicate content detection (mirrors seo-tool, no Claude/AI).
@@ -1064,12 +1209,13 @@ function _renderNearDupPanel() {
     const simColor = sim >= 95 ? '#dc2626' : sim >= 90 ? '#ea580c' : sim >= 85 ? '#d97706' : '#65a30d';
     const pathA = (p.url_a || '').replace(/^https?:\/\/[^\/]+/, '') || '/';
     const pathB = (p.url_b || '').replace(/^https?:\/\/[^\/]+/, '') || '/';
-    return `<tr style="border-bottom:1px solid var(--border,#e2e8f0);">
-      <td style="padding:7px 12px;font-variant-numeric:tabular-nums;font-weight:700;color:${simColor};white-space:nowrap;">${sim}%</td>
-      <td style="padding:7px 12px;font-size:12px;"><a href="${p.url_a}" target="_blank" style="color:var(--accent,#6366f1);text-decoration:none;">${pathA}</a></td>
-      <td style="padding:7px 12px;font-size:12px;"><a href="${p.url_b}" target="_blank" style="color:var(--accent,#6366f1);text-decoration:none;">${pathB}</a></td>
-      <td style="padding:7px 12px;font-size:11px;color:var(--text-muted,#64748b);font-family:monospace;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(p.shared_phrase_sample||'').replace(/"/g,'&quot;')}">${p.shared_phrase_sample || '—'}</td>
-      <td style="padding:7px 12px;text-align:right;"><button type="button" onclick="openNdDiff('${safeA}','${safeB}')" style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:5px;padding:3px 9px;font-size:11px;color:var(--accent,#6366f1);cursor:pointer;">Compare →</button></td>
+    const sample = p.shared_phrase_sample || '—';
+    return `<tr>
+      <td style="font-variant-numeric:tabular-nums;font-weight:700;color:${simColor};">${sim}%</td>
+      <td title="${_scEscapeHtml(p.url_a)}"><a href="${p.url_a}" target="_blank" style="color:var(--accent,#6366f1);">${_scEscapeHtml(pathA)}</a></td>
+      <td title="${_scEscapeHtml(p.url_b)}"><a href="${p.url_b}" target="_blank" style="color:var(--accent,#6366f1);">${_scEscapeHtml(pathB)}</a></td>
+      <td style="color:var(--text-muted,#64748b);font-family:monospace;font-size:.7rem;" title="${_scEscapeHtml(sample)}">${_scEscapeHtml(sample)}</td>
+      <td style="text-align:right;"><button type="button" onclick="openNdDiff('${safeA}','${safeB}')" style="background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:5px;padding:3px 9px;font-size:11px;color:var(--accent,#6366f1);cursor:pointer;">Compare →</button></td>
     </tr>`;
   }).join('');
   panel.innerHTML = `
@@ -1081,19 +1227,15 @@ function _renderNearDupPanel() {
       <span style="color:var(--text-muted,#64748b);">· took ${stats.took_ms || 0} ms</span>
       <button type="button" onclick="runNearDupAnalysis().then(() => selectCategory('__nd_content'))" style="margin-left:auto;background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;">Re-run</button>
     </div>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;">
-      <thead>
-        <tr style="background:var(--surface,#fff);border-bottom:2px solid var(--border,#e2e8f0);">
-          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Sim</th>
-          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Page A</th>
-          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Page B</th>
-          <th style="text-align:left;padding:7px 12px;font-weight:600;color:var(--text-muted,#64748b);font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Shared sample</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>`;
+    ${_scGridTable('near-dup', [
+      {label:'Sim',           width:70},
+      {label:'Page A',        width:340},
+      {label:'Page B',        width:340},
+      {label:'Shared sample'},
+      {label:'',              width:100, alignRight:true},
+    ], rowsHtml, 'font-size:.78rem;')}`;
   main.appendChild(panel);
+  _scWireNestedGrids(panel);
 }
 
 window.openNdDiff = function(urlA, urlB) {
@@ -1213,14 +1355,19 @@ function _renderSitemapPanel(cat) {
     ].filter(Boolean).join(' · ');
     return { url: u, meta };
   });
-  const list = rows.map(r => `
-    <div style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:11px;display:flex;gap:8px;align-items:center;">
-      <a href="${r.url}" target="_blank" style="color:#4f46e5;flex:1;word-break:break-all;">${r.url}</a>
-      ${r.meta ? `<span style="color:#94a3b8;font-size:10.5px;">${r.meta}</span>` : ''}
-    </div>
+  const hasMeta = rows.some(r => r.meta);
+  const rowHtml = rows.map(r => `
+    <tr>
+      <td title="${_scEscapeHtml(r.url)}"><a href="${r.url}" target="_blank" style="color:#4f46e5;">${_scEscapeHtml(r.url)}</a></td>
+      ${hasMeta ? `<td style="color:#94a3b8;" title="${_scEscapeHtml(r.meta)}">${_scEscapeHtml(r.meta)}</td>` : ''}
+    </tr>
   `).join('');
-  panel.innerHTML = header + list;
+  const cols = hasMeta
+    ? [{label:'URL', width:560}, {label:'Details'}]
+    : [{label:'URL', width:720}];
+  panel.innerHTML = header + _scGridTable(`sitemap-${cat}`, cols, rowHtml, 'font-size:11px;');
   main.appendChild(panel);
+  _scWireNestedGrids(panel);
 }
 
 function renderIssueInfo(cat) {
