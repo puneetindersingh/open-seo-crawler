@@ -455,6 +455,12 @@ _CRAWL_NOISE_PARAMS = frozenset({
     'share', 'sharesource',
 })
 
+# Match a bare email shape in an href that lacks the mailto: prefix.
+# Authors sometimes write <a href="sales@example.com"> by mistake — without
+# this filter, urljoin resolves it relative to the current page and the
+# email lands in the crawl as a fake URL like /contact/sales@example.com.
+_MAILTO_NO_SCHEME_RE = _re.compile(r'^[^/\s:?#]+@[^/\s:?#]+\.[A-Za-z]{2,}$')
+
 
 def _normalize_crawl_url(url):
     """Normalize URL for deduplication: strip fragments, utm/tracking/action
@@ -1049,9 +1055,30 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         ext_count = 0
         for a in soup.find_all('a', href=True):
             href = a['href'].strip()
-            if not href or href.startswith('#') or href.startswith('javascript:') or href.startswith('mailto:') or href.startswith('tel:'):
+            if not href:
+                continue
+            href_low = href.lower()
+            # Case-insensitive scheme filter (catches Mailto:, MAILTO:, etc.)
+            if (href_low.startswith('#')
+                or href_low.startswith('javascript:')
+                or href_low.startswith('mailto:')
+                or href_low.startswith('tel:')
+                or href_low.startswith('sms:')
+                or href_low.startswith('skype:')
+                or href_low.startswith('whatsapp:')
+                or href_low.startswith('data:')
+                or href_low.startswith('file:')):
+                continue
+            # Bare email written without the mailto: prefix —
+            # <a href="sales@example.com">. urljoin would otherwise produce
+            # https://example.com/path/sales@example.com — the email lands
+            # in the crawl as a fake URL.
+            if '@' in href and _MAILTO_NO_SCHEME_RE.match(href):
                 continue
             resolved = urljoin(link_base, href)
+            resolved_path_tail = urlparse(resolved).path.rstrip('/').rsplit('/', 1)[-1]
+            if '@' in resolved_path_tail and _MAILTO_NO_SCHEME_RE.match(resolved_path_tail):
+                continue
             link_domain = urlparse(resolved).netloc.lower().replace('www.', '')
             # Anchor text: prefer visible text, fall back to aria-label / alt of child <img>
             anchor = (a.get_text(separator=' ', strip=True) or '')[:180]
