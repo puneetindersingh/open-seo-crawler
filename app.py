@@ -756,10 +756,14 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         result['meta_description'] = meta_tag.get('content', '') if meta_tag else ''
         result['meta_len'] = len(result['meta_description'])
 
-        # H1s and H2s (full lists, not just first/count)
+        # H1s and H2s (full lists, not just first/count). Pick the first
+        # non-empty H1 for the displayed column value — themes that wrap a
+        # logo image in <h1> emit an empty H1 as the first tag, which would
+        # otherwise mask a real H1 later in the DOM and cause the row to be
+        # flagged as both Missing H1 and Multiple H1s.
         h1_tags = soup.find_all('h1')
         result['h1_list'] = [t.get_text(strip=True)[:200] for t in h1_tags]
-        result['h1'] = result['h1_list'][0] if result['h1_list'] else ''
+        result['h1'] = next((t for t in result['h1_list'] if t), '')
         h2_tags = soup.find_all('h2')
         result['h2_list'] = [t.get_text(strip=True)[:200] for t in h2_tags][:20]
         result['h2_count'] = len(h2_tags)
@@ -1004,7 +1008,10 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
                 continue
 
             if src:
-                no_alt_imgs.append(urljoin(url, src))
+                # Resolve against the post-redirect URL so an http→https
+                # redirect doesn't produce phantom http image URLs.
+                _img_base = (getattr(resp, 'url', None) or url) if resp is not None else url
+                no_alt_imgs.append(urljoin(_img_base, src))
 
         result['images_no_alt'] = len(no_alt_imgs)
         result['images_no_alt_urls'] = no_alt_imgs[:20]  # cap at 20 per page
@@ -1031,6 +1038,12 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
                 if name == 'main': return 'main'
             return 'body'
 
+        # Resolve relative hrefs against the FINAL URL after redirects, not
+        # the request URL. Otherwise crawling http://example.com/ (which 301s
+        # to https://example.com/) produces http://example.com/services for
+        # every <a href="/services"> in the body — bogus HTTP URLs that don't
+        # exist anywhere in the actual HTML.
+        link_base = (getattr(resp, 'url', None) or url) if resp is not None else url
         int_links = {}      # normalized target -> {anchor, placement}
         ext_links_list = [] # external links captured with anchor + placement
         ext_count = 0
@@ -1038,7 +1051,7 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
             href = a['href'].strip()
             if not href or href.startswith('#') or href.startswith('javascript:') or href.startswith('mailto:') or href.startswith('tel:'):
                 continue
-            resolved = urljoin(url, href)
+            resolved = urljoin(link_base, href)
             link_domain = urlparse(resolved).netloc.lower().replace('www.', '')
             # Anchor text: prefer visible text, fall back to aria-label / alt of child <img>
             anchor = (a.get_text(separator=' ', strip=True) or '')[:180]
@@ -1116,10 +1129,13 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
             elif result['meta_len'] < 70:
                 result['issues'].append(f'Meta desc too short ({result["meta_len"]})')
 
+            # "Missing H1" only fires when no H1 tag has any text — an
+            # <h1></h1> wrapping a logo image doesn't make the page
+            # "missing" if a populated H1 sits below it.
+            h1_count = len(result['h1_list'])
             if not result['h1']:
                 result['issues'].append('Missing H1')
-            h1_count = len(result['h1_list'])
-            if h1_count > 1:
+            elif h1_count > 1:
                 result['issues'].append(f'Multiple H1s ({h1_count})')
             if result['h1'] and result['title'] and result['h1'].strip().lower() == result['title'].strip().lower():
                 result['issues'].append('H1 same as title')
