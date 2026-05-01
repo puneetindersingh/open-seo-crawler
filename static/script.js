@@ -30,6 +30,17 @@ let crawlerResults = [];
 let crawlerInlinks = {}; // target URL -> [{source, anchor, placement}]
 let crawlerCrawlId = null;
 let dockUrl = null;
+
+// crawlerInlinks is keyed by whichever URL form the linker emitted (with or
+// without trailing slash, etc). Look up under all the common variants so a
+// /foo vs /foo/ mismatch doesn't silently show 0 inlinks.
+function _scLookupInlinks(url) {
+  if (!url || !crawlerInlinks) return [];
+  return crawlerInlinks[url]
+      || crawlerInlinks[url.replace(/\/$/, '')]
+      || crawlerInlinks[url + '/']
+      || [];
+}
 let activeCategory = 'all';
 
 // Per-category metadata: severity, explanation, cited sources.
@@ -85,9 +96,27 @@ function _scRefetchIcon(url) {
   return `<button type="button" onclick="scRecrawlUrl(this,'${sq}')" title="Re-crawl this URL" style="background:none;border:none;cursor:pointer;color:var(--text-muted,#94a3b8);padding:3px 5px;vertical-align:middle;line-height:1;border-radius:4px;" onmouseover="this.style.color='var(--accent,#6366f1)';this.style.background='var(--surface2,#f1f5f9)'" onmouseout="this.style.color='var(--text-muted,#94a3b8)';this.style.background='none'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-5.97"/></svg></button>`;
 }
 
+// One-time delegated click on the crawler tbody — clicking anywhere on a
+// row (other than a nested link/button) opens the dock for that URL.
+let _scRowClickWired = false;
+function _scWireRowClick() {
+  if (_scRowClickWired) return;
+  const tbody = document.getElementById('crawler-tbody');
+  if (!tbody) return;
+  tbody.addEventListener('click', e => {
+    if (e.target.closest('a, button, summary, input, label, .copy-icon')) return;
+    const tr = e.target.closest('tr[data-url]');
+    if (!tr || !tr.dataset.url) return;
+    if (typeof window.openDock === 'function') window.openDock(tr.dataset.url);
+  });
+  _scRowClickWired = true;
+}
+
 function renderRow(d) {
   const tbody = document.getElementById('crawler-tbody');
+  if (!_scRowClickWired) _scWireRowClick();
   const tr = document.createElement('tr');
+  tr.style.cursor = 'pointer';
   tr.dataset.url = d.url;
   const statusColor = d.status_code >= 400 ? '#ef4444' : d.status_code >= 300 ? '#f59e0b' : '#22c55e';
   const path = d.url.replace(/^https?:\/\/[^\/]+/, '') || '/';
@@ -309,7 +338,7 @@ window.dockSwitchTab = function(tab) {
 function renderDock() {
   if (!dockUrl) return;
   const page = crawlerResults.find(r => r.url === dockUrl) || {};
-  const inlinks = crawlerInlinks[dockUrl] || [];
+  const inlinks = _scLookupInlinks(dockUrl);
   const outs = page.internal_link_urls || [];
   const urlEl = document.getElementById('dock-url');
   const inCount = document.getElementById('dock-in-count');
@@ -445,6 +474,9 @@ function startCrawl(opts) {
     // Reset sitemap analysis from a previous crawl + hide its sidebar entries.
     if (typeof crawlerSitemap !== 'undefined') crawlerSitemap = null;
     window.sitemapAnalysisSkipped = false;
+    // Close the bottom dock if it was left open on a URL from the previous
+    // crawl — otherwise it shows stale inlinks for a URL on a different host.
+    if (typeof window.closeDock === 'function') window.closeDock();
   }
   if (typeof crawlerDismissErrorBanner === 'function') crawlerDismissErrorBanner();
   if (!resumeFromId) {
@@ -841,6 +873,7 @@ window.selectCategory = function(cat) {
     '__sm_pagination': 'Pagination in Sitemap',
     '__nd_content': 'Near-Duplicate Content — pairs above the similarity threshold',
     '__schema_by_page': 'Schema by Page — every crawled page with the schema types it emits',
+    '__sitemap_viz': 'Site Structure — sunburst, hierarchy and anchor-text cloud',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
@@ -851,7 +884,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -862,6 +895,8 @@ window.selectCategory = function(cat) {
       _renderSchemaByPagePanel();
     } else if (cat === '__nd_content') {
       _renderNearDupPanel();
+    } else if (cat === '__sitemap_viz') {
+      _scRenderSiteStructurePanel();
     } else {
       _renderSitemapPanel(cat);
     }
@@ -869,13 +904,15 @@ window.selectCategory = function(cat) {
     if (bulkBtn) bulkBtn.style.display = 'none';
     return;
   }
-  // Drop any sitemap/schema/near-dup panel content when switching back.
+  // Drop any sitemap/schema/near-dup/site-structure panel content when switching back.
   const smPanel = document.getElementById('sitemap-panel');
   if (smPanel) smPanel.remove();
   const schemaPanel = document.getElementById('schema-by-page-panel');
   if (schemaPanel) schemaPanel.remove();
   const ndPanel = document.getElementById('near-dup-panel');
   if (ndPanel) ndPanel.remove();
+  const svPanel = document.getElementById('sitestructure-panel');
+  if (svPanel) svPanel.remove();
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
 
@@ -2490,3 +2527,623 @@ window._compareToggleIssueDrill = function(idx) {
     } catch {}
   };
 })();
+
+// =============================================================================
+// Site Structure visualisation — sunburst (radial directory hierarchy),
+// hierarchy text tree, and anchor-text cloud. Pure SVG, no external libs.
+// Mirrors the implementation in internal-tool/static/script.js.
+// =============================================================================
+
+window._svView = window._svView || 'sunburst';
+
+function _scRenderSiteStructurePanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('sitestructure-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'sitestructure-panel';
+  panel.style.cssText = 'padding:14px;font-size:12px;';
+  panel.innerHTML = _scRenderSiteStructure();
+  main.appendChild(panel);
+}
+
+function _scBuildSiteStructureTree(results) {
+  const root = { name: '(root)', full: '/', children: {}, leaf: null, count: 0, issues: 0, errors: 0 };
+  results.forEach(p => {
+    try {
+      const u = new URL(p.url);
+      const path = u.pathname.replace(/\/$/, '') || '/';
+      const parts = path === '/' ? [''] : path.split('/').filter(Boolean);
+      let node = root;
+      node.count++;
+      node.issues += (p.issues || []).length;
+      if (p.status_code >= 400) node.errors++;
+      if (parts.length === 1 && parts[0] === '') {
+        node.leaf = p;
+        return;
+      }
+      let fullPath = '';
+      parts.forEach((seg, i) => {
+        fullPath += '/' + seg;
+        if (!node.children[seg]) {
+          node.children[seg] = { name: seg, full: fullPath, children: {}, leaf: null, count: 0, issues: 0, errors: 0 };
+        }
+        node = node.children[seg];
+        node.count++;
+        node.issues += (p.issues || []).length;
+        if (p.status_code >= 400) node.errors++;
+        if (i === parts.length - 1) node.leaf = p;
+      });
+    } catch (e) {}
+  });
+  return root;
+}
+
+function _scRenderSiteStructure() {
+  const results = crawlerResults || [];
+  if (!results.length) {
+    return '<div style="padding:32px;text-align:center;color:#64748b;font-size:13px;">Crawl the site first to see its structure.</div>';
+  }
+  const view = window._svView || 'sunburst';
+  const root = _scBuildSiteStructureTree(results);
+
+  const tab = (id, label, icon) => `
+    <button type="button" onclick="_svSwitchView('${id}')"
+      style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;background:${view===id?'var(--accent,#6366f1)':'var(--surface2,#f1f5f9)'};color:${view===id?'#fff':'var(--text,#0f172a)'};border:1px solid ${view===id?'var(--accent,#6366f1)':'var(--border,#e2e8f0)'};border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;font-family:inherit;">
+      <span style="font-size:14px;line-height:1;">${icon}</span>${label}
+    </button>`;
+
+  let body = '';
+  if (view === 'sunburst')      body = _scRenderSiteStructureSunburst(root, results);
+  else if (view === 'hierarchy') body = _scRenderSiteStructureTree(root);
+  else if (view === 'cloud')     body = _scRenderAnchorTextCloud();
+  else                           body = _scRenderSiteStructureSunburst(root, results);
+
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+      ${tab('sunburst', 'Sunburst', '☀')}
+      ${tab('hierarchy', 'Hierarchy', '⇲')}
+      ${tab('cloud', 'Anchor cloud', '☁')}
+      <span style="margin-left:auto;font-size:11px;color:#64748b;">${results.length} URLs · ${root.errors} broken · ${root.issues} issue${root.issues===1?'':'s'} total</span>
+    </div>
+    ${body}`;
+}
+
+window._svSwitchView = function(view) {
+  window._svView = view;
+  // Re-render the panel in place.
+  if (typeof _scRenderSiteStructurePanel === 'function') _scRenderSiteStructurePanel();
+};
+
+// Click-to-drill zoomable sunburst. Click a slice → it becomes the new
+// centre, all its children fill 360°. Click the centre disc → zoom out.
+window._svFocus = window._svFocus || '';
+
+function _svFindNode(root, fullPath) {
+  if (!fullPath || fullPath === '/' || fullPath === root.full) return root;
+  const parts = fullPath.replace(/^\//, '').split('/').filter(Boolean);
+  let node = root;
+  for (const seg of parts) {
+    if (!node || !node.children || !node.children[seg]) return null;
+    node = node.children[seg];
+  }
+  return node;
+}
+
+function _svParentPath(p) {
+  if (!p || p === '/' || p === '') return '';
+  const parts = p.replace(/^\//, '').split('/').filter(Boolean);
+  parts.pop();
+  return parts.length ? '/' + parts.join('/') : '';
+}
+
+function _scRenderSiteStructureSunburst(rootTree, results) {
+  const W = 720, H = 720;
+  const cx = W / 2, cy = H / 2;
+  const innerRadius = 70;
+
+  const focus = _svFindNode(rootTree, window._svFocus) || rootTree;
+  if (focus === rootTree) window._svFocus = '';
+
+  const subDepth = (n) => {
+    let m = 0;
+    Object.values(n.children).forEach(c => { m = Math.max(m, 1 + subDepth(c)); });
+    return m;
+  };
+  const depth = Math.max(2, subDepth(focus));
+  const rw = Math.min(72, (Math.min(W, H) / 2 - innerRadius - 10) / depth);
+
+  const palette = ['#0ea5e9', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4', '#ec4899', '#14b8a6', '#f43f5e'];
+  const sliceColor = (node, d) => {
+    if (node.errors > 0) return '#ef4444';
+    if (node.leaf && node.leaf.status_code >= 300 && node.leaf.status_code < 400) return '#f59e0b';
+    return palette[d % palette.length];
+  };
+
+  const arcs = [];
+  const allocate = (node, d, a0, a1) => {
+    if (d > 0) arcs.push({ node, d, a0, a1 });
+    const kids = Object.values(node.children);
+    if (!kids.length) return;
+    const total = kids.reduce((s, k) => s + Math.max(1, k.count), 0);
+    let cur = a0;
+    kids.sort((a, b) => b.count - a.count).forEach(k => {
+      const w = (Math.max(1, k.count) / total) * (a1 - a0);
+      allocate(k, d + 1, cur, cur + w);
+      cur += w;
+    });
+  };
+  allocate(focus, 0, 0, Math.PI * 2);
+
+  const polar = (r, a) => [cx + r * Math.cos(a - Math.PI / 2), cy + r * Math.sin(a - Math.PI / 2)];
+  const arcPath = (r0, r1, a0, a1) => {
+    if (a1 - a0 >= Math.PI * 2 - 1e-3) {
+      const [m0x, m0y] = polar(r0, 0);
+      const [m1x, m1y] = polar(r1, 0);
+      return `M ${m1x} ${m1y} A ${r1} ${r1} 0 1 1 ${m1x - 0.001} ${m1y} L ${m0x - 0.001} ${m0y} A ${r0} ${r0} 0 1 0 ${m0x} ${m0y} Z`;
+    }
+    const [s0x, s0y] = polar(r0, a0);
+    const [e0x, e0y] = polar(r0, a1);
+    const [s1x, s1y] = polar(r1, a0);
+    const [e1x, e1y] = polar(r1, a1);
+    const large = (a1 - a0) > Math.PI ? 1 : 0;
+    return `M ${s0x} ${s0y} L ${s1x} ${s1y} A ${r1} ${r1} 0 ${large} 1 ${e1x} ${e1y} L ${e0x} ${e0y} A ${r0} ${r0} 0 ${large} 0 ${s0x} ${s0y} Z`;
+  };
+
+  const _scEsc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  const slices = arcs.map((arc, i) => {
+    const r0 = innerRadius + (arc.d - 1) * rw;
+    const r1 = innerRadius + arc.d * rw;
+    const path = arcPath(r0, r1, arc.a0, arc.a1);
+    const color = sliceColor(arc.node, arc.d);
+    const angle = arc.a1 - arc.a0;
+    const midR = (r0 + r1) / 2;
+    const arcLengthMid = midR * angle;
+    const showLabel = arcLengthMid > 28 && rw > 22;
+    const safePath = _scEsc(arc.node.full).replace(/'/g, "\\'");
+    const hasKids = Object.keys(arc.node.children || {}).length > 0;
+    const title = `${_scEsc(arc.node.full)}\n${arc.node.count} URL${arc.node.count===1?'':'s'}${arc.node.errors?` · ${arc.node.errors} broken`:''}${arc.node.issues?` · ${arc.node.issues} issue${arc.node.issues===1?'':'s'}`:''}\n${hasKids ? 'Click to drill in · Shift+click to filter table' : 'Shift+click to filter table'}`;
+
+    let label = '';
+    if (showLabel) {
+      // Curved text along the arc (textPath) — letters always read naturally
+      // along the slice. Reverse path direction in the lower half so letters
+      // don't end up upside-down.
+      const midAng = (arc.a0 + arc.a1) / 2;
+      const reverse = midAng > Math.PI / 2 && midAng < 3 * Math.PI / 2;
+      const sa = reverse ? arc.a1 : arc.a0;
+      const ea = reverse ? arc.a0 : arc.a1;
+      const sweep = reverse ? 0 : 1;
+      const [sx, sy] = polar(midR, sa);
+      const [ex, ey] = polar(midR, ea);
+      const large = Math.abs(ea - sa) > Math.PI ? 1 : 0;
+      const labelArcPath = `M ${sx} ${sy} A ${midR} ${midR} 0 ${large} ${sweep} ${ex} ${ey}`;
+      const pathId = `sv-lbl-${i}-${arc.d}`;
+      const maxChars = Math.max(3, Math.floor(arcLengthMid / 6.8) - 1);
+      const labelText = arc.node.name.length > maxChars
+        ? arc.node.name.slice(0, Math.max(1, maxChars - 1)) + '…'
+        : arc.node.name;
+      label = `
+        <defs><path id="${pathId}" d="${labelArcPath}" fill="none"/></defs>
+        <text dy="4" style="font-family:ui-sans-serif,system-ui;font-size:13px;font-weight:700;fill:#fff;stroke:rgba(0,0,0,0.55);stroke-width:3.5px;paint-order:stroke;pointer-events:none;">
+          <textPath href="#${pathId}" startOffset="50%" text-anchor="middle">${_scEsc(labelText)}</textPath>
+        </text>`;
+    }
+
+    return `<g class="sv-slice" data-path="${_scEsc(arc.node.full)}">
+      <path d="${path}" fill="${color}" stroke="#fff" stroke-width="1.5" opacity="0.92"
+        style="cursor:pointer;transition:opacity .12s;"
+        onmouseover="this.setAttribute('opacity','1');_svSliceHover('${safePath}', ${arc.node.count}, ${arc.node.errors}, ${arc.node.issues})"
+        onmouseout="this.setAttribute('opacity','0.92');_svSliceHover('','','','')"
+        onclick="_svSliceClick(event, '${safePath}', ${hasKids ? 1 : 0})">
+        <title>${title}</title>
+      </path>
+      ${label}
+    </g>`;
+  }).join('');
+
+  const focusLabel = focus === rootTree ? 'site' : (focus.name || '/');
+  const canGoUp = focus !== rootTree;
+  const center = `
+    <g style="cursor:${canGoUp ? 'pointer' : 'default'};" ${canGoUp ? `onclick="_svZoomOut()"` : ''}>
+      <circle cx="${cx}" cy="${cy}" r="${innerRadius - 4}" fill="#fff" stroke="${canGoUp ? '#6366f1' : '#e2e8f0'}" stroke-width="${canGoUp ? '2' : '1.5'}"/>
+      <text x="${cx}" y="${cy - 22}" text-anchor="middle" style="font-family:ui-sans-serif,system-ui;font-size:10.5px;fill:#64748b;text-transform:uppercase;letter-spacing:.05em;pointer-events:none;">${canGoUp ? '← back' : 'site'}</text>
+      <text x="${cx}" y="${cy - 4}" text-anchor="middle" style="font-family:ui-sans-serif,system-ui;font-size:${focusLabel.length > 14 ? 13 : 17}px;font-weight:700;fill:#0f172a;pointer-events:none;">${_scEsc(focusLabel.length > 18 ? focusLabel.slice(0, 17) + '…' : focusLabel)}</text>
+      <text x="${cx}" y="${cy + 18}" text-anchor="middle" style="font-family:ui-sans-serif,system-ui;font-size:13px;font-weight:600;fill:#6366f1;pointer-events:none;">${focus.count} URL${focus.count===1?'':'s'}</text>
+      ${focus.errors ? `<text x="${cx}" y="${cy + 36}" text-anchor="middle" style="font-family:ui-sans-serif,system-ui;font-size:10.5px;font-weight:600;fill:#ef4444;pointer-events:none;">${focus.errors} broken</text>` : ''}
+    </g>`;
+
+  const buildCrumbs = () => {
+    const items = [{ name: 'site', path: '' }];
+    if (focus !== rootTree && focus.full) {
+      const parts = focus.full.replace(/^\//, '').split('/').filter(Boolean);
+      let acc = '';
+      parts.forEach(p => { acc += '/' + p; items.push({ name: p, path: acc }); });
+    }
+    return items.map((it, i) => {
+      const isLast = i === items.length - 1;
+      return `<button type="button" onclick="_svZoomTo('${it.path.replace(/'/g,"\\'")}')"
+        style="background:${isLast?'#6366f1':'#fff'};color:${isLast?'#fff':'#0f172a'};border:1px solid ${isLast?'#6366f1':'#e2e8f0'};border-radius:5px;padding:3px 9px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:inherit;">${_scEsc(it.name)}</button>`;
+    }).join('<span style="color:#94a3b8;font-size:11px;align-self:center;">›</span>');
+  };
+
+  // Collect every URL inside the current focus subtree for the list below.
+  const collectLeaves = (node, out) => {
+    if (node.leaf) out.push(node.leaf);
+    Object.values(node.children).forEach(c => collectLeaves(c, out));
+    return out;
+  };
+  const focusUrls = collectLeaves(focus, []).sort((a, b) => (a.url || '').localeCompare(b.url || ''));
+  const focusUrlsJson = JSON.stringify(focusUrls.map(p => ({
+    u: p.url || '',
+    s: p.status_code || 0,
+    i: (p.issues || []).length,
+    t: p.title || '',
+  })));
+
+  // Wire pan/zoom after the SVG is in the DOM.
+  setTimeout(_svInitPanZoom, 0);
+
+  return `
+    <div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
+        ${buildCrumbs()}
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:4px 10px;min-width:240px;">
+          <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" style="color:#94a3b8;flex-shrink:0;"><circle cx="9" cy="9" r="6"/><path d="M13.5 13.5L18 18"/></svg>
+          <input type="text" id="sv-search" placeholder="Search ${focusUrls.length} URL${focusUrls.length===1?'':'s'} in this view…"
+            oninput="_svFilter(this.value)" autocomplete="off" spellcheck="false"
+            style="background:none;border:none;outline:none;font-size:12px;color:#0f172a;flex:1;min-width:0;font-family:inherit;" />
+          <button type="button" id="sv-search-clear" onclick="document.getElementById('sv-search').value='';_svFilter('')" style="display:none;background:none;border:none;cursor:pointer;color:#94a3b8;font-size:14px;line-height:1;padding:0 2px;" title="Clear">×</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 280px;gap:16px;align-items:start;">
+        <div>
+          <div id="sv-svg-wrap" style="position:relative;background:#f8fafc;border-radius:10px;padding:8px;overflow:hidden;touch-action:none;">
+            <div style="position:absolute;top:14px;left:14px;font-size:10.5px;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:5px 9px;z-index:2;pointer-events:none;line-height:1.3;max-width:55%;">
+              click slice to drill · centre to go back · drag to pan · scroll to zoom
+            </div>
+            <div style="position:absolute;top:14px;right:14px;display:flex;flex-direction:column;gap:5px;z-index:2;">
+              <button type="button" onclick="_svZoom(1.25)" title="Zoom in" style="width:30px;height:30px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;font-family:inherit;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#6366f1'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">+</button>
+              <button type="button" onclick="_svZoom(0.8)" title="Zoom out" style="width:30px;height:30px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;font-family:inherit;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#6366f1'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">−</button>
+              <button type="button" onclick="_svResetView()" title="Reset zoom & position" style="width:30px;height:30px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;padding:0;font-family:inherit;" onmouseover="this.style.borderColor='#6366f1';this.style.color='#6366f1'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">⟲</button>
+            </div>
+            <svg id="sv-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"
+                 data-vb-w="${W}" data-vb-h="${H}"
+                 style="width:100%;max-width:680px;height:auto;display:block;margin:0 auto;user-select:none;cursor:grab;">
+              ${slices}
+              ${center}
+            </svg>
+          </div>
+          <div style="margin-top:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:11.5px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.05em;">
+              <span>Pages in this view</span>
+              <span id="sv-list-count" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:2px 9px;font-size:10.5px;color:#64748b;font-weight:600;letter-spacing:0;text-transform:none;">${focusUrls.length}</span>
+              <span style="margin-left:auto;font-weight:500;font-size:10.5px;color:#64748b;text-transform:none;letter-spacing:0;">click any URL to open in dock · ⇧-click to filter table</span>
+            </div>
+            <div id="sv-list" data-urls='${focusUrlsJson.replace(/'/g, "&#39;")}' style="max-height:340px;overflow:auto;font-family:'SF Mono','Menlo',monospace;font-size:11.5px;">
+              ${_svRenderList(focusUrls, '')}
+            </div>
+          </div>
+        </div>
+        <div>
+          <div id="sv-readout" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:12px;min-height:120px;">
+            <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px;">hover a slice</div>
+            <div id="sv-readout-path" style="font-family:'SF Mono','Menlo',monospace;font-size:12px;color:#6366f1;word-break:break-all;margin-bottom:8px;">—</div>
+            <div id="sv-readout-stats" style="font-size:11.5px;color:#64748b;line-height:1.55;">Click a slice to drill in. Hold <kbd style="font-family:inherit;background:#fff;border:1px solid #e2e8f0;border-radius:3px;padding:1px 5px;font-size:10.5px;">Shift</kbd> while clicking to filter the table to that subtree instead.</div>
+          </div>
+          <div style="font-size:11px;color:#64748b;line-height:1.55;">
+            <strong style="color:#0f172a;font-size:11.5px;">How to read</strong><br>
+            Each ring is one path level under the centre. Slice size = number of URLs in that subtree. Red = 4xx/5xx pages live in there.
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _svRenderList(pages, filter) {
+  if (!pages || !pages.length) {
+    return '<div style="padding:18px 14px;color:#64748b;font-size:12px;font-family:ui-sans-serif,system-ui;text-align:center;">No URLs in this view.</div>';
+  }
+  const _scEsc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const f = (filter || '').trim().toLowerCase();
+  const matches = f
+    ? pages.filter(p => ((p.url || p.u) || '').toLowerCase().includes(f) || ((p.title || p.t) || '').toLowerCase().includes(f))
+    : pages;
+  if (!matches.length) {
+    return `<div style="padding:18px 14px;color:#64748b;font-size:12px;font-family:ui-sans-serif,system-ui;text-align:center;">No URLs match <code style="background:#fff;padding:1px 6px;border-radius:3px;">${_scEsc(filter)}</code></div>`;
+  }
+  return matches.map(p => {
+    const url = p.url || p.u || '';
+    const status = p.status_code || p.s || 0;
+    const issues = (p.issues ? p.issues.length : (p.i || 0));
+    const title = p.title || p.t || '';
+    const path = url.replace(/^https?:\/\/[^\/]+/, '') || '/';
+    const sc = status >= 500 ? '#dc2626' : status >= 400 ? '#ef4444' : status >= 300 ? '#f59e0b' : status >= 200 ? '#22c55e' : '#94a3b8';
+    const safeUrl = (url || '').replace(/'/g, "\\'");
+    return `<div onclick="_svListClick(event, '${safeUrl}')"
+      style="display:flex;align-items:center;gap:10px;padding:6px 14px;border-bottom:1px solid #e2e8f0;cursor:pointer;line-height:1.4;"
+      onmouseover="this.style.background='#fff'" onmouseout="this.style.background=''"
+      title="${_scEsc(title || url)}">
+      <span style="color:${sc};font-weight:700;width:38px;flex-shrink:0;text-align:right;font-variant-numeric:tabular-nums;">${status || '—'}</span>
+      <span style="flex:1;min-width:0;color:#6366f1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_scEsc(path)}</span>
+      ${issues ? `<span style="color:#f59e0b;font-size:10.5px;font-weight:600;flex-shrink:0;">${issues} issue${issues===1?'':'s'}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+window._svFilter = function(value) {
+  const v = (value || '').trim().toLowerCase();
+  const clear = document.getElementById('sv-search-clear');
+  if (clear) clear.style.display = v ? '' : 'none';
+  document.querySelectorAll('#sv-svg .sv-slice').forEach(g => {
+    const pathEl = g.querySelector('path');
+    const arcPath = (g.getAttribute('data-path') || '').toLowerCase();
+    if (!v || arcPath.includes(v)) {
+      pathEl && pathEl.setAttribute('opacity', '0.92');
+    } else {
+      pathEl && pathEl.setAttribute('opacity', '0.15');
+    }
+  });
+  const list = document.getElementById('sv-list');
+  if (list) {
+    let pages = [];
+    try { pages = JSON.parse((list.dataset.urls || '[]').replace(/&#39;/g, "'")); } catch {}
+    list.innerHTML = _svRenderList(pages, v);
+    const countEl = document.getElementById('sv-list-count');
+    const total = pages.length;
+    if (countEl) {
+      if (v) {
+        const matched = pages.filter(p => (p.u || '').toLowerCase().includes(v) || (p.t || '').toLowerCase().includes(v)).length;
+        countEl.textContent = `${matched} / ${total}`;
+      } else {
+        countEl.textContent = total;
+      }
+    }
+  }
+};
+
+window._svListClick = function(e, url) {
+  if (!url) return;
+  if (e && e.shiftKey) return _svFilterTable(url);
+  if (typeof window.openDock === 'function') window.openDock(url);
+};
+
+// Pan + zoom on the sunburst SVG. Drag past 4px = pan and suppress the
+// follow-up click (so users don't accidentally drill in while panning).
+// Scroll wheel zooms around the cursor position. +/-/⟲ buttons drive the
+// same code paths.
+function _svInitPanZoom() {
+  const svg = document.getElementById('sv-svg');
+  const wrap = document.getElementById('sv-svg-wrap');
+  if (!svg || !wrap) return;
+  if (svg.dataset.svPanZoom === '1') return;
+  svg.dataset.svPanZoom = '1';
+  const W = parseFloat(svg.dataset.vbW) || 720;
+  const H = parseFloat(svg.dataset.vbH) || 720;
+  const state = window._svPZ = {
+    svg, wrap, w0: W, h0: H,
+    vb: { x: 0, y: 0, w: W, h: H },
+    drag: null,
+    suppressClick: false,
+  };
+  const apply = () => svg.setAttribute('viewBox', `${state.vb.x} ${state.vb.y} ${state.vb.w} ${state.vb.h}`);
+
+  svg.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    state.drag = { sx: e.clientX, sy: e.clientY, vbX: state.vb.x, vbY: state.vb.y, moved: 0 };
+    state.suppressClick = false;
+    svg.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!state.drag) return;
+    const dx = e.clientX - state.drag.sx;
+    const dy = e.clientY - state.drag.sy;
+    state.drag.moved = Math.max(state.drag.moved, Math.abs(dx), Math.abs(dy));
+    const r = svg.getBoundingClientRect();
+    state.vb.x = state.drag.vbX - dx / r.width * state.vb.w;
+    state.vb.y = state.drag.vbY - dy / r.height * state.vb.h;
+    apply();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!state.drag) return;
+    if (state.drag.moved > 4) state.suppressClick = true;
+    state.drag = null;
+    svg.style.cursor = 'grab';
+    setTimeout(() => { state.suppressClick = false; }, 50);
+  });
+  wrap.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.15 : (1 / 1.15);
+    _svZoomAt(e.clientX, e.clientY, factor);
+  }, { passive: false });
+  apply();
+}
+
+function _svZoomAt(clientX, clientY, factor) {
+  const s = window._svPZ;
+  if (!s) return;
+  const newW = s.vb.w / factor;
+  const newH = s.vb.h / factor;
+  if (newW < s.w0 / 12 || newW > s.w0 * 4) return;
+  const r = s.svg.getBoundingClientRect();
+  const px = s.vb.x + (clientX - r.left) / r.width * s.vb.w;
+  const py = s.vb.y + (clientY - r.top) / r.height * s.vb.h;
+  s.vb.x = px - (clientX - r.left) / r.width * newW;
+  s.vb.y = py - (clientY - r.top) / r.height * newH;
+  s.vb.w = newW;
+  s.vb.h = newH;
+  s.svg.setAttribute('viewBox', `${s.vb.x} ${s.vb.y} ${s.vb.w} ${s.vb.h}`);
+}
+
+window._svZoom = function(factor) {
+  const s = window._svPZ;
+  if (!s) return;
+  const r = s.svg.getBoundingClientRect();
+  _svZoomAt(r.left + r.width / 2, r.top + r.height / 2, factor);
+};
+
+window._svResetView = function() {
+  const s = window._svPZ;
+  if (!s) return;
+  s.vb = { x: 0, y: 0, w: s.w0, h: s.h0 };
+  s.svg.setAttribute('viewBox', `0 0 ${s.w0} ${s.h0}`);
+};
+
+window._svSliceHover = function(pathStr, count, errors, issues) {
+  const p = document.getElementById('sv-readout-path');
+  const s = document.getElementById('sv-readout-stats');
+  if (!p || !s) return;
+  if (!pathStr) {
+    p.textContent = '—';
+    s.innerHTML = 'Click a slice to drill in. Hold <kbd style="font-family:inherit;background:#fff;border:1px solid #e2e8f0;border-radius:3px;padding:1px 5px;font-size:10.5px;">Shift</kbd> while clicking to filter the table to that subtree instead.';
+    return;
+  }
+  p.textContent = pathStr || '/';
+  const parts = [];
+  parts.push(`<strong style="color:#0f172a;">${count}</strong> URL${count===1?'':'s'} under this path`);
+  if (errors > 0) parts.push(`<span style="color:#ef4444;font-weight:600;">${errors} broken</span>`);
+  if (issues > 0) parts.push(`<span style="color:#f59e0b;font-weight:600;">${issues} issue${issues===1?'':'s'} total</span>`);
+  s.innerHTML = parts.join(' · ');
+};
+
+// Slice click: default = drill in (zoom to that subtree); shift+click =
+// filter the table. Clicking a leaf (no children) opens that URL in the
+// bottom dock — drilling would just stop at the last level anyway, and
+// switching to the table view loses the user's place in the chart.
+// suppressClick is set by _svInitPanZoom when a drag exceeded 4px so we
+// don't accidentally drill in at the end of a pan gesture.
+window._svSliceClick = function(e, pathPrefix, hasKids) {
+  if (window._svPZ && window._svPZ.suppressClick) return;
+  if (e && e.shiftKey) return _svFilterTable(pathPrefix);
+  if (!hasKids) {
+    // Leaf — open the actual URL in the dock without leaving the sunburst.
+    // pathPrefix is just the path part; resolve to a full URL by matching
+    // against crawlerResults so the dock can find the page record.
+    const results = (typeof crawlerResults !== 'undefined' && crawlerResults) || (window.results || []);
+    const match = results.find(r => {
+      try {
+        const u = new URL(r.url);
+        const p = u.pathname.replace(/\/$/, '') || '/';
+        return p === pathPrefix || p === pathPrefix.replace(/\/$/, '');
+      } catch { return false; }
+    });
+    if (match && typeof window.openDock === 'function') window.openDock(match.url);
+    return;
+  }
+  window._svFocus = pathPrefix;
+  if (typeof _svSwitchView === 'function') _svSwitchView('sunburst');
+};
+
+window._svZoomOut = function() {
+  const parent = _svParentPath(window._svFocus || '');
+  window._svFocus = parent;
+  if (typeof _svSwitchView === 'function') _svSwitchView('sunburst');
+};
+
+window._svZoomTo = function(pathPrefix) {
+  window._svFocus = pathPrefix || '';
+  if (typeof _svSwitchView === 'function') _svSwitchView('sunburst');
+};
+
+function _svFilterTable(pathPrefix) {
+  if (typeof window.selectCategory === 'function') {
+    window.selectCategory('all');
+    setTimeout(() => {
+      const urlBox = document.getElementById('sc-url-search');
+      if (urlBox) {
+        urlBox.value = pathPrefix;
+        if (typeof scFilterByUrl === 'function') scFilterByUrl(pathPrefix);
+        else urlBox.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }, 60);
+  }
+}
+
+function _scRenderSiteStructureTree(root) {
+  const renderNode = (node, depth) => {
+    const kids = Object.values(node.children).sort((a, b) => b.count - a.count);
+    const label = depth === 0 ? '(root)' : node.name;
+    const leaf = node.leaf;
+    let statusColor = '#64748b';
+    let statusText = '';
+    if (leaf) {
+      const sc = leaf.status_code;
+      if (sc >= 400) { statusColor = '#ef4444'; statusText = `HTTP ${sc}`; }
+      else if (sc >= 300) { statusColor = '#f59e0b'; statusText = `redirect ${sc}`; }
+      else if (sc >= 200) { statusColor = '#22c55e'; statusText = `${sc}`; }
+    } else {
+      statusText = '(no page crawled at this path)';
+    }
+    const issueCount = leaf ? (leaf.issues || []).length : 0;
+    const hasKids = kids.length > 0;
+    // Collapse every sub-folder by default — only the root is expanded so the
+    // user lands on a clean overview and clicks the carets they want to dig
+    // into. With deep crawls (200+ URLs in nested paths), full-expansion was
+    // an unreadable wall of text.
+    const rowId = 'sv' + Math.random().toString(36).slice(2, 9);
+    const initiallyOpen = depth === 0;
+    let row = `
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;cursor:${hasKids?'pointer':'default'};${depth===0?'border-bottom:1px solid #e2e8f0;margin-bottom:4px;':''}"
+           onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background=''"
+           ${hasKids ? `onclick="document.getElementById('${rowId}').style.display=document.getElementById('${rowId}').style.display==='none'?'':'none';this.querySelector('.sv-caret').textContent=this.querySelector('.sv-caret').textContent==='▸'?'▾':'▸'"` : ''}>
+        <span class="sv-caret" style="width:12px;font-size:10px;color:#94a3b8;text-align:center;">${hasKids ? (initiallyOpen ? '▾' : '▸') : '·'}</span>
+        <span style="font-family:'SF Mono','Menlo',monospace;font-size:12.5px;color:${leaf?'#6366f1':'#64748b'};font-weight:${leaf?600:400};">${label || '/'}</span>
+        ${leaf ? `<span style="font-family:'SF Mono','Menlo',monospace;font-size:10.5px;color:${statusColor};">${statusText}</span>` : `<span style="font-family:'SF Mono','Menlo',monospace;font-size:10.5px;color:#94a3b8;">${statusText}</span>`}
+        ${issueCount ? `<span style="font-size:10.5px;color:#f59e0b;">${issueCount} issue${issueCount>1?'s':''}</span>` : ''}
+        <span style="margin-left:auto;font-family:'SF Mono','Menlo',monospace;font-size:10px;color:#94a3b8;">${node.count} URL${node.count>1?'s':''}</span>
+      </div>`;
+    if (hasKids) {
+      row += `<div id="${rowId}" style="padding-left:${(depth+1)*14}px;${initiallyOpen ? '' : 'display:none;'}">`;
+      row += kids.map(c => renderNode(c, depth + 1)).join('');
+      row += `</div>`;
+    }
+    return row;
+  };
+  return `<div style="font-family:inherit;">${renderNode(root, 0)}</div>`;
+}
+
+function _scRenderAnchorTextCloud() {
+  const counts = {};
+  Object.entries(crawlerInlinks || {}).forEach(([target, arr]) => {
+    (arr || []).forEach(e => {
+      let anchor = (typeof e === 'string') ? '' : (e.anchor || '');
+      anchor = (anchor || '').trim();
+      if (!anchor) return;
+      if (anchor.length > 60) anchor = anchor.slice(0, 60) + '…';
+      const key = anchor.toLowerCase();
+      if (!counts[key]) counts[key] = { display: anchor, count: 0, targets: new Set() };
+      counts[key].count++;
+      counts[key].targets.add(target);
+    });
+  });
+  const items = Object.values(counts).sort((a, b) => b.count - a.count).slice(0, 80);
+  if (!items.length) {
+    return `<div style="padding:32px;text-align:center;color:#64748b;font-size:13px;">
+      No anchor text captured yet. Anchor data is collected as the crawler discovers internal links — let the crawl finish, then re-open this view.
+    </div>`;
+  }
+  const max = items[0].count;
+  const min = items[items.length - 1].count;
+  const palette = ['#0ea5e9', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4', '#ec4899', '#14b8a6', '#6366f1'];
+  const _scEsc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const tags = items.map((it, i) => {
+    const ratio = max === min ? 1 : (it.count - min) / (max - min);
+    const fontSize = (12 + ratio * 26).toFixed(1);
+    const opacity = (0.55 + ratio * 0.45).toFixed(2);
+    const color = palette[i % palette.length];
+    const safe = _scEsc(it.display);
+    return `<span class="sv-cloud-tag" style="display:inline-block;padding:5px 10px;font-size:${fontSize}px;font-weight:${500 + Math.round(ratio*300)};color:${color};opacity:${opacity};line-height:1.25;cursor:pointer;border-radius:6px;transition:background .12s,opacity .12s;"
+        onmouseover="this.style.background='#f1f5f9';this.style.opacity='1';"
+        onmouseout="this.style.background='';this.style.opacity='${opacity}';"
+        title="${safe} — used ${it.count} time${it.count===1?'':'s'} pointing to ${it.targets.size} URL${it.targets.size===1?'':'s'}">${safe}<span style="font-size:10.5px;font-weight:600;color:#64748b;margin-left:4px;opacity:.85;">${it.count}</span></span>`;
+  }).join(' ');
+  return `
+    <div style="display:flex;flex-wrap:wrap;gap:6px 8px;align-items:baseline;justify-content:center;background:#f8fafc;border-radius:10px;padding:24px 22px;line-height:1.6;">
+      ${tags}
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:#64748b;text-align:center;">
+      Top ${items.length} anchor text${items.length===1?'':'s'} used in internal links · size = frequency. Repeated generic anchors (“click here”, “read more”) are weak SEO signals — replace with descriptive text.
+    </div>`;
+}
