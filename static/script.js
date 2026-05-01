@@ -580,6 +580,11 @@ function startCrawl(opts) {
               if (dockUrl && (dockUrl === src || (p.data.internal_link_urls || []).some(e => (Array.isArray(e) ? e[0] : e) === dockUrl))) {
                 renderDock();
               }
+              // Live-refresh the Site Structure sunburst as new URLs arrive.
+              // Throttled internally so we don't re-render on every page event.
+              if (typeof window._maybeRefreshSiteStructure === 'function') {
+                window._maybeRefreshSiteStructure();
+              }
             } else if (p.type === 'cms_detected') {
               // CMS-recommendations banner removed — see live robots.txt
               // preview in the URL filters panel instead.
@@ -2535,6 +2540,49 @@ window._compareToggleIssueDrill = function(idx) {
 // =============================================================================
 
 window._svView = window._svView || 'sunburst';
+
+// Throttled live refresh while a crawl is streaming. The SSE 'page' handler
+// calls _maybeRefreshSiteStructure() on every new page; we coalesce to one
+// re-render every ~2.5s so the SVG doesn't thrash. Skip mid-drag (would
+// cancel a pan), mid-search-typing (would steal input focus), and when the
+// user isn't actually viewing this panel. Zoom viewBox is preserved across
+// refreshes so the user's zoom level survives.
+let _svRefreshTimer = null;
+let _svLastRefresh = 0;
+const _SV_REFRESH_MIN_GAP = 2500;
+
+window._maybeRefreshSiteStructure = function() {
+  if (typeof activeCategory === 'undefined' || activeCategory !== '__sitemap_viz') return;
+  if (window._svPZ && window._svPZ.drag) return;
+  const searchEl = document.getElementById('sv-search');
+  if (searchEl && document.activeElement === searchEl && searchEl.value) return;
+  const now = Date.now();
+  const since = now - _svLastRefresh;
+  if (since >= _SV_REFRESH_MIN_GAP) {
+    _svRefreshNow();
+    return;
+  }
+  if (_svRefreshTimer) return;
+  _svRefreshTimer = setTimeout(() => {
+    _svRefreshTimer = null;
+    window._maybeRefreshSiteStructure();
+  }, _SV_REFRESH_MIN_GAP - since);
+};
+
+function _svRefreshNow() {
+  _svLastRefresh = Date.now();
+  if (typeof activeCategory === 'undefined' || activeCategory !== '__sitemap_viz') return;
+  const prevVb = (window._svPZ && window._svPZ.vb) ? { ...window._svPZ.vb } : null;
+  _scRenderSiteStructurePanel();
+  if (prevVb) {
+    setTimeout(() => {
+      const s = window._svPZ;
+      if (!s || !s.svg) return;
+      s.vb = prevVb;
+      s.svg.setAttribute('viewBox', `${prevVb.x} ${prevVb.y} ${prevVb.w} ${prevVb.h}`);
+    }, 10);
+  }
+}
 
 function _scRenderSiteStructurePanel() {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
