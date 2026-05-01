@@ -2701,16 +2701,15 @@ function _scRenderSiteStructureSunburst(rootTree, results) {
     const angle = arc.a1 - arc.a0;
     const midR = (r0 + r1) / 2;
     const arcLengthMid = midR * angle;
-    const showLabel = arcLengthMid > 28 && rw > 22;
     const safePath = _scEsc(arc.node.full).replace(/'/g, "\\'");
     const hasKids = Object.keys(arc.node.children || {}).length > 0;
     const title = `${_scEsc(arc.node.full)}\n${arc.node.count} URL${arc.node.count===1?'':'s'}${arc.node.errors?` · ${arc.node.errors} broken`:''}${arc.node.issues?` · ${arc.node.issues} issue${arc.node.issues===1?'':'s'}`:''}\n${hasKids ? 'Click to drill in · Shift+click to filter table' : 'Shift+click to filter table'}`;
 
+    // Two label modes: tangential curved text for wide arcs, radial text
+    // for narrow ones (so drilled-in views with many siblings still get
+    // labels on every slice).
     let label = '';
-    if (showLabel) {
-      // Curved text along the arc (textPath) — letters always read naturally
-      // along the slice. Reverse path direction in the lower half so letters
-      // don't end up upside-down.
+    if (arcLengthMid > 32 && rw > 22) {
       const midAng = (arc.a0 + arc.a1) / 2;
       const reverse = midAng > Math.PI / 2 && midAng < 3 * Math.PI / 2;
       const sa = reverse ? arc.a1 : arc.a0;
@@ -2730,6 +2729,22 @@ function _scRenderSiteStructureSunburst(rootTree, results) {
         <text dy="4" style="font-family:ui-sans-serif,system-ui;font-size:13px;font-weight:700;fill:#fff;stroke:rgba(0,0,0,0.55);stroke-width:3.5px;paint-order:stroke;pointer-events:none;">
           <textPath href="#${pathId}" startOffset="50%" text-anchor="middle">${_scEsc(labelText)}</textPath>
         </text>`;
+    } else if (rw > 14 && angle > 0.018) {
+      // Radial label — reads from centre outward. Flip 180° on bottom/left
+      // half so letters aren't upside-down.
+      const midAng = (arc.a0 + arc.a1) / 2;
+      const [tx, ty] = polar(midR, midAng);
+      const baseRot = (midAng * 180 / Math.PI) - 90;
+      const flip = midAng > Math.PI / 2 && midAng < 3 * Math.PI / 2;
+      const rot = flip ? baseRot + 180 : baseRot;
+      const maxChars = Math.max(2, Math.floor((rw - 6) / 5.8));
+      const labelText = arc.node.name.length > maxChars
+        ? arc.node.name.slice(0, Math.max(1, maxChars - 1)) + '…'
+        : arc.node.name;
+      label = `<text x="${tx}" y="${ty}"
+        transform="rotate(${rot.toFixed(2)} ${tx} ${ty})"
+        text-anchor="middle" dy="3.2"
+        style="font-family:ui-sans-serif,system-ui;font-size:10px;font-weight:600;fill:#fff;stroke:rgba(0,0,0,0.6);stroke-width:2.4px;paint-order:stroke;pointer-events:none;">${_scEsc(labelText)}</text>`;
     }
 
     return `<g class="sv-slice" data-path="${_scEsc(arc.node.full)}">
@@ -2798,8 +2813,8 @@ function _scRenderSiteStructureSunburst(rootTree, results) {
           <button type="button" id="sv-search-clear" onclick="document.getElementById('sv-search').value='';_svFilter('')" style="display:none;background:none;border:none;cursor:pointer;color:#94a3b8;font-size:14px;line-height:1;padding:0 2px;" title="Clear">×</button>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 280px;gap:16px;align-items:start;">
-        <div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:16px;align-items:start;">
+        <div style="min-width:0;">
           <div id="sv-svg-wrap" style="position:relative;background:#f8fafc;border-radius:10px;padding:8px;overflow:hidden;touch-action:none;">
             <div style="position:absolute;top:14px;left:14px;font-size:10.5px;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:5px 9px;z-index:2;pointer-events:none;line-height:1.3;max-width:55%;">
               click slice to drill · centre to go back · drag to pan · scroll to zoom
@@ -2827,10 +2842,10 @@ function _scRenderSiteStructureSunburst(rootTree, results) {
             </div>
           </div>
         </div>
-        <div>
-          <div id="sv-readout" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:12px;min-height:120px;">
+        <div style="min-width:0;overflow:hidden;">
+          <div id="sv-readout" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:12px;min-height:120px;overflow:hidden;">
             <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px;">hover a slice</div>
-            <div id="sv-readout-path" style="font-family:'SF Mono','Menlo',monospace;font-size:12px;color:#6366f1;word-break:break-all;margin-bottom:8px;">—</div>
+            <div id="sv-readout-path" style="font-family:'SF Mono','Menlo',monospace;font-size:12px;color:#6366f1;word-break:break-all;overflow-wrap:anywhere;margin-bottom:8px;max-width:100%;">—</div>
             <div id="sv-readout-stats" style="font-size:11.5px;color:#64748b;line-height:1.55;">Click a slice to drill in. Hold <kbd style="font-family:inherit;background:#fff;border:1px solid #e2e8f0;border-radius:3px;padding:1px 5px;font-size:10.5px;">Shift</kbd> while clicking to filter the table to that subtree instead.</div>
           </div>
           <div style="font-size:11px;color:#64748b;line-height:1.55;">
