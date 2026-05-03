@@ -271,10 +271,10 @@ body {
   font-size: 12px;
   table-layout: fixed;
   /* table-layout:fixed only honours <col> widths when the table has an
-     explicit width. width:max-content makes the table sum its col widths
-     so dragging a handle actually resizes the column. */
-  width: max-content;
-  min-width: 100%;
+     explicit pixel width. width:max-content lets Chrome ignore col widths
+     and expand cells to fit content (Title/Meta blew out to 400px+). JS
+     sets table.style.width = sum(col widths) instead — see _scSyncTableWidth. */
+  width: 0;
 }
 #crawler-table td {
   padding: 5px 8px;
@@ -494,13 +494,20 @@ body.is-col-resizing * { cursor: col-resize !important; }
 }
 
 /* Column visibility per category — JS adds classes to #crawler-table.
-   Site-crawler columns: 1=URL 2=Status 3=Title 4=TLen 5=Meta 6=H1 7=Words 8=Speed 9=Issues */
-#crawler-table.hide-col-title th:nth-child(3), #crawler-table.hide-col-title td:nth-child(3) { display: none; }
-#crawler-table.hide-col-tlen th:nth-child(4), #crawler-table.hide-col-tlen td:nth-child(4) { display: none; }
-#crawler-table.hide-col-meta th:nth-child(5), #crawler-table.hide-col-meta td:nth-child(5) { display: none; }
-#crawler-table.hide-col-h1 th:nth-child(6), #crawler-table.hide-col-h1 td:nth-child(6) { display: none; }
-#crawler-table.hide-col-words th:nth-child(7), #crawler-table.hide-col-words td:nth-child(7) { display: none; }
-#crawler-table.hide-col-speed th:nth-child(8), #crawler-table.hide-col-speed td:nth-child(8) { display: none; }
+   Site-crawler columns: 1=URL 2=Status 3=Title 4=TLen 5=Meta 6=H1 7=Words 8=Speed 9=Issues
+   Hide the matching <col> too so _scSyncTableWidth excludes its width from the table sum. */
+#crawler-table.hide-col-title th:nth-child(3), #crawler-table.hide-col-title td:nth-child(3),
+#crawler-table.hide-col-title colgroup col:nth-child(3) { display: none; }
+#crawler-table.hide-col-tlen th:nth-child(4), #crawler-table.hide-col-tlen td:nth-child(4),
+#crawler-table.hide-col-tlen colgroup col:nth-child(4) { display: none; }
+#crawler-table.hide-col-meta th:nth-child(5), #crawler-table.hide-col-meta td:nth-child(5),
+#crawler-table.hide-col-meta colgroup col:nth-child(5) { display: none; }
+#crawler-table.hide-col-h1 th:nth-child(6), #crawler-table.hide-col-h1 td:nth-child(6),
+#crawler-table.hide-col-h1 colgroup col:nth-child(6) { display: none; }
+#crawler-table.hide-col-words th:nth-child(7), #crawler-table.hide-col-words td:nth-child(7),
+#crawler-table.hide-col-words colgroup col:nth-child(7) { display: none; }
+#crawler-table.hide-col-speed th:nth-child(8), #crawler-table.hide-col-speed td:nth-child(8),
+#crawler-table.hide-col-speed colgroup col:nth-child(8) { display: none; }
 
 /* Drag-select row highlighting */
 #crawler-tbody tr.cr-selected { background: rgba(99,102,241,0.12) !important; }
