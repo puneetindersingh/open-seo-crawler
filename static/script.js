@@ -1420,7 +1420,7 @@ function _renderSitemapPanel(cat) {
   });
   const hasMeta = rows.some(r => r.meta);
   const rowHtml = rows.map(r => `
-    <tr>
+    <tr data-url="${_scEscapeHtml(r.url)}">
       <td title="${_scEscapeHtml(r.url)}"><a href="${r.url}" target="_blank" style="color:#4f46e5;">${_scEscapeHtml(r.url)}</a></td>
       ${hasMeta ? `<td style="color:#94a3b8;" title="${_scEscapeHtml(r.meta)}">${_scEscapeHtml(r.meta)}</td>` : ''}
     </tr>
@@ -1827,22 +1827,37 @@ function _scSetColumns(cat) {
   _scSyncTableWidth();
 }
 
-// Drag-select rows in the crawler table — click+drag to highlight, right-click to copy
+// Drag-select + right-click copy for ANY tbody whose <tr>s carry data-url.
+// Was previously hardcoded to #crawler-tbody, so report panels (sitemap
+// orphans, all values, etc.) had no way to copy URLs in bulk. Now any
+// renderer that emits <tr data-url="…"> inside a <tbody> opts in
+// automatically. Selection is scoped to the tbody the drag started in
+// so dragging across two tables doesn't merge them.
 (function() {
   let dragging = false;
   let startRow = null;
   let lastRow = null;
+  let scopeTbody = null;
 
   function getRow(el) {
-    return el && el.closest('#crawler-tbody tr[data-url]');
+    if (!el) return null;
+    const tr = el.closest('tr[data-url]');
+    if (!tr) return null;
+    if (!tr.closest('tbody')) return null;
+    return tr;
   }
 
-  function clearSelection() {
-    document.querySelectorAll('#crawler-tbody tr.cr-selected').forEach(r => r.classList.remove('cr-selected'));
+  function clearSelection(scope) {
+    const root = scope || document;
+    root.querySelectorAll('tr.cr-selected').forEach(r => r.classList.remove('cr-selected'));
   }
 
   function applySelection(a, b) {
-    const rows = Array.from(document.querySelectorAll('#crawler-tbody tr[data-url]')).filter(r => r.style.display !== 'none');
+    if (!a || !b) return;
+    const tbody = a.closest('tbody');
+    if (!tbody || b.closest('tbody') !== tbody) return;
+    const rows = Array.from(tbody.querySelectorAll(':scope tr[data-url]'))
+      .filter(r => r.style.display !== 'none');
     const ia = rows.indexOf(a), ib = rows.indexOf(b);
     if (ia < 0 || ib < 0) return;
     const lo = Math.min(ia, ib), hi = Math.max(ia, ib);
@@ -1859,13 +1874,14 @@ function _scSetColumns(cat) {
 
   document.addEventListener('mousedown', e => {
     const row = getRow(e.target);
-    if (!row || !row.closest('#crawler-tbody')) return;
+    if (!row) return;
     if (e.button !== 0) return;
     if (e.target.closest('button,a,input,select')) return;
     dragging = true;
     startRow = row;
     lastRow = row;
-    clearSelection();
+    scopeTbody = row.closest('tbody');
+    clearSelection(scopeTbody);
     row.classList.add('cr-selected');
     e.preventDefault();
   });
@@ -1874,18 +1890,21 @@ function _scSetColumns(cat) {
     if (!dragging) return;
     const row = getRow(e.target);
     if (!row || row === lastRow) return;
+    if (row.closest('tbody') !== scopeTbody) return;
     lastRow = row;
-    clearSelection();
+    clearSelection(scopeTbody);
     applySelection(startRow, row);
   });
 
   document.addEventListener('mouseup', () => { dragging = false; });
 
-  // Double-click any cell to expand it (wrap the full value, drop the
-  // ellipsis) and auto-select for easy copy. Click again to collapse.
+  // Double-click any cell in a selectable tbody to expand it (wrap the
+  // full value, drop the ellipsis) and auto-select for easy copy.
   document.addEventListener('dblclick', e => {
-    const td = e.target.closest('#crawler-tbody td');
+    const td = e.target.closest('td');
     if (!td) return;
+    const tbody = td.closest('tbody');
+    if (!tbody || !tbody.querySelector('tr[data-url]')) return;
     if (e.target.closest('button,a,input,select,svg')) return;
     e.preventDefault();
     td.classList.toggle('cs-cell-expanded');
@@ -1903,8 +1922,11 @@ function _scSetColumns(cat) {
   });
 
   document.addEventListener('contextmenu', e => {
-    const selected = Array.from(document.querySelectorAll('#crawler-tbody tr.cr-selected[data-url]'));
-    if (!selected.length || !e.target.closest('#crawler-tbody')) return;
+    const targetRow = getRow(e.target);
+    const targetTbody = targetRow ? targetRow.closest('tbody') : (e.target.closest && e.target.closest('tbody'));
+    if (!targetTbody) return;
+    const selected = Array.from(targetTbody.querySelectorAll('tr.cr-selected[data-url]'));
+    if (!selected.length) return;
     e.preventDefault();
 
     const old = document.getElementById('cr-ctx-menu');
@@ -1954,7 +1976,7 @@ function _scSetColumns(cat) {
     const items = [
       { label: `Copy ${urls.length} URL${urls.length > 1 ? 's' : ''}`, action: () => copyText(urls.join('\n'), `Copied ${urls.length} URL${urls.length > 1 ? 's' : ''}.`) },
       { label: 'Copy as comma-separated', action: () => copyText(urls.join(', '), 'Copied as comma-separated.') },
-      { label: 'Clear selection', action: clearSelection },
+      { label: 'Clear selection', action: () => clearSelection(targetTbody) },
     ];
 
     items.forEach(item => {
@@ -3201,8 +3223,13 @@ function _scRenderSiteStructureTree(root) {
   return `<div style="font-family:inherit;">${renderNode(root, 0)}</div>`;
 }
 
+// Generic anchors that fail Google's "anchor as relevance signal" expectation
+// AND fail accessibility (screen readers announce out of context).
+const _SC_GENERIC_ANCHORS = new Set(['click here','read more','learn more','more','here','this','this page','find out more','find out','more info','more information','details','view','view more','see more','see details','link','website','this link','click','tap here','tap','open','go','go here','continue','continue reading','full story']);
+
 function _scRenderAnchorTextCloud() {
   const counts = {};
+  let totalLinks = 0;
   Object.entries(crawlerInlinks || {}).forEach(([target, arr]) => {
     (arr || []).forEach(e => {
       let anchor = (typeof e === 'string') ? '' : (e.anchor || '');
@@ -3213,6 +3240,7 @@ function _scRenderAnchorTextCloud() {
       if (!counts[key]) counts[key] = { display: anchor, count: 0, targets: new Set() };
       counts[key].count++;
       counts[key].targets.add(target);
+      totalLinks++;
     });
   });
   const items = Object.values(counts).sort((a, b) => b.count - a.count).slice(0, 80);
@@ -3223,24 +3251,48 @@ function _scRenderAnchorTextCloud() {
   }
   const max = items[0].count;
   const min = items[items.length - 1].count;
-  const palette = ['#0ea5e9', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4', '#ec4899', '#14b8a6', '#6366f1'];
+  const palette = ['#0ea5e9', '#22c55e', '#a855f7', '#06b6d4', '#ec4899', '#14b8a6', '#6366f1'];
   const _scEsc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  // Count generic occurrences for the banner.
+  const genericItems = items.filter(it => _SC_GENERIC_ANCHORS.has(it.display.toLowerCase()));
+  const genericLinks = genericItems.reduce((n, it) => n + it.count, 0);
+  const genericPct = totalLinks ? Math.round((genericLinks / totalLinks) * 100) : 0;
+
   const tags = items.map((it, i) => {
     const ratio = max === min ? 1 : (it.count - min) / (max - min);
     const fontSize = (12 + ratio * 26).toFixed(1);
     const opacity = (0.55 + ratio * 0.45).toFixed(2);
-    const color = palette[i % palette.length];
+    const isGeneric = _SC_GENERIC_ANCHORS.has(it.display.toLowerCase());
+    // Generic anchors are flagged red regardless of frequency colour so the
+    // user spots them at a glance — Google treats anchor text as a
+    // destination-relevance signal, generic anchors waste it.
+    const color = isGeneric ? '#dc2626' : palette[i % palette.length];
     const safe = _scEsc(it.display);
-    return `<span class="sv-cloud-tag" style="display:inline-block;padding:5px 10px;font-size:${fontSize}px;font-weight:${500 + Math.round(ratio*300)};color:${color};opacity:${opacity};line-height:1.25;cursor:pointer;border-radius:6px;transition:background .12s,opacity .12s;"
+    const titleAttr = isGeneric
+      ? `${safe} — generic anchor (${it.count}×). Google can't tell what the linked page is about. Rewrite to describe the destination topic.`
+      : `${safe} — used ${it.count} time${it.count===1?'':'s'} pointing to ${it.targets.size} URL${it.targets.size===1?'':'s'}`;
+    const extra = isGeneric ? `border:1px solid rgba(220,38,38,0.4);background:rgba(254,226,226,0.6);` : '';
+    const badge = isGeneric ? `<span style="margin-left:5px;font-size:9.5px;font-weight:700;color:#fff;background:#dc2626;padding:1px 5px;border-radius:8px;letter-spacing:.4px;text-transform:uppercase;">⚠</span>` : '';
+    return `<span class="sv-cloud-tag" style="display:inline-block;padding:5px 10px;font-size:${fontSize}px;font-weight:${500 + Math.round(ratio*300)};color:${color};opacity:${opacity};line-height:1.25;cursor:pointer;border-radius:6px;transition:background .12s,opacity .12s;${extra}"
         onmouseover="this.style.background='#f1f5f9';this.style.opacity='1';"
-        onmouseout="this.style.background='';this.style.opacity='${opacity}';"
-        title="${safe} — used ${it.count} time${it.count===1?'':'s'} pointing to ${it.targets.size} URL${it.targets.size===1?'':'s'}">${safe}<span style="font-size:10.5px;font-weight:600;color:#64748b;margin-left:4px;opacity:.85;">${it.count}</span></span>`;
+        onmouseout="this.style.background='${isGeneric ? 'rgba(254,226,226,0.6)' : ''}';this.style.opacity='${opacity}';"
+        title="${titleAttr}">${safe}<span style="font-size:10.5px;font-weight:600;color:#64748b;margin-left:4px;opacity:.85;">${it.count}</span>${badge}</span>`;
   }).join(' ');
+
+  const banner = genericItems.length ? `
+    <div style="margin:0 0 12px;padding:11px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.35);border-left:3px solid #ef4444;border-radius:6px;font-size:12px;color:#7f1d1d;line-height:1.5;">
+      <div style="font-weight:700;color:#991b1b;margin-bottom:3px;">⚠ ${genericItems.length} generic anchor${genericItems.length===1?'':'s'} found · ${genericLinks} link${genericLinks===1?'':'s'} (${genericPct}% of internal links)</div>
+      <div>Anchors like <em>"Read more"</em>, <em>"Click here"</em>, <em>"Learn more"</em> are an SEO problem. Google uses anchor text as a topical relevance signal for the destination page — generic anchors give it nothing to work with. They also fail accessibility (screen readers announce the anchor out of context).</div>
+      <div style="margin-top:5px;"><strong>Fix:</strong> rewrite each generic anchor so it describes what the linked page is <em>about</em> — match the target page's topic / primary keyword. (e.g. "Read more →" becomes "private in-home care services →".)</div>
+    </div>` : '';
+
   return `
+    ${banner}
     <div style="display:flex;flex-wrap:wrap;gap:6px 8px;align-items:baseline;justify-content:center;background:#f8fafc;border-radius:10px;padding:24px 22px;line-height:1.6;">
       ${tags}
     </div>
     <div style="margin-top:10px;font-size:11px;color:#64748b;text-align:center;">
-      Top ${items.length} anchor text${items.length===1?'':'s'} used in internal links · size = frequency. Repeated generic anchors (“click here”, “read more”) are weak SEO signals — replace with descriptive text.
+      Top ${items.length} anchor text${items.length===1?'':'s'} used in internal links · size = frequency. Red border / ⚠ = generic anchor (rewrite recommended).
     </div>`;
 }

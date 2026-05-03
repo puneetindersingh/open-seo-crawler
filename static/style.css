@@ -510,8 +510,15 @@ body.is-col-resizing * { cursor: col-resize !important; }
 #crawler-table.hide-col-speed colgroup col:nth-child(8) { display: none; }
 
 /* Drag-select row highlighting */
-#crawler-tbody tr.cr-selected { background: rgba(99,102,241,0.12) !important; }
+/* Row selection highlight — scope to any tbody, not just the main #crawler-tbody,
+   so report panels (sitemap orphans, all values, etc.) get the same blue tint
+   when drag-selected. */
+tbody tr.cr-selected { background: rgba(99,102,241,0.12) !important; }
+tbody tr.cr-selected td { background: transparent !important; }
 #crawler-tbody { user-select: none; }
+/* Any tbody whose rows are drag-selectable — disables text selection so a
+   row drag doesn't double-select text. :has() lights up on Chrome/Safari/FF. */
+tbody:has(tr[data-url]) { user-select: none; }
 
 /* Column sort indicator */
 .sc-sort-ind {
