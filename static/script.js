@@ -132,8 +132,8 @@ function renderRow(d) {
     <td style="color:${statusColor};font-weight:700">${d.status_code}</td>
     <td title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:#ef4444">missing</em>'}</td>
     <td>${d.title_len || 0}</td>
-    <td>${d.meta_description ? escapeHtml(d.meta_description.substring(0,60)) : '<em style="color:#ef4444">missing</em>'}</td>
-    <td>${d.h1 ? escapeHtml(d.h1) : '<em style="color:#ef4444">missing</em>'}</td>
+    <td title="${escapeHtml(d.meta_description||'')}">${d.meta_description ? escapeHtml(d.meta_description) : '<em style="color:#ef4444">missing</em>'}</td>
+    <td title="${escapeHtml(d.h1||'')}">${d.h1 ? escapeHtml(d.h1) : '<em style="color:#ef4444">missing</em>'}</td>
     <td>${d.word_count || 0}</td>
     <td>${d.response_time || 0}s</td>
     <td>${issues || '<span style="color:#22c55e">OK</span>'}</td>
@@ -147,15 +147,34 @@ function renderRow(d) {
 // Widths persist in localStorage.
 // =============================================================================
 const _SC_COL_KEY = 'sc_crawler_col_widths_v1';
+// table-layout:fixed only honours col widths when the table has an explicit
+// pixel width. We set table.style.width = sum of visible col widths so
+// dragging a handle resizes that column (and the table) without other
+// columns expanding to fill content.
+function _scSyncTableWidth() {
+  const tbl = document.getElementById('crawler-table');
+  if (!tbl) return;
+  const cols = tbl.querySelectorAll('colgroup col');
+  let sum = 0;
+  cols.forEach(c => {
+    const cs = getComputedStyle(c);
+    if (cs.display === 'none') return;
+    const w = parseInt(c.style.width, 10) || c.offsetWidth || 0;
+    sum += w;
+  });
+  if (sum > 0) tbl.style.width = sum + 'px';
+}
 function _scLoadColWidths() {
   try {
     const raw = localStorage.getItem(_SC_COL_KEY);
-    if (!raw) return;
-    const widths = JSON.parse(raw);
-    document.querySelectorAll('#crawler-table colgroup col').forEach((col, i) => {
-      if (typeof widths[i] === 'number' && widths[i] > 20) col.style.width = widths[i] + 'px';
-    });
+    if (raw) {
+      const widths = JSON.parse(raw);
+      document.querySelectorAll('#crawler-table colgroup col').forEach((col, i) => {
+        if (typeof widths[i] === 'number' && widths[i] > 20) col.style.width = widths[i] + 'px';
+      });
+    }
   } catch {}
+  _scSyncTableWidth();
 }
 function _scSaveColWidths() {
   try {
@@ -163,6 +182,7 @@ function _scSaveColWidths() {
     const widths = Array.from(cols).map(c => parseInt(c.style.width, 10) || c.offsetWidth);
     localStorage.setItem(_SC_COL_KEY, JSON.stringify(widths));
   } catch {}
+  _scSyncTableWidth();
 }
 function _scAutoFitColumn(idx) {
   const tbody = document.getElementById('crawler-tbody');
@@ -257,6 +277,7 @@ function _initTableResizers(table) {
         const maxW = Math.max(1200, (window.innerWidth || 4000) - 60);
         const w = Math.max(40, Math.min(maxW, startWidth + (ev.clientX - startX)));
         col.style.width = w + 'px';
+        if (table.id === 'crawler-table') _scSyncTableWidth();
       };
       const onUp = () => {
         handle.classList.remove('is-dragging');
@@ -873,7 +894,7 @@ window.selectCategory = function(cat) {
     'Missing Twitter Card': 'Pages Missing Twitter Card', 'Missing viewport': 'Pages Missing Viewport Meta',
     'Mixed content': 'HTTPS Pages Loading HTTP Resources', 'URL:': 'URL Hygiene Issues',
     '__sm_missing': 'Missing from Sitemap', '__sm_orphan': 'Orphan in Sitemap',
-    '__sm_only': 'Sitemap Only — Not Reached by Crawl', '__sm_noindex': 'Non-Indexable in Sitemap',
+    '__sm_only': 'Orphan Pages — No Internal Links', '__sm_noindex': 'Non-Indexable in Sitemap',
     '__sm_non200': 'Non-200 in Sitemap', '__sm_redirects': 'Redirects in Sitemap',
     '__sm_pagination': 'Pagination in Sitemap',
     '__nd_content': 'Near-Duplicate Content — pairs above the similarity threshold',
@@ -1361,7 +1382,7 @@ function _renderSitemapPanel(cat) {
   const map = {
     '__sm_missing':    { key: 'missing_from_sitemap',     hint: 'These pages are indexable, return 200, and were reached by the crawl, but are NOT in the sitemap. Add them.' },
     '__sm_orphan':     { key: 'orphan_in_sitemap',        hint: 'In the sitemap and crawled, but no internal links point to them. Link to them from related pages.' },
-    '__sm_only':       { key: 'sitemap_only',             hint: 'In the sitemap but the crawl never reached them. Either truly orphan (no internal links anywhere) or buried beyond crawl depth.' },
+    '__sm_only':       { key: 'sitemap_only',             label: 'Orphan Pages',  hint: 'These pages are in your sitemap but no internal links point to them anywhere on the site — visitors and Google\'s crawler can\'t reach them by clicking through. For each one, decide: <b>(1)</b> Not needed? Add <code>noindex</code> or delete the page (and remove from sitemap). <b>(2)</b> Needed? Add an internal link from a relevant page, or include it in your header/footer navigation.' },
     '__sm_noindex':    { key: 'non_indexable_in_sitemap', hint: 'In sitemap but flagged noindex. Remove from sitemap OR remove the noindex.' },
     '__sm_non200':     { key: 'non_200_in_sitemap',       hint: 'In sitemap but the URL returns 4xx/5xx. Remove from sitemap or fix the page.' },
     '__sm_redirects':  { key: 'redirects_in_sitemap',     hint: 'Replace with the canonical destination URL — having a 301/302 in the sitemap wastes crawl budget.' },
@@ -1378,8 +1399,8 @@ function _renderSitemapPanel(cat) {
       <div><b>Totals:</b> ${totals.urls_in_sitemap || 0} URLs in sitemap · ${totals.urls_in_crawl || 0} crawled · ${totals.sitemaps_walked || 0} sitemap files walked</div>
       ${warns}
     </div>
-    <div style="padding:10px 0 4px;font-size:13px;font-weight:600;">${cat.replace('__sm_','').replace(/^./, c => c.toUpperCase())} (${items.length})</div>
-    <div style="padding-bottom:8px;font-size:11px;color:#64748b;">${info.hint}</div>
+    <div style="padding:10px 0 4px;font-size:13px;font-weight:600;">${info.label || cat.replace('__sm_','').replace(/^./, c => c.toUpperCase())} (${items.length})</div>
+    <div style="padding-bottom:8px;font-size:11px;color:#64748b;line-height:1.5;">${info.hint}</div>
   `;
   if (!items.length) {
     panel.innerHTML = header + '<div style="padding:14px 0;color:#16a34a;">✓ Nothing in this category.</div>';
@@ -1790,7 +1811,10 @@ function _scSetColumns(cat) {
   if (!table) return;
   const all = ['title','tlen','meta','h1','words','speed'];
   table.classList.remove(...all.map(c => 'hide-col-' + c));
-  const show = (cols) => table.classList.add(...all.filter(c => !cols.includes(c)).map(c => 'hide-col-' + c));
+  const show = (cols) => {
+    table.classList.add(...all.filter(c => !cols.includes(c)).map(c => 'hide-col-' + c));
+    _scSyncTableWidth();
+  };
   if (cat === 'Missing meta description') return show(['url','status','title','meta','issues']);
   if (cat === 'Meta desc too long' || cat === 'Meta desc too short') return show(['url','status','meta','issues']);
   if (cat === 'Missing title') return show(['url','status','title','tlen','h1','issues']);
@@ -1800,6 +1824,7 @@ function _scSetColumns(cat) {
   if (cat === 'Thin content') return show(['url','status','words','issues']);
   if (cat === 'Slow') return show(['url','status','speed','issues']);
   if (cat !== 'all' && !cat.startsWith('__')) return show(['url','status','title','issues']);
+  _scSyncTableWidth();
 }
 
 // Drag-select rows in the crawler table — click+drag to highlight, right-click to copy
@@ -1895,22 +1920,31 @@ function _scSetColumns(cat) {
     // (or if focus left the doc) it can reject — fall back to a hidden
     // textarea + execCommand. Always show feedback so the user sees the
     // click registered, even if the copy itself failed.
+    // Two-stage copy: try execCommand first synchronously inside the user
+    // gesture (most reliable, esp. for multi-line). If that fails, fall back
+    // to navigator.clipboard.writeText. Previously we tried clipboard first
+    // and the async rejection lost the user-gesture context, so the textarea
+    // fallback only ever wrote a single line on some browsers.
     const copyText = (text, ok, fail) => {
       const done = (success) => scToast(success ? ok : (fail || 'Copy failed — clipboard blocked.'));
+      let copied = false;
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;';
+        document.body.appendChild(ta);
+        const prevActive = document.activeElement;
+        ta.focus();
+        ta.setSelectionRange(0, text.length);
+        try { copied = document.execCommand('copy'); } catch { copied = false; }
+        ta.remove();
+        if (prevActive && prevActive.focus) { try { prevActive.focus(); } catch {} }
+      } catch { copied = false; }
+      if (copied) { done(true); return; }
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(() => done(true), () => {
-            try {
-              const ta = document.createElement('textarea');
-              ta.value = text;
-              ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0;';
-              document.body.appendChild(ta);
-              ta.focus(); ta.select();
-              const ok2 = document.execCommand('copy');
-              ta.remove();
-              done(ok2);
-            } catch { done(false); }
-          });
+          navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
           return;
         }
       } catch {}
