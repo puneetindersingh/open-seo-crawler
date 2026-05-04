@@ -151,18 +151,49 @@ const _SC_COL_KEY = 'sc_crawler_col_widths_v1';
 // pixel width. We set table.style.width = sum of visible col widths so
 // dragging a handle resizes that column (and the table) without other
 // columns expanding to fill content.
+// Re-sync on window resize so the cosmetic stretch follows the wrapper.
+(function() {
+  if (typeof window === 'undefined' || window._scResizeWired) return;
+  window._scResizeWired = true;
+  let t = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(t);
+    t = setTimeout(() => { try { _scSyncTableWidth(); } catch {} }, 80);
+  });
+})();
 function _scSyncTableWidth() {
   const tbl = document.getElementById('crawler-table');
   if (!tbl) return;
   const cols = tbl.querySelectorAll('colgroup col');
+  // Reset any prior cosmetic stretch — restore each col to its user-saved width.
+  // dataset.savedWidth is the source of truth; style.width may carry a stretch.
+  cols.forEach(c => {
+    if (c.dataset.savedWidth) {
+      c.style.width = c.dataset.savedWidth + 'px';
+    } else {
+      const w = parseInt(c.style.width, 10);
+      if (w > 0) c.dataset.savedWidth = String(w);
+    }
+  });
+  const visible = [];
   let sum = 0;
   cols.forEach(c => {
-    const cs = getComputedStyle(c);
-    if (cs.display === 'none') return;
-    const w = parseInt(c.style.width, 10) || c.offsetWidth || 0;
+    if (getComputedStyle(c).display === 'none') return;
+    const w = parseInt(c.style.width, 10) || 0;
     sum += w;
+    visible.push({ col: c, w });
   });
-  if (sum > 0) tbl.style.width = sum + 'px';
+  if (sum <= 0) return;
+  const wrap = tbl.parentElement;
+  const wrapW = wrap ? wrap.clientWidth : 0;
+  if (wrapW > sum + 4 && visible.length > 0) {
+    // Stretch last visible col to fill remaining width — cosmetic only.
+    const last = visible[visible.length - 1];
+    last.col.style.width = (last.w + (wrapW - sum)) + 'px';
+    tbl.style.width = wrapW + 'px';
+  } else {
+    tbl.style.width = sum + 'px';
+  }
 }
 function _scLoadColWidths() {
   try {
@@ -170,7 +201,10 @@ function _scLoadColWidths() {
     if (raw) {
       const widths = JSON.parse(raw);
       document.querySelectorAll('#crawler-table colgroup col').forEach((col, i) => {
-        if (typeof widths[i] === 'number' && widths[i] > 20) col.style.width = widths[i] + 'px';
+        if (typeof widths[i] === 'number' && widths[i] > 20) {
+          col.style.width = widths[i] + 'px';
+          col.dataset.savedWidth = String(widths[i]);
+        }
       });
     }
   } catch {}
@@ -179,7 +213,8 @@ function _scLoadColWidths() {
 function _scSaveColWidths() {
   try {
     const cols = document.querySelectorAll('#crawler-table colgroup col');
-    const widths = Array.from(cols).map(c => parseInt(c.style.width, 10) || c.offsetWidth);
+    const widths = Array.from(cols).map(c =>
+      parseInt(c.dataset.savedWidth, 10) || parseInt(c.style.width, 10) || c.offsetWidth);
     localStorage.setItem(_SC_COL_KEY, JSON.stringify(widths));
   } catch {}
   _scSyncTableWidth();
@@ -277,7 +312,10 @@ function _initTableResizers(table) {
         const maxW = Math.max(1200, (window.innerWidth || 4000) - 60);
         const w = Math.max(40, Math.min(maxW, startWidth + (ev.clientX - startX)));
         col.style.width = w + 'px';
-        if (table.id === 'crawler-table') _scSyncTableWidth();
+        if (table.id === 'crawler-table') {
+          col.dataset.savedWidth = String(w);
+          _scSyncTableWidth();
+        }
       };
       const onUp = () => {
         handle.classList.remove('is-dragging');
