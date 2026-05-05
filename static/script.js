@@ -79,6 +79,22 @@ function sevOf(issue) {
   return 'info';
 }
 
+// Client-side mirror of app.py's _is_third_party_widget_image — used to
+// scrub already-cached crawl results so reCAPTCHA / analytics / chat-widget
+// images stop polluting any image-related view without forcing a re-crawl.
+// Mirrored from internal-tool/static/script.js — keep in sync.
+const _THIRD_PARTY_IMG_HOSTS_RE = /(?:^|\.)(gstatic\.com|googletagmanager\.com|google-analytics\.com|googleadservices\.com|doubleclick\.net|hotjar\.com|intercomcdn\.com|intercom\.io|crisp\.chat|cloudflareinsights\.com|tiktok\.com|connect\.facebook\.net|pinimg\.com|pinterest\.com|hs-analytics\.net|hs-scripts\.com)$/i;
+const _THIRD_PARTY_IMG_FILE_RE = /(?:\/recaptcha[\/_\-]|recaptcha[_\-](?:black|white|logo)|\/g\.gif$|\/pixel\.gif$|\/spacer\.gif$|\/tracking[_\-]pixel|fbq[_\-]pixel|\/fb-pixel|\/ga-pixel)/i;
+function _isThirdPartyWidgetImage(absSrc) {
+  if (!absSrc) return false;
+  try {
+    const u = new URL(absSrc);
+    if (_THIRD_PARTY_IMG_HOSTS_RE.test(u.hostname || '')) return true;
+  } catch {}
+  if (_THIRD_PARTY_IMG_FILE_RE.test(absSrc)) return true;
+  return false;
+}
+
 function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -272,13 +288,18 @@ function _initTableResizers(table) {
   const key = table.dataset.resizeKey || '';
   const lsKey = key ? 'sc_table_col_widths_' + key : '';
 
+  // Restore saved widths. Clamp the first column (always URL/identifier in
+  // these reports) to a 220px floor so a stale localStorage entry from a
+  // prior accidental over-drag doesn't leave the URL column unreadable.
   if (lsKey) {
     try {
       const raw = localStorage.getItem(lsKey);
       if (raw) {
         const widths = JSON.parse(raw);
         cols.forEach((col, i) => {
-          if (typeof widths[i] === 'number' && widths[i] > 20) col.style.width = widths[i] + 'px';
+          if (typeof widths[i] !== 'number' || widths[i] <= 20) return;
+          const minW = (i === 0) ? 220 : 40;
+          col.style.width = Math.max(widths[i], minW) + 'px';
         });
       }
     } catch {}
@@ -557,6 +578,8 @@ function startCrawl(opts) {
   document.getElementById('crawler-results').style.display = '';
   document.getElementById('issues-sidebar').style.display = '';
   { const _smBtn = document.getElementById('crawler-export-sitemap-btn'); if (_smBtn) _smBtn.style.display = 'none'; }
+  { const _xBtn = document.getElementById('crawler-export-xlsx-btn'); if (_xBtn) _xBtn.style.display = 'none'; }
+  { const _vBtn = document.getElementById('crawler-export-view-btn'); if (_vBtn) _vBtn.style.display = 'none'; }
   if (!resumeFromId) {
     document.getElementById('crawler-tbody').innerHTML = '';
     document.getElementById('crawler-cms-banner').innerHTML = '';
@@ -938,6 +961,7 @@ window.selectCategory = function(cat) {
     '__nd_content': 'Near-Duplicate Content — pairs above the similarity threshold',
     '__schema_by_page': 'Schema by Page — every crawled page with the schema types it emits',
     '__sitemap_viz': 'Site Structure — sunburst, hierarchy and anchor-text cloud',
+    '__all_images': 'All Images — every image across the crawl with alt text and the page(s) it appears on',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
@@ -948,7 +972,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -961,14 +985,17 @@ window.selectCategory = function(cat) {
       _renderNearDupPanel();
     } else if (cat === '__sitemap_viz') {
       _scRenderSiteStructurePanel();
+    } else if (cat === '__all_images') {
+      _scRenderAllImagesPanel();
     } else {
       _renderSitemapPanel(cat);
     }
     const bulkBtn = document.getElementById('crawler-bulk-recrawl-btn');
     if (bulkBtn) bulkBtn.style.display = 'none';
+    if (typeof _refreshCrawlerExportViewBtn === 'function') _refreshCrawlerExportViewBtn();
     return;
   }
-  // Drop any sitemap/schema/near-dup/site-structure panel content when switching back.
+  // Drop any sitemap/schema/near-dup/site-structure/all-images panel content when switching back.
   const smPanel = document.getElementById('sitemap-panel');
   if (smPanel) smPanel.remove();
   const schemaPanel = document.getElementById('schema-by-page-panel');
@@ -977,6 +1004,8 @@ window.selectCategory = function(cat) {
   if (ndPanel) ndPanel.remove();
   const svPanel = document.getElementById('sitestructure-panel');
   if (svPanel) svPanel.remove();
+  const aiPanel = document.getElementById('all-images-panel');
+  if (aiPanel) aiPanel.remove();
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
 
@@ -1000,6 +1029,7 @@ window.selectCategory = function(cat) {
     const lbl = document.getElementById('crawler-bulk-recrawl-label');
     if (lbl) lbl.textContent = `Re-crawl ${_matched} URL${_matched === 1 ? '' : 's'}`;
   }
+  if (typeof _refreshCrawlerExportViewBtn === 'function') _refreshCrawlerExportViewBtn();
 };
 
 // In-memory result of the last sitemap analysis. Cleared on every new crawl.
@@ -1103,6 +1133,197 @@ window.analyseSitemap = async function(opts) {
     _smSetStatus('prompt', { reason: 'Network error: ' + (e && e.message || 'fetch failed') + '.', prefill: domain.replace(/\/$/, '') + '/sitemap.xml' });
   }
 };
+
+// All Images panel — every meaningful <img> seen during the crawl, grouped
+// by canonical src so a logo used on every page is one row with a "N pages"
+// expander. Filter chips (All / Missing alt / Empty alt in link / Decorative
+// / Has alt) toggle row visibility. Pure crawler data — no AI — so it lives
+// in the public site-crawler. Mirrors internal-tool's _renderAllImagesPanel but
+// without the "Generate in Bulk Image Alt" button (AI-only feature).
+function _scRenderAllImagesPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('all-images-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'all-images-panel';
+  panel.style.cssText = 'padding:0;font-size:12px;';
+
+  if (!Array.isArray(crawlerResults) || !crawlerResults.length) {
+    panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No pages crawled yet.</div>';
+    main.appendChild(panel);
+    return;
+  }
+
+  // Group images by canonical src; filter widget images at render time too,
+  // so already-cached crawls get a clean view without a re-crawl.
+  const bySrc = new Map();
+  for (const r of crawlerResults) {
+    const data = Array.isArray(r.images_all_data) ? r.images_all_data : [];
+    for (const img of data) {
+      if (!img || !img.src) continue;
+      if (typeof _isThirdPartyWidgetImage === 'function' && _isThirdPartyWidgetImage(img.src)) continue;
+      let entry = bySrc.get(img.src);
+      if (!entry) { entry = { src: img.src, pages: [] }; bySrc.set(img.src, entry); }
+      entry.pages.push({
+        url: r.url || '',
+        page_title: r.title || '',
+        h1: r.h1 || '',
+        alt: img.alt === undefined ? null : img.alt,
+        classification: img.classification || 'present',
+      });
+    }
+  }
+  const groups = Array.from(bySrc.values());
+
+  // Sort: missing first, then empty-in-link, then empty (decorative), then present.
+  // Within each bucket, most-used first.
+  const altState = (g) => {
+    const cls = g.pages[0]?.classification || 'present';
+    if (cls === 'missing') return 0;
+    if (cls === 'empty in link') return 1;
+    if (cls === 'empty') return 2;
+    return 3;
+  };
+  groups.sort((a, b) => altState(a) - altState(b) || b.pages.length - a.pages.length);
+
+  const totalImgs = groups.reduce((n, g) => n + g.pages.length, 0);
+  const uniq = groups.length;
+  const _firstCls = (g) => (g.pages[0] && g.pages[0].classification) || 'present';
+  const missing   = groups.filter(g => _firstCls(g) === 'missing').length;
+  const emptyLink = groups.filter(g => _firstCls(g) === 'empty in link').length;
+  const emptyDeco = groups.filter(g => _firstCls(g) === 'empty').length;
+  const present   = groups.filter(g => _firstCls(g) === 'present').length;
+  const problems  = missing + emptyLink;
+
+  if (!uniq) {
+    panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No images captured in this crawl. Re-crawl to populate (older crawls predate the All Images capture).</div>';
+    main.appendChild(panel);
+    return;
+  }
+
+  // Friendly summary card with built-in legend.
+  const _altCellHtml = (cls, alt) => {
+    if (cls === 'missing') return `<span style="color:#ef4444;font-style:italic;">— missing</span>`;
+    if (cls === 'empty')   return `<span style="color:#f59e0b;font-style:italic;">— empty (decorative)</span>`;
+    if (cls === 'empty in link') return `<span style="color:#ef4444;font-style:italic;">— empty alt on a link (no accessible name)</span>`;
+    return escapeHtml(alt || '');
+  };
+
+  panel.innerHTML = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">All images found across the crawl</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px;line-height:1.55;">
+        <b>${uniq}</b> different image${uniq === 1 ? '' : 's'} used <b>${totalImgs}</b> time${totalImgs === 1 ? '' : 's'} across the site (a logo on every page is one image used many times).
+        ${problems
+          ? ` <b style="color:#991b1b;">${problems} need${problems===1?'s':''} fixing</b>`
+          : ` <b style="color:#166534;">No images need fixing.</b>`}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+        <button type="button" class="sc-ai-chip sc-ai-chip-active" data-filter="all" onclick="_scAllImagesFilter('all')" style="padding:4px 12px;border-radius:14px;border:1px solid var(--text);background:var(--text);color:var(--surface);font-size:11.5px;cursor:pointer;font-weight:600;">All <span style="opacity:.75;font-weight:400;">${uniq}</span></button>
+        ${missing ? `<button type="button" class="sc-ai-chip" data-filter="missing" onclick="_scAllImagesFilter('missing')" title="No alt attribute at all — Google + screen readers can't read these. Real problem." style="padding:4px 12px;border-radius:14px;border:1px solid #fca5a5;background:#fee2e2;color:#991b1b;font-size:11.5px;cursor:pointer;font-weight:600;">⚠ Missing alt <span style="font-weight:400;">${missing}</span></button>` : ''}
+        ${emptyLink ? `<button type="button" class="sc-ai-chip" data-filter="empty in link" onclick="_scAllImagesFilter('empty in link')" title="alt=&quot;&quot; on a clickable image — screen reader has nothing to announce. Real problem." style="padding:4px 12px;border-radius:14px;border:1px solid #fca5a5;background:#fee2e2;color:#991b1b;font-size:11.5px;cursor:pointer;font-weight:600;">⚠ Empty alt in link <span style="font-weight:400;">${emptyLink}</span></button>` : ''}
+        ${emptyDeco ? `<button type="button" class="sc-ai-chip" data-filter="empty" onclick="_scAllImagesFilter('empty')" title="alt=&quot;&quot; on a non-link image — CORRECT pattern for purely decorative images. Not a problem." style="padding:4px 12px;border-radius:14px;border:1px solid #fcd34d;background:#fef3c7;color:#92400e;font-size:11.5px;cursor:pointer;font-weight:600;">Decorative (alt="") <span style="font-weight:400;">${emptyDeco}</span></button>` : ''}
+        ${present ? `<button type="button" class="sc-ai-chip" data-filter="present" onclick="_scAllImagesFilter('present')" title="Has meaningful alt text. Already fine — review the wording." style="padding:4px 12px;border-radius:14px;border:1px solid #bbf7d0;background:#dcfce7;color:#166534;font-size:11.5px;cursor:pointer;font-weight:600;">Has alt <span style="font-weight:400;">${present}</span></button>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">
+          <button type="button" onclick="_scCopyAllImages()" title="Copy Image src → Alt → Page URLs as TSV (paste into Sheets/Excel)" style="padding:5px 12px;font-size:11.5px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:pointer;color:var(--text);">Copy as TSV</button>
+        </div>
+      </div>
+      <details style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">
+        <summary style="cursor:pointer;user-select:none;">What's the difference between "missing alt" and "empty alt"?</summary>
+        <div style="padding:6px 0 0 14px;line-height:1.55;">
+          <div><b style="color:#991b1b;">Missing alt</b> — the <code>&lt;img&gt;</code> has no <code>alt</code> attribute at all. HTML5 violation. Google can't read the image, screen readers announce the filename. <b>Always fix.</b></div>
+          <div style="margin-top:4px;"><b style="color:#92400e;">Empty alt (decorative)</b> — <code>alt=""</code> on a non-link image. <b>This is the CORRECT pattern</b> for purely decorative images. Tells screen readers to skip. Listed so you can spot ones that should actually have alt text.</div>
+          <div style="margin-top:4px;"><b style="color:#991b1b;">Empty alt in link</b> — <code>alt=""</code> on an <code>&lt;a&gt;</code>/<code>&lt;button&gt;</code> with no other text. The link has no accessible name at all. <b>Always fix.</b></div>
+        </div>
+      </details>
+    </div>
+    <table id="sc-all-images-table" style="width:100%;border-collapse:collapse;font-size:.78rem;">
+      <colgroup>
+        <col style="width:90px"><col style="width:340px"><col style="width:380px"><col>
+      </colgroup>
+      <thead>
+        <tr style="background:var(--surface);position:sticky;top:0;">
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">Preview</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">Image src</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">Alt text</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">Page${groups.some(g => g.pages.length > 1) ? '(s)' : ''} where used</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${groups.map(g => {
+          const first = g.pages[0];
+          const safeSrc = escapeHtml(g.src);
+          const altHtml = _altCellHtml(first.classification, first.alt);
+          const pagesHtml = g.pages.length === 1
+            ? `<a href="${escapeHtml(first.url)}" target="_blank" style="color:var(--accent);">${escapeHtml(first.url)}</a>${typeof _scOpenIcon === 'function' ? _scOpenIcon(first.url) : ''}`
+            : `<details style="margin:0;"><summary style="cursor:pointer;color:var(--text);"><b>${g.pages.length}</b> pages — <span style="color:var(--text-muted);">click to expand</span></summary>${g.pages.map(p => `<div style="font-size:.72rem;padding:3px 0;border-top:1px dashed var(--border);margin-top:4px;"><a href="${escapeHtml(p.url)}" target="_blank" style="color:var(--accent);">${escapeHtml(p.url)}</a><div style="color:var(--text-muted);margin-top:2px;">alt: ${_altCellHtml(p.classification, p.alt)}</div></div>`).join('')}</details>`;
+          return `
+            <tr data-src="${safeSrc}" data-cls="${escapeHtml(first.classification || 'present')}" style="border-bottom:1px solid var(--border);">
+              <td style="text-align:center;padding:4px;"><img src="${safeSrc}" alt="" loading="lazy" style="max-width:80px;max-height:80px;border-radius:3px;border:1px solid var(--border);background:#fff;" onerror="this.style.opacity='.3';this.title='Failed to load';" /></td>
+              <td title="${safeSrc}" style="padding:6px 10px;word-break:break-all;white-space:normal;"><a href="${safeSrc}" target="_blank" style="color:var(--accent);">${safeSrc}</a></td>
+              <td title="${escapeHtml(first.alt || '')}" style="padding:6px 10px;white-space:normal;">${altHtml}</td>
+              <td style="padding:6px 10px;white-space:normal;">${pagesHtml}</td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  main.appendChild(panel);
+}
+
+// Toggle row visibility on the All Images panel by alt classification.
+function _scAllImagesFilter(want) {
+  const tbody = document.querySelector('#sc-all-images-table tbody');
+  if (!tbody) return;
+  tbody.querySelectorAll('tr[data-cls]').forEach(tr => {
+    tr.style.display = (want === 'all' || tr.dataset.cls === want) ? '' : 'none';
+  });
+  document.querySelectorAll('.sc-ai-chip').forEach(b => {
+    const isActive = b.dataset.filter === want;
+    b.classList.toggle('sc-ai-chip-active', isActive);
+    if (isActive) {
+      b.style.background = 'var(--text)';
+      b.style.color = 'var(--surface)';
+      b.style.borderColor = 'var(--text)';
+    } else {
+      const f = b.dataset.filter;
+      const restore = {
+        'all':           { bg:'var(--surface)', fg:'var(--text)', bd:'var(--border)' },
+        'missing':       { bg:'#fee2e2', fg:'#991b1b', bd:'#fca5a5' },
+        'empty in link': { bg:'#fee2e2', fg:'#991b1b', bd:'#fca5a5' },
+        'empty':         { bg:'#fef3c7', fg:'#92400e', bd:'#fcd34d' },
+        'present':       { bg:'#dcfce7', fg:'#166534', bd:'#bbf7d0' },
+      }[f] || { bg:'var(--surface)', fg:'var(--text)', bd:'var(--border)' };
+      b.style.background = restore.bg;
+      b.style.color = restore.fg;
+      b.style.borderColor = restore.bd;
+    }
+  });
+}
+
+// Copy "src \t alt \t classification \t pages" TSV — pastes cleanly into Sheets.
+function _scCopyAllImages() {
+  const lines = ['Image src\tAlt\tClassification\tPage URLs'];
+  const bySrc = new Map();
+  for (const r of (crawlerResults || [])) {
+    const data = Array.isArray(r.images_all_data) ? r.images_all_data : [];
+    for (const img of data) {
+      if (!img || !img.src) continue;
+      if (typeof _isThirdPartyWidgetImage === 'function' && _isThirdPartyWidgetImage(img.src)) continue;
+      let e = bySrc.get(img.src);
+      if (!e) { e = { src: img.src, alt: img.alt, cls: img.classification, pages: [] }; bySrc.set(img.src, e); }
+      e.pages.push(r.url || '');
+    }
+  }
+  for (const e of bySrc.values()) {
+    const altCell = e.alt == null ? '' : String(e.alt).replace(/\t/g, ' ').replace(/\n/g, ' ');
+    lines.push(`${e.src}\t${altCell}\t${e.cls || ''}\t${e.pages.join(' | ')}`);
+  }
+  navigator.clipboard.writeText(lines.join('\n')).then(
+    () => { try { showToast(`Copied ${bySrc.size} image rows as TSV.`, 'success'); } catch {} },
+    () => { try { showToast('Clipboard write failed.', 'error'); } catch {} }
+  );
+}
 
 // Per-page schema breakdown: every crawled page with its schema-type
 // chips, plus an aggregate "type X appears on Y pages" header. Helps
@@ -1526,15 +1747,401 @@ function updateCounts() {
       r => !r.error && Array.isArray(r.schema_types) && r.schema_types.length
     ).length;
   }
+  // __all_images count: total unique image srcs across the crawl, with
+  // third-party widget images filtered out. Mirrors the panel's row count.
+  if ('__all_images' in counts) {
+    const seen = new Set();
+    for (const r of (crawlerResults || [])) {
+      const data = Array.isArray(r.images_all_data) ? r.images_all_data : [];
+      for (const img of data) {
+        if (!img || !img.src) continue;
+        if (typeof _isThirdPartyWidgetImage === 'function' && _isThirdPartyWidgetImage(img.src)) continue;
+        seen.add(img.src);
+      }
+    }
+    counts.__all_images = seen.size;
+  }
 
   document.querySelectorAll('.ci-count, .sev-num').forEach(el => {
     const k = el.dataset.count;
     if (k in counts) el.textContent = counts[k];
   });
+  // Re-sort the sidebar so red errors with hits float to the top of each
+  // section, amber warnings next, then "all clear ✓" rows last.
+  _sortIssueSidebar();
+}
+
+// Re-order .ci-cat rows within each section of the Issues sidebar so the user
+// sees actionable items first. Section labels (.cat-label, .ci-section-header,
+// or inline-styled <div>) act as boundaries; rows are shuffled WITHIN each
+// run, preserving the section structure.
+//
+// Sort tiers (lower = earlier):
+//   0  err   + count > 0   (sorted desc by count)
+//   1  warn  + count > 0   (sorted desc by count)
+//   2  neutral + count > 0  (preserve original order)
+//   3  err/warn + count = 0  (preserve order, marked data-clean for green tick)
+//   4  neutral + count = 0  (preserve original order)
+//
+// Inline display:none stays sticky — sitemap/near-dup rows that aren't
+// applicable yet are excluded so they don't shuffle when toggled later.
+function _sortIssueSidebar() {
+  const root = document.getElementById('issues-sidebar');
+  if (!root) return;
+  const isSectionLabel = (el) => {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.classList.contains('cat-label')) return true;
+    if (el.classList.contains('ci-section-header')) return true;
+    // Inline-styled section heading: a <div> with no .ci-cat / .sev-grid.
+    if (el.tagName === 'DIV' &&
+        !el.classList.contains('ci-cat') &&
+        !el.classList.contains('sev-grid') &&
+        !el.classList.contains('sitemap-status') &&
+        !el.querySelector('input, button, .sev-cell')) {
+      const txt = (el.textContent || '').trim();
+      return !!txt && !el.querySelector('.ci-cat');
+    }
+    return false;
+  };
+  const sevOf = (catEl) => {
+    const c = catEl.querySelector('.ci-count');
+    if (!c) return 'neutral';
+    if (c.classList.contains('err'))  return 'red';
+    if (c.classList.contains('warn')) return 'amber';
+    return 'neutral';
+  };
+  const countOf = (catEl) => {
+    const c = catEl.querySelector('.ci-count');
+    const t = c ? (c.textContent || '').trim() : '';
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const kids = Array.from(root.children);
+  const runs = [];
+  let current = null;
+  kids.forEach((el, i) => {
+    if (isSectionLabel(el)) {
+      if (current) runs.push(current);
+      current = { afterIdx: i, items: [] };
+      return;
+    }
+    if (!el.classList || !el.classList.contains('ci-cat')) {
+      if (current) runs.push(current);
+      current = null;
+      return;
+    }
+    if (el.style && el.style.display === 'none') return;
+    if (el.dataset.cat === 'all') return;
+    if (!current) current = { afterIdx: -1, items: [] };
+    current.items.push(el);
+  });
+  if (current) runs.push(current);
+
+  for (const run of runs) {
+    if (!run.items || run.items.length < 2) {
+      (run.items || []).forEach(el => {
+        const sev = sevOf(el);
+        const n = countOf(el);
+        if (n === 0 && (sev === 'red' || sev === 'amber')) el.dataset.clean = 'true';
+        else delete el.dataset.clean;
+      });
+      continue;
+    }
+    const decorated = run.items.map((el, origIdx) => {
+      const sev = sevOf(el);
+      const n = countOf(el);
+      let tier;
+      if (n > 0 && sev === 'red')   tier = 0;
+      else if (n > 0 && sev === 'amber') tier = 1;
+      else if (n > 0)               tier = 2;
+      else if (sev === 'red' || sev === 'amber') tier = 3;
+      else                          tier = 4;
+      if (n === 0 && (sev === 'red' || sev === 'amber')) el.dataset.clean = 'true';
+      else delete el.dataset.clean;
+      return { el, tier, count: n, origIdx };
+    });
+    decorated.sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      if (a.tier <= 1) return b.count - a.count;
+      return a.origIdx - b.origIdx;
+    });
+    const anchor = run.afterIdx >= 0 ? root.children[run.afterIdx] : null;
+    let cursor = anchor;
+    for (const { el } of decorated) {
+      if (cursor && cursor.nextSibling !== el) {
+        root.insertBefore(el, cursor.nextSibling);
+      } else if (!cursor && root.firstChild !== el) {
+        root.insertBefore(el, root.firstChild);
+      }
+      cursor = el;
+    }
+  }
 }
 
 function stopCrawl() {
   if (crawlerAbort) crawlerAbort.abort();
+}
+
+// =============================================================================
+// Per-tab Export view + multi-sheet .xlsx workbook export.
+// =============================================================================
+// Mirrors internal-tool's _buildExportForCategory dispatcher: every supported
+// crawler tab gets a CSV that's shaped for that tab. Categories absent from
+// site-crawler's UI (no __inlinks/__anchors/__all_titles/__all_metas/
+// __all_h1s/__all_canonicals/__redir_chains/__orphans/__response_codes) are
+// not handled — the dispatcher falls through to the page-level summary.
+
+function _scCsvCell(v) {
+  const s = (v === undefined || v === null) ? '' : String(v);
+  return '"' + s.replace(/"/g, '""') + '"';
+}
+
+function _scExportFilename(prefix, domain, ext) {
+  const safeDomain = (domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/[^a-zA-Z0-9.-]/g, '');
+  const today = new Date();
+  const ts = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}-${String(today.getHours()).padStart(2,'0')}${String(today.getMinutes()).padStart(2,'0')}`;
+  return [prefix, safeDomain, ts].filter(Boolean).join('-') + '.' + ext;
+}
+
+function _buildExportForCategory(cat) {
+  if (!Array.isArray(crawlerResults) || !crawlerResults.length) return null;
+
+  // All Images — every meaningful <img>, one row per (page, image)
+  if (cat === '__all_images') {
+    const rows = [];
+    for (const r of crawlerResults) {
+      const data = Array.isArray(r.images_all_data) ? r.images_all_data : [];
+      for (const img of data) {
+        if (!img || !img.src) continue;
+        if (typeof _isThirdPartyWidgetImage === 'function' && _isThirdPartyWidgetImage(img.src)) continue;
+        rows.push([
+          r.url || '',
+          img.src || '',
+          (img.alt === undefined || img.alt === null) ? '' : img.alt,
+          img.classification || '',
+          r.title || '',
+          r.h1 || '',
+        ]);
+      }
+    }
+    return { header: ['Page URL', 'Image Src', 'Alt', 'Classification', 'Page Title', 'Page H1'], rows };
+  }
+
+  // Sitemap reports
+  if (cat.startsWith('__sm_')) {
+    const map = {
+      '__sm_missing':   'missing_from_sitemap',
+      '__sm_orphan':    'orphan_in_sitemap',
+      '__sm_only':      'sitemap_only',
+      '__sm_noindex':   'non_indexable_in_sitemap',
+      '__sm_non200':    'non_200_in_sitemap',
+      '__sm_redirects': 'redirects_in_sitemap',
+      '__sm_pagination':'pagination_in_sitemap',
+    };
+    const reports = (crawlerSitemap && crawlerSitemap.reports) || {};
+    const items = reports[map[cat]] || [];
+    const rows = items.map(it => {
+      if (typeof it === 'string') return [it, '', '', ''];
+      return [
+        it.url || '',
+        it.status_code || '',
+        it.lastmod || '',
+        it.redirects_to || it.reason || '',
+      ];
+    });
+    return { header: ['URL', 'Status', 'Lastmod', 'Notes'], rows };
+  }
+
+  // Near-duplicate content pairs
+  if (cat === '__nd_content') {
+    const pairs = window._ndPairs || [];
+    const rows = pairs.map(p => [
+      p.url_a || '',
+      p.url_b || '',
+      Math.round((p.similarity || 0) * 100),
+      p.shared_phrase_sample || '',
+    ]);
+    return { header: ['URL A', 'URL B', 'Similarity %', 'Shared Sample'], rows };
+  }
+
+  // Schema by page
+  if (cat === '__schema_by_page') {
+    const rows = crawlerResults
+      .filter(r => !r.error)
+      .map(r => [
+        r.url || '',
+        Array.isArray(r.schema_types) ? r.schema_types.join(', ') : '',
+        Array.isArray(r.schema_types) ? r.schema_types.length : 0,
+        r.status_code || '',
+      ]);
+    return { header: ['URL', 'Schema Types', 'Count', 'Status'], rows };
+  }
+
+  // Sitemap visualisation is a tree, not tabular — caller already hides btn.
+  if (cat === '__sitemap_viz') return null;
+
+  // Default: page-level summary using matchesCategory.
+  const filtered = (cat === 'all')
+    ? crawlerResults.slice()
+    : crawlerResults.filter(d => (typeof matchesCategory === 'function') ? matchesCategory(d, cat) : true);
+  const header = ['URL', 'Status', 'Title', 'Title Length', 'Meta Description', 'Meta Length', 'H1', 'Word Count', 'Response (s)', 'Issues'];
+  const rows = filtered.map(d => [
+    d.url || '',
+    d.status_code || '',
+    d.title || '',
+    d.title_len || 0,
+    d.meta_description || '',
+    d.meta_len || 0,
+    d.h1 || '',
+    d.word_count || 0,
+    d.response_time || '',
+    (d.issues || []).join(' | '),
+  ]);
+  return { header, rows };
+}
+
+function _crawlerExportViewLabel(cat, n) {
+  const labels = {
+    '__all_images':    `Export view (${n} image${n===1?'':'s'})`,
+    '__sm_missing':    `Export view (${n} missing-from-sitemap)`,
+    '__sm_orphan':     `Export view (${n} orphan-in-sitemap)`,
+    '__sm_only':       `Export view (${n} sitemap-only orphan${n===1?'':'s'})`,
+    '__sm_noindex':    `Export view (${n} noindex in sitemap)`,
+    '__sm_non200':     `Export view (${n} non-200 in sitemap)`,
+    '__sm_redirects':  `Export view (${n} redirect${n===1?'':'s'} in sitemap)`,
+    '__sm_pagination': `Export view (${n} pagination URL${n===1?'':'s'} in sitemap)`,
+    '__nd_content':    `Export view (${n} near-dup pair${n===1?'':'s'})`,
+    '__schema_by_page':`Export view (${n} schema row${n===1?'':'s'})`,
+  };
+  return labels[cat] || `Export view (${n} row${n===1?'':'s'})`;
+}
+
+function _refreshCrawlerExportViewBtn() {
+  const btn = document.getElementById('crawler-export-view-btn');
+  if (!btn) return;
+  if (!Array.isArray(crawlerResults) || !crawlerResults.length) {
+    btn.style.display = 'none';
+    return;
+  }
+  const cat = (typeof activeCategory === 'string') ? activeCategory : 'all';
+  if (cat === 'all') { btn.style.display = 'none'; return; } // covered by .xlsx
+  if (cat === '__sitemap_viz') { btn.style.display = 'none'; return; }
+  const built = _buildExportForCategory(cat);
+  if (!built || !built.rows.length) { btn.style.display = 'none'; return; }
+  btn.style.display = 'inline-flex';
+  const label = btn.querySelector('span') || btn;
+  label.textContent = _crawlerExportViewLabel(cat, built.rows.length);
+}
+
+async function exportCrawlerView() {
+  if (!crawlerResults.length) return;
+  const btn = document.getElementById('crawler-export-view-btn');
+  const lbl = btn ? btn.querySelector('span') : null;
+  const orig = lbl ? lbl.textContent : '';
+  if (btn) { btn.disabled = true; if (lbl) lbl.textContent = 'Exporting…'; }
+  try {
+    const cat = (typeof activeCategory === 'string') ? activeCategory : 'all';
+    const built = _buildExportForCategory(cat);
+    if (!built || !built.rows.length) {
+      try { showToast('Nothing to export on this view.', 'info'); } catch {}
+      return;
+    }
+    const csv = [built.header, ...built.rows].map(r => r.map(_scCsvCell).join(',')).join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const slug = (cat || 'view').replace(/^_+/, '').replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'view';
+    let domain = '';
+    try { domain = new URL(crawlerResults[0].url).hostname.replace(/^www\./, ''); } catch {}
+    a.download = _scExportFilename('crawl-' + slug, domain, 'csv');
+    a.click();
+    URL.revokeObjectURL(a.href);
+    try { showToast(`Exported ${built.rows.length} row${built.rows.length===1?'':'s'}`, 'success'); } catch {}
+  } catch (e) {
+    console.error('[exportCrawlerView]', e);
+    try { showToast('Export failed', 'error'); } catch {}
+  } finally {
+    if (btn) { btn.disabled = false; if (lbl) lbl.textContent = orig; }
+  }
+}
+
+async function exportCrawlerXlsx() {
+  if (!crawlerResults.length) return;
+  const btn = document.getElementById('crawler-export-xlsx-btn');
+  const lbl = btn ? btn.querySelector('span') : null;
+  if (btn) { btn.disabled = true; if (lbl) lbl.textContent = 'Exporting…'; }
+  try {
+    // Build extra sheets for every supported tab. Mirrors internal-tool's
+    // exportCrawlerXlsx but only with categories site-crawler exposes.
+    const extraSheets = [];
+    const cats = [
+      ['__all_images',    'All Images'],
+      ['__schema_by_page','Schema by Page'],
+      ['__nd_content',    'Near-Duplicate Pairs'],
+    ];
+    for (const [cat, name] of cats) {
+      try {
+        const built = _buildExportForCategory(cat);
+        if (built && built.rows && built.rows.length) {
+          extraSheets.push({ name, header: built.header, rows: built.rows });
+        }
+      } catch (e) { console.warn('[xlsx] skipping', cat, e); }
+    }
+    // Sitemap sub-reports collapse into a single "Sitemap Issues" sheet.
+    if (crawlerSitemap && crawlerSitemap.reports) {
+      const smCats = [
+        ['__sm_missing',    'Missing from sitemap'],
+        ['__sm_orphan',     'Orphan in sitemap'],
+        ['__sm_only',       'Sitemap-only orphan'],
+        ['__sm_noindex',    'Noindex in sitemap'],
+        ['__sm_non200',     'Non-200 in sitemap'],
+        ['__sm_redirects',  'Redirect in sitemap'],
+        ['__sm_pagination', 'Pagination in sitemap'],
+      ];
+      const smRows = [];
+      for (const [cat, label] of smCats) {
+        try {
+          const b = _buildExportForCategory(cat);
+          if (b && b.rows.length) b.rows.forEach(r => smRows.push([label, ...r]));
+        } catch {}
+      }
+      if (smRows.length) {
+        extraSheets.push({
+          name: 'Sitemap Issues',
+          header: ['Issue', 'URL', 'Status', 'Lastmod', 'Notes'],
+          rows: smRows,
+        });
+      }
+    }
+
+    let domain = '';
+    try { domain = new URL(crawlerResults[0].url).hostname.replace(/^www\./, ''); } catch {}
+
+    const resp = await fetch('/export-crawl-xlsx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        results: crawlerResults,
+        domain,
+        extra_sheets: extraSheets,
+      }),
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = _scExportFilename('crawl', domain, 'xlsx');
+    a.click();
+    URL.revokeObjectURL(a.href);
+    const totalRows = extraSheets.reduce((n, s) => n + s.rows.length, 0);
+    try { showToast(`Exported crawl — ${extraSheets.length} extra sheet${extraSheets.length===1?'':'s'} (${totalRows} rows)`, 'success'); } catch {}
+  } catch (e) {
+    console.error('[exportCrawlerXlsx]', e);
+    try { showToast('Export failed: ' + e.message, 'error'); } catch {}
+  } finally {
+    if (btn) { btn.disabled = false; if (lbl) lbl.textContent = '.xlsx'; }
+  }
 }
 
 // Export an XML sitemap of every 200-status indexable URL the crawl found.
@@ -1612,6 +2219,8 @@ function crawlFinished() {
   if (Array.isArray(crawlerResults) && crawlerResults.length) {
     const _smBtn = document.getElementById('crawler-export-sitemap-btn');
     if (_smBtn) _smBtn.style.display = 'inline-flex';
+    const _xBtn = document.getElementById('crawler-export-xlsx-btn');
+    if (_xBtn) _xBtn.style.display = 'inline-flex';
   }
   // Sitemap analysis is opt-in via the 'Sitemap analysis' checkbox.
   if (Array.isArray(crawlerResults) && crawlerResults.length) {
@@ -1710,6 +2319,30 @@ function applyCrawlRules() {
   }).catch(() => {
     if (msg) { msg.textContent = 'Network error.'; msg.style.color = '#dc2626'; }
   });
+}
+
+// Slider hook — updates the label and toggles the under-0.4s warning.
+// While a crawl is running, also pushes the new delay to /crawl/update-rules
+// (debounced 250ms) so the host throttler picks it up before the next request.
+let _crawlerSpeedPushTimer = null;
+function crawlerOnSpeedChange(v) {
+  const lbl = document.getElementById('crawler-speed-label');
+  if (lbl) lbl.textContent = v + 's';
+  const warn = document.getElementById('crawler-delay-warn');
+  if (warn) warn.style.display = parseFloat(v) < 0.4 ? 'block' : 'none';
+  if (!crawlerCrawlId) return;  // not crawling — start payload will carry it
+  if (_crawlerSpeedPushTimer) clearTimeout(_crawlerSpeedPushTimer);
+  _crawlerSpeedPushTimer = setTimeout(() => {
+    const msg = document.getElementById('crawler-apply-rules-msg');
+    fetch('/crawl/update-rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ crawl_id: crawlerCrawlId, crawl_delay: parseFloat(v) }),
+    }).then(r => r.json().then(j => ({ ok: r.ok, body: j }))).then(({ ok, body }) => {
+      if (!ok || !body.ok) return;  // silent — slider is informational, not modal
+      if (msg) { msg.textContent = `Delay updated → ${body.crawl_delay}s (live).`; msg.style.color = '#059669'; }
+    }).catch(() => {});
+  }, 250);
 }
 
 function scFilterByUrl(q) {
@@ -1861,6 +2494,9 @@ function _scSetColumns(cat) {
   if (cat === 'H1 identical to title tag') return show(['url','status','title','h1','issues']);
   if (cat === 'Thin content') return show(['url','status','words','issues']);
   if (cat === 'Slow') return show(['url','status','speed','issues']);
+  // Image alt is image-level, not page-level — page Title is just noise on
+  // this view. Mirrors internal-tool's treatment.
+  if (cat === 'imgs missing alt') return show(['url','status','issues']);
   if (cat !== 'all' && !cat.startsWith('__')) return show(['url','status','title','issues']);
   _scSyncTableWidth();
 }
@@ -2206,6 +2842,7 @@ function loadSavedCrawl(file) {
       const post = document.getElementById('crawler-post-crawl-actions');
       if (post) post.style.display = 'flex';
       { const _smBtn = document.getElementById('crawler-export-sitemap-btn'); if (_smBtn && crawlerResults.length) _smBtn.style.display = 'inline-flex'; }
+      { const _xBtn = document.getElementById('crawler-export-xlsx-btn'); if (_xBtn && crawlerResults.length) _xBtn.style.display = 'inline-flex'; }
       if (typeof updateCounts === 'function') updateCounts();
       if (typeof window.selectCategory === 'function') window.selectCategory('all');
       showToast(`Loaded "${d.name}" · ${crawlerResults.length} pages`, 'success');

@@ -189,6 +189,26 @@ body {
 }
 .ci-count.err { color: #ef4444; }
 .ci-count.warn { color: #f59e0b; }
+
+/* Severity-coded checks that came back clean (count = 0) get tagged
+   data-clean="true" by the sort logic. Render a green tick instead of "0". */
+.ci-cat[data-clean="true"] > span:first-child {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.ci-cat[data-clean="true"] .ci-count {
+  color: #16a34a;
+  font-size: 0;            /* hide the "0" textContent */
+  position: relative;
+}
+.ci-cat[data-clean="true"] .ci-count::before {
+  content: '✓';
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.ci-cat.active[data-clean="true"] .ci-count { color: #fff; }
+.ci-cat.active[data-clean="true"] .ci-count::before { color: #fff; }
 .cat-label {
   font-size: 10px;
   text-transform: uppercase;
