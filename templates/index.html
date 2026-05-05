@@ -43,7 +43,7 @@
       <div class="slider-row">
         <label>Per-host delay: <strong id="crawler-speed-label">0.4s</strong></label>
         <input type="range" id="crawler-speed" min="0" max="3" value="0.4" step="0.1"
-               oninput="(function(v){document.getElementById('crawler-speed-label').textContent=v+'s';var w=document.getElementById('crawler-delay-warn');if(w)w.style.display=parseFloat(v)<0.4?'block':'none';})(this.value)" />
+               oninput="crawlerOnSpeedChange(this.value)" />
         <div id="crawler-delay-warn" style="display:none;margin-top:4px;font-size:11px;color:#b45309;background:#fefce8;border:1px solid #fde68a;border-radius:4px;padding:3px 8px;">Warning: delays below 0.4s may trigger rate limits or blocks on the target server.</div>
       </div>
       <div class="slider-row">
@@ -145,6 +145,7 @@
       <div class="ci-cat" data-cat="H1 same as title" onclick="selectCategory('H1 same as title')"><span>H1 Same as Title</span><span class="ci-count warn" data-count="H1 same as title">0</span></div>
       <div class="ci-cat" data-cat="Missing canonical" onclick="selectCategory('Missing canonical')"><span>Missing Canonical</span><span class="ci-count err" data-count="Missing canonical">0</span></div>
       <div class="ci-cat" data-cat="imgs missing alt" onclick="selectCategory('imgs missing alt')"><span>Images Missing Alt</span><span class="ci-count warn" data-count="imgs missing alt">0</span></div>
+      <div class="ci-cat" data-cat="__all_images" onclick="selectCategory('__all_images')"><span title="Every image found across the crawl, grouped by src — filter by alt-text status">All Images</span><span class="ci-count" data-count="__all_images">0</span></div>
       <div class="ci-cat" data-cat="No schema" onclick="selectCategory('No schema')"><span>No Schema Markup</span><span class="ci-count warn" data-count="No schema">0</span></div>
       <div class="ci-cat" data-cat="__schema_by_page" onclick="selectCategory('__schema_by_page')"><span title="Every crawled page with the schema types it emits">Schema by Page</span><span class="ci-count" data-count="__schema_by_page">0</span></div>
       <div class="ci-cat" data-cat="Thin content" onclick="selectCategory('Thin content')"><span>Thin Content</span><span class="ci-count warn" data-count="Thin content">0</span></div>
@@ -206,6 +207,14 @@
           <button id="crawler-export-sitemap-btn" onclick="exportCrawlerSitemap()" title="Export an XML sitemap of all 200-status indexable pages found in this crawl" style="display:none;align-items:center;gap:5px;padding:4px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:11px;font-weight:600;cursor:pointer;line-height:1;" onmouseover="this.style.borderColor='#0ea5e9';this.style.color='#0ea5e9'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             <span>Sitemap.xml</span>
+          </button>
+          <button id="crawler-export-view-btn" onclick="exportCrawlerView()" title="Export the current view as CSV — shape matches whichever tab you're on (e.g. one row per image on All Images, one row per page on the page-level filters)" style="display:none;align-items:center;gap:5px;padding:4px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:11px;font-weight:600;cursor:pointer;line-height:1;" onmouseover="this.style.borderColor='#0ea5e9';this.style.color='#0ea5e9'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>Export view</span>
+          </button>
+          <button id="crawler-export-xlsx-btn" onclick="exportCrawlerXlsx()" title="Export the entire crawl as a multi-sheet .xlsx workbook (All Pages + Issues + per-tab data sheets)" style="display:none;align-items:center;gap:5px;padding:4px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:11px;font-weight:600;cursor:pointer;line-height:1;" onmouseover="this.style.borderColor='#0ea5e9';this.style.color='#0ea5e9'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span>.xlsx</span>
           </button>
           <div style="display:flex;align-items:center;gap:3px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:3px 8px;">
             <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" style="color:#94a3b8;flex-shrink:0;"><circle cx="9" cy="9" r="6"/><path d="M13.5 13.5L18 18"/></svg>
