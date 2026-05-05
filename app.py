@@ -150,8 +150,11 @@ _DUP_NOISE_PARAMS = frozenset({
 
 
 def _normalize_url_for_dup(url):
-    """Collapse pagination + tracking/ecommerce params so duplicate-meta
-    grouping doesn't fragment a canonical page across its variants."""
+    """Dedup key inside `_group_by`. Strips the entire query string + collapses
+    pagination tails so filter/sort/search variants of the same page (e.g.
+    /faq/ vs /faq/?category=planning) collapse to one entry. The grouper has
+    already bucketed by identical meta/title/H1/body; URLs with truly distinct
+    content sit in different buckets so this can't cause false collapses."""
     if not url:
         return url
     try:
@@ -161,23 +164,7 @@ def _normalize_url_for_dup(url):
     path = parsed.path or '/'
     path = _re.sub(r'/page/\d+/?$', '/', path)
     path = _re.sub(r'/comment-page-\d+/?$', '/', path)
-    if parsed.query:
-        kept = []
-        for kv in parsed.query.split('&'):
-            if not kv:
-                continue
-            k = kv.split('=', 1)[0].lower()
-            if (k in _DUP_NOISE_PARAMS
-                    or k.startswith('utm_')
-                    or k.startswith('pa_')              # WC product attribute filters
-                    or k.startswith('filter_')          # generic filter params
-                    or k.startswith('swoof_')):         # SWOOF internal params
-                continue
-            kept.append(kv)
-        new_q = '&'.join(kept)
-    else:
-        new_q = ''
-    return urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, new_q, ''))
+    return urlunparse((parsed.scheme, parsed.netloc, path, '', '', ''))
 
 
 STATIC_VERSION = str(int(time.time()))
@@ -529,6 +516,63 @@ def _detect_js_platform(html):
             if _re_local.search(pat, sample, _re_local.I):
                 return name
     return None
+
+
+# Third-party widget images the site owner cannot meaningfully add alt text
+# to — reCAPTCHA badges, analytics 1×1 pixels, chat-widget assets, ad-tech
+# beacons. Flagging them as "missing alt" pollutes every page that loads a
+# contact form. Match by hostname OR filename — both routes needed because
+# self-hosted recaptcha-black.svg in a WP theme bypasses the host check.
+# Mirrored from seo-tool/app.py — keep both lists in sync.
+_THIRD_PARTY_IMG_HOSTS = (
+    'gstatic.com',
+    'googletagmanager.com',
+    'google-analytics.com',
+    'googleadservices.com',
+    'doubleclick.net',
+    'static.hotjar.com',
+    'script.hotjar.com',
+    'cdn.intercomcdn.com',
+    'js.intercomcdn.com',
+    'cdn.intercom.io',
+    'widget.crisp.chat',
+    'client.crisp.chat',
+    'static.cloudflareinsights.com',
+    'analytics.tiktok.com',
+    'connect.facebook.net',
+    'i.pinimg.com',
+    'ct.pinterest.com',
+    'hs-analytics.net',
+    'js.hs-scripts.com',
+)
+_THIRD_PARTY_IMG_FILE_RE = _re.compile(
+    r'(?:/recaptcha[/_\-]|recaptcha[_\-](?:black|white|logo)|/g\.gif$|/pixel\.gif$|'
+    r'/spacer\.gif$|/tracking[_\-]pixel|fbq[_\-]pixel|/fb-pixel|/ga-pixel)',
+    _re.I,
+)
+
+
+def _is_third_party_widget_image(abs_src):
+    """Return True for images injected by third-party widgets/trackers.
+
+    The crawler can see these but the site owner cannot meaningfully add alt
+    text — reCAPTCHA logos, analytics 1×1 beacons, chat-widget assets, etc.
+    Filtering them out keeps the 'imgs missing alt' view actionable.
+    """
+    if not abs_src:
+        return False
+    try:
+        from urllib.parse import urlparse as _up
+        host = (_up(abs_src).hostname or '').lower()
+    except Exception:
+        host = ''
+    if host:
+        for h in _THIRD_PARTY_IMG_HOSTS:
+            if host == h or host.endswith('.' + h):
+                return True
+    if _THIRD_PARTY_IMG_FILE_RE.search(abs_src):
+        return True
+    return False
 
 
 def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
@@ -963,8 +1007,10 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         imgs = soup.find_all('img')
         result['images_total'] = len(imgs)
         no_alt_imgs = []          # offending — no alt attr AND not decorative
+        no_alt_data = []          # rich per-image records — feeds the missing-alt detail row
+        all_images_data = []      # every meaningful image on the page — feeds the All Images panel
         empty_alt_count = 0       # <img alt=""> — correct decorative pattern
-        skipped_decorative = 0    # skipped via heuristics (tracking px, aria-hidden, labeled parent)
+        skipped_decorative = 0    # skipped via heuristics (tracker px, aria-hidden, widgets, labeled parent)
 
         def _has_accessible_name(node):
             """Whether a parent link/button carries its own accessible name —
@@ -982,45 +1028,94 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
 
         for img in imgs:
             alt_attr = img.get('alt')  # None if missing, '' if empty, str otherwise
-            # Explicit empty alt — the correct decorative pattern. Count but don't flag.
+            src = img.get('src', '') or img.get('data-src', '') or ''
+
+            # Decorative / non-content filters — applied to BOTH the
+            # missing-alt list and the All Images list. We don't want
+            # tracking pixels or hidden spacers polluting either view.
+            aria_hidden = (img.get('aria-hidden') or '').lower() == 'true'
+            role = (img.get('role') or '').lower()
+            w = (img.get('width') or '').strip()
+            h = (img.get('height') or '').strip()
+            is_hidden = aria_hidden or role in ('presentation', 'none')
+            is_tracker = w in ('1', '0') or h in ('1', '0')
+            is_data_uri = src.startswith('data:')
+
+            if is_hidden or is_tracker or is_data_uri or not src:
+                if alt_attr == '':
+                    empty_alt_count += 1
+                else:
+                    skipped_decorative += 1
+                continue
+
+            # Resolve against the post-redirect URL so an http→https
+            # redirect doesn't produce phantom http image URLs.
+            _img_base = (getattr(resp, 'url', None) or url) if resp is not None else url
+            abs_src = urljoin(_img_base, src)
+
+            # Third-party widget filter — reCAPTCHA badges, analytics pixels,
+            # chat widgets etc. The site owner can't write alt text for them
+            # and they pollute every page that has a contact form.
+            if _is_third_party_widget_image(abs_src):
+                skipped_decorative += 1
+                continue
+
+            # Capture parent + surrounding once per image — used by both
+            # the missing-alt detail row and the All Images panel.
+            _ptag = img.find_parent(['a', 'button', 'figure'])
+            _ptag_name = _ptag.name if _ptag else ''
+            _ptext = (_ptag.get_text(separator=' ', strip=True)[:200]
+                      if _ptag else '')
+            _block = img.find_parent(['p', 'div', 'section', 'article', 'figure', 'li'])
+            _surrounding = (_block.get_text(separator=' ', strip=True)[:400]
+                            if _block else '')
+            if alt_attr is None:
+                _classification = 'missing'
+            elif alt_attr.strip() == '':
+                _classification = 'empty in link' if _ptag_name in ('a', 'button') else 'empty'
+            else:
+                _classification = 'present'
+
+            # Record into All Images (every meaningful image, capped at 50/page).
+            if len(all_images_data) < 50:
+                all_images_data.append({
+                    'src': abs_src,
+                    'alt': alt_attr,
+                    'classification': _classification,
+                    'parent_tag': _ptag_name,
+                    'parent_text': _ptext,
+                    'surrounding': _surrounding,
+                })
+
+            # Branch into the existing alt-correctness counters/lists.
             if alt_attr == '':
                 empty_alt_count += 1
                 continue
             if alt_attr is not None and alt_attr.strip():
                 continue  # Has meaningful alt — good
 
-            # alt is missing entirely. Apply filters before flagging.
-            # Hidden / decorative hints
-            aria_hidden = (img.get('aria-hidden') or '').lower() == 'true'
-            role = (img.get('role') or '').lower()
-            if aria_hidden or role in ('presentation', 'none'):
-                skipped_decorative += 1
-                continue
-            # 1x1 tracking pixels
-            w = (img.get('width') or '').strip()
-            h = (img.get('height') or '').strip()
-            if w in ('1', '0') or h in ('1', '0'):
-                skipped_decorative += 1
-                continue
-            # Data URIs (usually inline SVG icons or tiny spacers)
-            src = img.get('src', '') or img.get('data-src', '') or ''
-            if src.startswith('data:'):
-                skipped_decorative += 1
-                continue
-            # Image inside a link/button that already has accessible text
+            # alt is missing entirely. Skip if the parent link/button
+            # already carries the accessible name.
             parent_interactive = img.find_parent(['a', 'button'])
             if parent_interactive and _has_accessible_name(parent_interactive):
                 skipped_decorative += 1
                 continue
 
-            if src:
-                # Resolve against the post-redirect URL so an http→https
-                # redirect doesn't produce phantom http image URLs.
-                _img_base = (getattr(resp, 'url', None) or url) if resp is not None else url
-                no_alt_imgs.append(urljoin(_img_base, src))
+            no_alt_imgs.append(abs_src)
+            if len(no_alt_data) < 20:
+                no_alt_data.append({
+                    'src': abs_src,
+                    'alt': alt_attr,
+                    'classification': _classification,
+                    'parent_tag': _ptag_name,
+                    'parent_text': _ptext,
+                    'surrounding': _surrounding,
+                })
 
         result['images_no_alt'] = len(no_alt_imgs)
         result['images_no_alt_urls'] = no_alt_imgs[:20]  # cap at 20 per page
+        result['images_no_alt_data'] = no_alt_data       # rich per-image records (cap 20)
+        result['images_all_data']    = all_images_data   # every meaningful img (cap 50) — feeds All Images panel
         result['images_empty_alt'] = empty_alt_count
         result['images_decorative_skipped'] = skipped_decorative
 
@@ -1807,9 +1902,12 @@ def crawl_site():
         if not raw: return []
         return [p.strip() for p in raw.splitlines() if p.strip() and not p.strip().startswith('#')]
     crawl_id = _uuid.uuid4().hex[:12]
+    # crawl_delay also lives here so /crawl/update-rules can mutate it mid-crawl
+    # (the slider in the UI auto-pushes the new value while a crawl is running).
     ACTIVE_CRAWL_RULES[crawl_id] = {
         'include': _parse_patterns(data.get('include_patterns', '')),
         'exclude': _parse_patterns(data.get('exclude_patterns', '')),
+        'crawl_delay': crawl_delay,
     }
     ACTIVE_CRAWL_LIMITS[crawl_id] = {
         'max_pages': max_pages,
@@ -1974,13 +2072,18 @@ def crawl_site():
         host_backoff = {}  # host → multiplier for adaptive slow-down on 429/403
 
         def _wait_host_turn(u):
+            # Reads crawl_delay live from ACTIVE_CRAWL_RULES so the slider in
+            # the UI can change politeness mid-crawl. Falls back to the local
+            # if the rules entry has been cleared (post-stop / cleanup).
             host = _up(u).netloc
             while True:
+                _live = (ACTIVE_CRAWL_RULES.get(crawl_id) or {}).get('crawl_delay')
+                live_delay = float(_live) if _live is not None else crawl_delay
                 with host_lock:
                     now = time.time()
                     last = host_last_fetch.get(host, 0)
                     backoff = host_backoff.get(host, 1.0)
-                    effective_delay = crawl_delay * backoff
+                    effective_delay = live_delay * backoff
                     wait = (last + effective_delay) - now
                     if wait <= 0:
                         host_last_fetch[host] = now
@@ -2637,11 +2740,17 @@ def crawl_compare():
 
 @app.route('/crawl/update-rules', methods=['POST'])
 def crawl_update_rules():
-    """Apply new include/exclude patterns to a crawl that's already running.
+    """Apply new include/exclude patterns AND/OR per-host delay to a crawl
+    that's already running.
+
+    Merges into the existing entry — fields not present in the payload keep
+    their current value. The slider can push only `crawl_delay` without
+    blowing away the patterns; the patterns Apply button can push only
+    include/exclude without resetting the delay.
 
     The crawl_id is issued in the 'start' SSE event. Patterns use robots.txt
-    syntax (Google's spec): ``*`` is any sequence, ``$`` at end anchors end of
-    URL, everything else is literal (including ``?``).
+    syntax: ``*`` is any sequence, ``$`` at end anchors end of URL, everything
+    else is literal (including ``?``).
     """
     payload = request.get_json(silent=True) or {}
     crawl_id = (payload.get('crawl_id') or '').strip()
@@ -2653,11 +2762,29 @@ def crawl_update_rules():
             return []
         return [p.strip() for p in raw.splitlines() if p.strip() and not p.strip().startswith('#')]
 
-    new_excl = _parse(payload.get('exclude_patterns', ''))
-    new_incl = _parse(payload.get('include_patterns', ''))
-    ACTIVE_CRAWL_RULES[crawl_id] = {'include': new_incl, 'exclude': new_excl}
-    app.logger.info(f"[crawler] {crawl_id} rules updated: {len(new_excl)} exclude, {len(new_incl)} include")
-    return jsonify({'ok': True, 'exclude': new_excl, 'include': new_incl})
+    current = ACTIVE_CRAWL_RULES.get(crawl_id) or {}
+    if 'exclude_patterns' in payload:
+        current['exclude'] = _parse(payload.get('exclude_patterns', ''))
+    if 'include_patterns' in payload:
+        current['include'] = _parse(payload.get('include_patterns', ''))
+    if 'crawl_delay' in payload:
+        try:
+            current['crawl_delay'] = max(float(payload.get('crawl_delay')), 0.0)
+        except (TypeError, ValueError):
+            return jsonify({'ok': False, 'error': 'crawl_delay must be numeric'}), 400
+    ACTIVE_CRAWL_RULES[crawl_id] = current
+    app.logger.info(
+        f"[crawler] {crawl_id} rules updated: "
+        f"{len(current.get('exclude') or [])} exclude, "
+        f"{len(current.get('include') or [])} include, "
+        f"delay={current.get('crawl_delay')}s"
+    )
+    return jsonify({
+        'ok': True,
+        'exclude': current.get('exclude') or [],
+        'include': current.get('include') or [],
+        'crawl_delay': current.get('crawl_delay'),
+    })
 
 
 @app.route('/crawl/resumable', methods=['GET'])
@@ -2713,6 +2840,169 @@ def crawl_continue():
         ev.set()
     app.logger.info(f"[crawler] {crawl_id} {action}: max_pages={state.get('max_pages')}, bumps={state.get('bumps')}")
     return jsonify({'ok': True, 'max_pages': state.get('max_pages'), 'finalize': state.get('finalize'), 'bumps': state.get('bumps')})
+
+
+@app.route('/export-crawl-xlsx', methods=['POST'])
+def export_crawl_xlsx():
+    """Export crawl results as a styled .xlsx workbook.
+
+    Sheet 1 = All Pages (every URL, key SEO fields, color-coded status/speed).
+    Sheet 2 = Issues Summary (issue text → page count → sample URLs).
+    Sheet 3+ = whatever the client supplied in `extra_sheets` (built by
+    `_buildExportForCategory` on the frontend so each tab gets the shape it
+    actually shows). Mirrors seo-tool's export-crawl-xlsx route but without
+    the Claude-specific bits.
+    """
+    import io as _io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    data = request.json or {}
+    results = data.get('results', [])
+    domain = data.get('domain', 'site')
+
+    if not results:
+        return jsonify({'error': 'No results to export'}), 400
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'All Pages'
+
+    headers = ['URL', 'Status', 'Title', 'Title Len', 'Meta Description', 'Meta Len',
+               'H1', 'Words', 'Canonical', 'Indexable', 'Int Links', 'Ext Links',
+               'Images', 'Alt Missing', 'Schema', 'Speed (s)', 'Depth', 'Issues']
+
+    header_font = Font(name='Calibri', bold=True, size=11, color='FFFFFF')
+    header_fill = PatternFill(start_color='6B5CE7', end_color='6B5CE7', fill_type='solid')
+    cell_font = Font(name='Calibri', size=10)
+    thin_border = Border(
+        left=Side(style='thin', color='D0D0D0'), right=Side(style='thin', color='D0D0D0'),
+        top=Side(style='thin', color='D0D0D0'), bottom=Side(style='thin', color='D0D0D0'),
+    )
+    green_fill = PatternFill(start_color='DCFCE7', end_color='DCFCE7', fill_type='solid')
+    amber_fill = PatternFill(start_color='FEF3C7', end_color='FEF3C7', fill_type='solid')
+    red_fill   = PatternFill(start_color='FEE2E2', end_color='FEE2E2', fill_type='solid')
+
+    for ci, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=ci, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = thin_border
+
+    for ri, r in enumerate(results, 2):
+        vals = [
+            r.get('url', ''), r.get('status_code', 0), r.get('title', ''), r.get('title_len', 0),
+            r.get('meta_description', ''), r.get('meta_len', 0), r.get('h1', ''),
+            r.get('word_count', 0), r.get('canonical', ''),
+            'Yes' if r.get('indexable', True) else 'No',
+            r.get('internal_links', 0), r.get('external_links', 0),
+            r.get('images_total', 0), r.get('images_no_alt', 0),
+            ', '.join(r.get('schema_types', [])[:3]),
+            r.get('response_time', 0), r.get('depth', 0),
+            '; '.join(r.get('issues', []))
+        ]
+        for ci, v in enumerate(vals, 1):
+            cell = ws.cell(row=ri, column=ci, value=v)
+            cell.font = cell_font
+            cell.border = thin_border
+        status = r.get('status_code', 0)
+        sc = ws.cell(row=ri, column=2)
+        if 200 <= status < 300: sc.fill = green_fill
+        elif 300 <= status < 400: sc.fill = amber_fill
+        elif status >= 400: sc.fill = red_fill
+        speed = r.get('response_time', 0)
+        sp = ws.cell(row=ri, column=16)
+        if speed <= 1: sp.fill = green_fill
+        elif speed <= 3: sp.fill = amber_fill
+        else: sp.fill = red_fill
+
+    for col in ws.columns:
+        max_len = 0
+        letter = col[0].column_letter
+        for cell in col:
+            if cell.value:
+                max_len = max(max_len, min(len(str(cell.value)), 60))
+        ws.column_dimensions[letter].width = max_len + 3
+    ws.freeze_panes = 'A2'
+
+    # Sheet 2: Issues Summary
+    ws2 = wb.create_sheet('Issues Summary')
+    for ci, h in enumerate(['Issue', 'Count', 'Pages'], 1):
+        cell = ws2.cell(row=1, column=ci, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+    issue_map = {}
+    for r in results:
+        for issue in r.get('issues', []):
+            base = issue.split('(')[0].strip()
+            issue_map.setdefault(base, []).append(r.get('url', ''))
+    for ri, (issue, urls) in enumerate(sorted(issue_map.items(), key=lambda x: -len(x[1])), 2):
+        ws2.cell(row=ri, column=1, value=issue).font = cell_font
+        ws2.cell(row=ri, column=2, value=len(urls)).font = Font(name='Calibri', size=10, bold=True)
+        ws2.cell(row=ri, column=3, value='; '.join(urls[:10])).font = cell_font
+    ws2.column_dimensions['A'].width = 30
+    ws2.column_dimensions['B'].width = 8
+    ws2.column_dimensions['C'].width = 80
+
+    # Sheets 3+ — whatever the client built. {name, header, rows}.
+    extra = data.get('extra_sheets') or []
+    used_names = {ws.title, ws2.title}
+    def _safe_sheet_name(n):
+        s = _re.sub(r'[:\\/\?\*\[\]]', '-', str(n or 'Sheet'))[:31].strip() or 'Sheet'
+        if s in used_names:
+            base = s[:28]
+            i = 2
+            while f'{base} {i}' in used_names and i < 99:
+                i += 1
+            s = f'{base} {i}'
+        used_names.add(s)
+        return s
+    for sheet in extra:
+        name = _safe_sheet_name(sheet.get('name') or 'Sheet')
+        header = sheet.get('header') or []
+        rows = sheet.get('rows') or []
+        if not header and not rows:
+            continue
+        ws_e = wb.create_sheet(name)
+        for ci, h in enumerate(header, 1):
+            cell = ws_e.cell(row=1, column=ci, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = thin_border
+        for ri, r in enumerate(rows, 2):
+            for ci, v in enumerate(r, 1):
+                if isinstance(v, (list, tuple)):
+                    v = ', '.join(str(x) for x in v)
+                elif isinstance(v, dict):
+                    v = json.dumps(v, ensure_ascii=False)
+                cell = ws_e.cell(row=ri, column=ci, value=v)
+                cell.font = cell_font
+                cell.border = thin_border
+        for col in ws_e.columns:
+            max_len = 0
+            letter = col[0].column_letter
+            for cell in col:
+                if cell.value is not None:
+                    max_len = max(max_len, min(len(str(cell.value)), 80))
+            ws_e.column_dimensions[letter].width = max(8, max_len + 2)
+        ws_e.freeze_panes = 'A2'
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    safe_domain = _re.sub(r'[^a-zA-Z0-9.-]', '', (domain or '').lstrip('.').replace('www.', '', 1))
+    from datetime import datetime as _dt
+    _ts = _dt.now().strftime('%Y-%m-%d-%H%M')
+    _name = '-'.join([p for p in ['crawl', safe_domain, _ts] if p]) + '.xlsx'
+    return send_file(
+        buf,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name=_name,
+    )
 
 
 @app.route('/export-crawl-sitemap', methods=['POST'])
