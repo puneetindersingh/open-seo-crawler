@@ -52,7 +52,10 @@
                oninput="document.getElementById('crawler-depth-label').textContent=this.value" />
       </div>
 
-      <label class="check"><input type="checkbox" id="crawler-render-js" /> Render JS (Playwright, slower)</label>
+      <label class="check"><input type="checkbox" id="crawler-render-js" onchange="_scToggleCompareNoJs(this.checked)" /> Render JS (Playwright, slower)</label>
+      <label class="check" id="crawler-compare-no-js-row" style="display:none;padding-left:22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;" title="Crawl every page in BOTH modes — JS-rendered (Playwright) AND raw HTML (no JS). The diff shows which pages have content invisible to AI crawlers (ChatGPT, Claude, Perplexity, Google-Extended) which mostly don't execute JS.">
+        <input type="checkbox" id="crawler-compare-no-js" /> Compare with non-JS HTML <small>(diff per page; flags JS-only content)</small>
+      </label>
       <label class="check"><input type="checkbox" id="crawler-ignore-robots" /> Ignore robots.txt</label>
       <label class="check"><input type="checkbox" id="crawler-ignore-noindex" /> Ignore noindex <small>(audit noindex pages as if indexable)</small></label>
       <label class="check"><input type="checkbox" id="crawler-run-sitemap" /> Sitemap analysis <small>(after crawl: missing / orphan / sitemap-only / etc.)</small></label>
@@ -146,6 +149,7 @@
       <div class="ci-cat" data-cat="Missing canonical" onclick="selectCategory('Missing canonical')"><span>Missing Canonical</span><span class="ci-count err" data-count="Missing canonical">0</span></div>
       <div class="ci-cat" data-cat="imgs missing alt" onclick="selectCategory('imgs missing alt')"><span>Images Missing Alt</span><span class="ci-count warn" data-count="imgs missing alt">0</span></div>
       <div class="ci-cat" data-cat="__all_images" onclick="selectCategory('__all_images')"><span title="Every image found across the crawl, grouped by src — filter by alt-text status">All Images</span><span class="ci-count" data-count="__all_images">0</span></div>
+      <div class="ci-cat" data-cat="__js_diff" id="js-diff-cat" style="display:none;" onclick="selectCategory('__js_diff')"><span title="Pages whose Playwright-rendered HTML differs from the raw (no-JS) HTML — what AI crawlers without JS execution see">JS vs non-JS Diff</span><span class="ci-count" data-count="__js_diff">0</span></div>
       <div class="ci-cat" data-cat="No schema" onclick="selectCategory('No schema')"><span>No Schema Markup</span><span class="ci-count warn" data-count="No schema">0</span></div>
       <div class="ci-cat" data-cat="__schema_by_page" onclick="selectCategory('__schema_by_page')"><span title="Every crawled page with the schema types it emits">Schema by Page</span><span class="ci-count" data-count="__schema_by_page">0</span></div>
       <div class="ci-cat" data-cat="Thin content" onclick="selectCategory('Thin content')"><span>Thin Content</span><span class="ci-count warn" data-count="Thin content">0</span></div>
