@@ -575,13 +575,146 @@ def _is_third_party_widget_image(abs_src):
     return False
 
 
-def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
+def _parse_no_js_subset(html, base_url):
+    """Parse a subset of SEO-critical fields from raw HTML — used for the
+    JS-vs-non-JS comparison so we can show what content is missing when JS
+    isn't executed. Same parsers/idioms as the main pass in `_crawl_page`,
+    just trimmed to the fields we diff against. Kept self-contained so the
+    internal-tool port stays a copy-paste.
+    """
+    from urllib.parse import urlparse, urljoin
+    out = {
+        'title': '', 'meta_description': '', 'h1': '', 'h1_count': 0,
+        'word_count': 0, 'schema_types': [],
+        'internal_links_count': 0, 'external_links_count': 0,
+        'images_count': 0, 'images_no_alt': 0,
+    }
+    try:
+        soup = BeautifulSoup(html or '', 'html.parser')
+        t = soup.find('title')
+        out['title'] = t.get_text(strip=True) if t else ''
+        m = soup.find('meta', attrs={'name': 'description'})
+        out['meta_description'] = m.get('content', '') if m else ''
+        h1s = [h.get_text(strip=True) for h in soup.find_all('h1')]
+        h1s = [h for h in h1s if h]
+        out['h1'] = h1s[0] if h1s else ''
+        out['h1_count'] = len(h1s)
+        for s in soup(['script', 'style', 'noscript']):
+            s.decompose()
+        body_text = ' '.join(soup.get_text(separator=' ', strip=True).split())
+        out['word_count'] = len(body_text.split()) if body_text else 0
+        types = []
+        def _push(v):
+            if isinstance(v, list):
+                for x in v:
+                    if isinstance(x, str): types.append(x)
+            elif isinstance(v, str):
+                types.append(v)
+        for sc in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+            try:
+                ld = json.loads(sc.string or '')
+                if isinstance(ld, dict):
+                    if '@type' in ld: _push(ld['@type'])
+                    if '@graph' in ld:
+                        for it in ld['@graph']:
+                            if isinstance(it, dict) and '@type' in it:
+                                _push(it['@type'])
+                elif isinstance(ld, list):
+                    for it in ld:
+                        if isinstance(it, dict) and '@type' in it:
+                            _push(it['@type'])
+            except Exception:
+                pass
+        out['schema_types'] = types
+        try:
+            host = (urlparse(base_url).netloc or '').lower().replace('www.', '')
+        except Exception:
+            host = ''
+        for a in soup.find_all('a', href=True):
+            href = a.get('href', '').strip()
+            if not href or href.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
+                continue
+            try:
+                abs_url = urljoin(base_url, href)
+                link_host = (urlparse(abs_url).netloc or '').lower().replace('www.', '')
+            except Exception:
+                continue
+            if link_host == host or not link_host:
+                out['internal_links_count'] += 1
+            else:
+                out['external_links_count'] += 1
+        imgs = soup.find_all('img')
+        out['images_count'] = len(imgs)
+        out['images_no_alt'] = sum(1 for i in imgs if not (i.get('alt') or '').strip())
+    except Exception:
+        pass
+    return out
+
+
+def _compute_js_diff(js, nojs):
+    """Compare rendered (post-JS) fields against pre-JS subset and classify
+    severity. See internal-tool/app.py:_compute_js_diff for the full rationale.
+    Severity ladder: critical (title/meta/schema), high (h1/word_count),
+    medium (links/images), none (page is server-rendered correctly).
+    """
+    fields_differ = []
+    sev = 'none'
+    rendered_title = (js.get('title') or '').strip()
+    nojs_title = (nojs.get('title') or '').strip()
+    if rendered_title != nojs_title:
+        fields_differ.append('title'); sev = 'critical'
+    rendered_meta = (js.get('meta_description') or '').strip()
+    nojs_meta = (nojs.get('meta_description') or '').strip()
+    if rendered_meta != nojs_meta:
+        fields_differ.append('meta_description'); sev = 'critical'
+    js_schema = sorted(set(js.get('schema_types') or []))
+    nojs_schema = sorted(set(nojs.get('schema_types') or []))
+    if js_schema != nojs_schema:
+        fields_differ.append('schema_types'); sev = 'critical'
+    rendered_h1 = (js.get('h1') or '').strip()
+    nojs_h1 = (nojs.get('h1') or '').strip()
+    if rendered_h1 != nojs_h1:
+        fields_differ.append('h1')
+        if sev != 'critical': sev = 'high'
+    js_wc = js.get('word_count') or 0
+    nojs_wc = nojs.get('word_count') or 0
+    if js_wc > 0 and abs(js_wc - nojs_wc) / max(js_wc, 1) > 0.25:
+        fields_differ.append('word_count')
+        if sev != 'critical': sev = 'high'
+    js_il = js.get('internal_links') or 0
+    nojs_il = nojs.get('internal_links_count') or 0
+    if js_il > 0 and abs(js_il - nojs_il) / max(js_il, 1) > 0.25:
+        fields_differ.append('internal_links')
+        if sev not in ('critical', 'high'): sev = 'medium'
+    js_el = js.get('external_links') or 0
+    nojs_el = nojs.get('external_links_count') or 0
+    if js_el > 0 and abs(js_el - nojs_el) / max(js_el, 1) > 0.25:
+        fields_differ.append('external_links')
+        if sev not in ('critical', 'high'): sev = 'medium'
+    js_imgs = js.get('images_total') or 0
+    nojs_imgs = nojs.get('images_count') or 0
+    if js_imgs > 0 and abs(js_imgs - nojs_imgs) / max(js_imgs, 1) > 0.10:
+        fields_differ.append('images_total')
+        if sev not in ('critical', 'high'): sev = 'medium'
+    if (js.get('images_no_alt') or 0) != (nojs.get('images_no_alt') or 0):
+        fields_differ.append('images_no_alt')
+        if sev not in ('critical', 'high'): sev = 'medium'
+    return {'severity': sev, 'fields': fields_differ}
+
+
+def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, capture_no_js=False):
     """Crawl a single page and return audit data dict.
 
     If ``pw_page`` (a live Playwright page) is provided, the HTML body will be
     re-fetched via a headless browser so JS-rendered content is captured. We
     still do the initial ``requests.get`` to get response headers / redirect
     history cheaply and reliably.
+
+    ``capture_no_js``: when True AND ``pw_page`` produced a successful render,
+    also parse the original (pre-JS) HTML and attach a subset of fields to
+    ``result['non_js']`` plus a diff/severity summary at ``result['js_diff']``.
+    Lets the user see what content is JS-only and therefore at risk for AI
+    crawlers (GPTBot, ClaudeBot etc.) which mostly don't execute JS.
     """
     from urllib.parse import urlparse, urljoin
     result = {
@@ -764,6 +897,8 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
 
         # Limit body size
         raw_html = resp.text[:5_000_000]
+        # Keep pre-JS HTML for the JS-vs-non-JS diff (cheap; one extra ref).
+        pre_js_html = raw_html
         result['js_rendered'] = False
 
         # Optional: re-render with Playwright to capture JS-inserted content.
@@ -1328,6 +1463,25 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False):
         if not sec.get('is_https'):
             result['issues'].append('Served over HTTP (insecure)')
 
+        # JS-vs-non-JS diff. Only when caller opted in AND we successfully
+        # rendered a JS version different from the pre-JS HTML. Surfaces
+        # JS-only content that's invisible to non-rendering AI crawlers.
+        if capture_no_js and result.get('js_rendered') and pre_js_html:
+            try:
+                base = result.get('url') or url
+                nojs = _parse_no_js_subset(pre_js_html, base)
+                result['non_js'] = nojs
+                result['js_diff'] = _compute_js_diff(result, nojs)
+                sev = result['js_diff'].get('severity')
+                if sev == 'critical':
+                    fields = ', '.join(result['js_diff'].get('fields', [])) or 'title/meta/schema'
+                    result['issues'].append(f'JS-only content (critical: {fields})')
+                elif sev == 'high':
+                    fields = ', '.join(result['js_diff'].get('fields', [])) or 'h1/word_count'
+                    result['issues'].append(f'JS-only content (high: {fields})')
+            except Exception as e:
+                result.setdefault('render_errors', []).append(f'no-js diff: {str(e)[:160]}')
+
     except requests.exceptions.Timeout:
         result['error'] = 'Timeout'
         result['issues'].append('Timeout')
@@ -1868,6 +2022,7 @@ def crawl_site():
         render_js = bool(cfg.get('render_js', False))
         ignore_robots = bool(cfg.get('ignore_robots', False))
         ignore_noindex = bool(cfg.get('ignore_noindex', False))
+        compare_no_js = bool(cfg.get('compare_no_js', False)) and render_js
     else:
         seed_url = (data.get('url', '') or '').strip()
         if not seed_url:
@@ -1883,6 +2038,9 @@ def crawl_site():
         render_js = bool(data.get('render_js', False))
         ignore_robots = bool(data.get('ignore_robots', False))
         ignore_noindex = bool(data.get('ignore_noindex', False))
+        # JS vs non-JS compare. Gated on render_js — only meaningful when
+        # we have something to compare against.
+        compare_no_js = bool(data.get('compare_no_js', False)) and render_js
     # Concurrent workers. Default 5 matches Screaming Frog. Clamped to [1, 20].
     # When render_js is on, Playwright can't share a single page across threads —
     # force single-worker mode so page state stays consistent.
@@ -1919,11 +2077,19 @@ def crawl_site():
     def _current_max():
         return (ACTIVE_CRAWL_LIMITS.get(crawl_id) or {}).get('max_pages', max_pages)
 
+    # /cdn-cgi/ — Cloudflare infra paths injected by the proxy. The most
+    # common is /cdn-cgi/l/email-protection (the obfuscated-email endpoint
+    # Cloudflare auto-injects) which returns 404 when fetched directly
+    # because it's only meant to be loaded as a script via the email
+    # obfuscation. /cdn-cgi/scripts/, /cdn-cgi/challenge-platform/,
+    # /cdn-cgi/rum, /cdn-cgi/bm/ etc. are all infra, not site content.
+    # Skipping the whole prefix keeps the 404 report focused on real pages.
     _NON_PAGE_PATH_FRAGMENTS = (
         '/feed/', '/feed.atom', '/feed.rss', '/comments/feed/',
         '/wp-json/', '/wp-admin/', '/wp-login.php', '/xmlrpc.php',
         '/?wc-ajax=', '/cart/?', '/checkout/?',
         '/sitemap.xml', '/sitemap_index.xml',
+        '/cdn-cgi/',
     )
 
     def _url_allowed(u):
@@ -2107,7 +2273,7 @@ def crawl_site():
         def _fetch_job(url, depth):
             """Worker: politeness-wait, fetch, return (url, depth, page_data)."""
             _wait_host_turn(url)
-            pd = _crawl_page(url, session, domain, pw_page=pw_page, ignore_noindex=ignore_noindex)
+            pd = _crawl_page(url, session, domain, pw_page=pw_page, ignore_noindex=ignore_noindex, capture_no_js=compare_no_js)
             pd['depth'] = depth
             _adjust_host_backoff(url, pd)
             return url, depth, pd
@@ -2277,6 +2443,7 @@ def crawl_site():
                     'max_depth': max_depth,
                     'crawl_delay': crawl_delay,
                     'render_js': render_js,
+                    'compare_no_js': compare_no_js,
                     'ignore_robots': ignore_robots,
                     'ignore_noindex': ignore_noindex,
                     'max_workers': max_workers,
@@ -2309,6 +2476,15 @@ def crawl_site():
             'issue_counts': issue_counts,
             'js_rendered_count': sum(1 for r in results if r.get('js_rendered')),
             'render_js': render_js,
+            'compare_no_js': compare_no_js,
+            'js_diff_counts': {
+                'critical': sum(1 for r in results if (r.get('js_diff') or {}).get('severity') == 'critical'),
+                'high':     sum(1 for r in results if (r.get('js_diff') or {}).get('severity') == 'high'),
+                'medium':   sum(1 for r in results if (r.get('js_diff') or {}).get('severity') == 'medium'),
+                'none':     sum(1 for r in results if (r.get('js_diff') or {}).get('severity') == 'none'),
+                'pages_with_diff': sum(1 for r in results if r.get('js_diff') and (r.get('js_diff') or {}).get('severity') != 'none'),
+                'total_compared': sum(1 for r in results if r.get('js_diff')),
+            },
         }
 
         # Attach inlinks per page (cap to 20 for payload size)

@@ -608,6 +608,7 @@ function startCrawl(opts) {
     crawl_delay: parseFloat(document.getElementById('crawler-speed').value),
     max_depth: parseInt(document.getElementById('crawler-depth').value) || 10,
     render_js: document.getElementById('crawler-render-js').checked,
+    compare_no_js: document.getElementById('crawler-render-js').checked && (document.getElementById('crawler-compare-no-js')?.checked || false),
     ignore_robots: document.getElementById('crawler-ignore-robots').checked,
     ignore_noindex: document.getElementById('crawler-ignore-noindex').checked,
     include_patterns: document.getElementById('crawler-include').value.trim(),
@@ -962,6 +963,7 @@ window.selectCategory = function(cat) {
     '__schema_by_page': 'Schema by Page — every crawled page with the schema types it emits',
     '__sitemap_viz': 'Site Structure — sunburst, hierarchy and anchor-text cloud',
     '__all_images': 'All Images — every image across the crawl with alt text and the page(s) it appears on',
+    '__js_diff': 'JS vs non-JS Diff — pages whose content differs between rendered and raw HTML',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
@@ -972,7 +974,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__js_diff');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -987,6 +989,8 @@ window.selectCategory = function(cat) {
       _scRenderSiteStructurePanel();
     } else if (cat === '__all_images') {
       _scRenderAllImagesPanel();
+    } else if (cat === '__js_diff') {
+      _scRenderJsDiffPanel();
     } else {
       _renderSitemapPanel(cat);
     }
@@ -1140,6 +1144,150 @@ window.analyseSitemap = async function(opts) {
 // / Has alt) toggle row visibility. Pure crawler data — no AI — so it lives
 // in the public site-crawler. Mirrors internal-tool's _renderAllImagesPanel but
 // without the "Generate in Bulk Image Alt" button (AI-only feature).
+// =============================================================================
+// JS vs non-JS Diff panel — for crawls run with `Compare with non-JS HTML`.
+// Mirrors internal-tool/_renderJsDiffPanel; pure parsing, no AI/AI.
+// Severity ladder: critical (title/meta/schema), high (h1/word_count),
+// medium (links/images), none (page is server-rendered correctly).
+// =============================================================================
+window._scJsDiffFilter = window._scJsDiffFilter || 'all';
+
+function _scJsDiffSetFilter(v) {
+  window._scJsDiffFilter = v;
+  document.querySelectorAll('#js-diff-panel [data-jsdiff-sev]').forEach(el => {
+    const s = el.dataset.jsdiffSev;
+    const show = (v === 'all') || (s === v);
+    el.style.display = show ? '' : 'none';
+  });
+  document.querySelectorAll('#js-diff-panel .jsdiff-chip').forEach(b => {
+    const active = b.dataset.sev === v;
+    b.style.background = active ? 'var(--text)' : 'var(--surface,#fff)';
+    b.style.color = active ? 'var(--surface,#fff)' : 'var(--text)';
+  });
+}
+window._scJsDiffSetFilter = _scJsDiffSetFilter;
+
+function _scRenderJsDiffPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('js-diff-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'js-diff-panel';
+  panel.style.cssText = 'padding:0;font-size:12px;';
+
+  const allPages = (crawlerResults || []).filter(r => r && r.js_diff);
+  if (!allPages.length) {
+    panel.innerHTML = `<div style="padding:20px;color:var(--text-muted);">
+      This crawl didn't run a JS-vs-non-JS comparison. Re-crawl with
+      <b>Render JS</b> + <b>Compare with non-JS HTML</b> both checked.
+    </div>`;
+    main.appendChild(panel);
+    return;
+  }
+  const withDiff = allPages.filter(r => r.js_diff.severity !== 'none');
+  const counts = {
+    critical: withDiff.filter(r => r.js_diff.severity === 'critical').length,
+    high:     withDiff.filter(r => r.js_diff.severity === 'high').length,
+    medium:   withDiff.filter(r => r.js_diff.severity === 'medium').length,
+  };
+  const total = allPages.length;
+  const clean = total - withDiff.length;
+
+  if (!withDiff.length) {
+    panel.innerHTML = `<div style="padding:14px 16px;background:var(--surface2,#f8fafc);border-bottom:1px solid var(--border,#e5e7eb);">
+      <div style="font-size:.85rem;font-weight:600;color:#166534;">✓ All ${total} compared pages render the same with and without JS.</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;line-height:1.5;">
+        Title, meta, H1, schema, word count, link counts and image counts all match. AI crawlers without JS execution see the same content as Google's full renderer. Server-side rendering is doing its job.
+      </div>
+    </div>`;
+    main.appendChild(panel);
+    return;
+  }
+
+  const sevRank = {critical: 0, high: 1, medium: 2};
+  const sorted = withDiff.slice().sort((a, b) => {
+    const ra = sevRank[a.js_diff.severity] ?? 3;
+    const rb = sevRank[b.js_diff.severity] ?? 3;
+    return ra - rb || (a.url || '').localeCompare(b.url || '');
+  });
+
+  const sevColor = (s) => ({
+    critical: { bg:'#fee2e2', fg:'#991b1b', bd:'#fca5a5' },
+    high:     { bg:'#fef3c7', fg:'#92400e', bd:'#fcd34d' },
+    medium:   { bg:'#dbeafe', fg:'#1e40af', bd:'#93c5fd' },
+  }[s] || { bg:'var(--surface,#fff)', fg:'var(--text-muted,#777)', bd:'var(--border,#e5e7eb)' });
+
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmtVal = (v) => {
+    if (v == null || v === '') return '<span style="color:var(--text-muted);font-style:italic;">— empty</span>';
+    if (Array.isArray(v)) return v.length ? v.map(x => `<code style="font-size:10.5px;background:var(--surface2,#f8fafc);padding:1px 5px;border-radius:3px;margin-right:3px;">${esc(x)}</code>`).join('') : '<span style="color:var(--text-muted);font-style:italic;">— none</span>';
+    return esc(v);
+  };
+  const fieldRow = (label, jsVal, nojsVal, differs) => {
+    const bg = differs ? '#fef3c7' : 'transparent';
+    const bdL = differs ? '3px solid #f59e0b' : '3px solid transparent';
+    return `<tr style="background:${bg};">
+      <td style="padding:6px 10px;border-left:${bdL};font-weight:600;font-size:.72rem;color:var(--text-muted);width:170px;">${label}${differs?' ⚠':''}</td>
+      <td style="padding:6px 10px;font-size:.74rem;border-left:1px solid var(--border,#e5e7eb);">${fmtVal(jsVal)}</td>
+      <td style="padding:6px 10px;font-size:.74rem;border-left:1px solid var(--border,#e5e7eb);">${fmtVal(nojsVal)}</td>
+    </tr>`;
+  };
+
+  const card = (r) => {
+    const sev = r.js_diff.severity;
+    const c = sevColor(sev);
+    const fields = new Set(r.js_diff.fields || []);
+    const nojs = r.non_js || {};
+    return `<div data-jsdiff-sev="${sev}" style="border:1px solid var(--border,#e5e7eb);border-radius:6px;margin:10px 14px;overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface2,#f8fafc);border-bottom:1px solid var(--border,#e5e7eb);">
+        <span style="display:inline-block;padding:3px 9px;border-radius:999px;border:1px solid ${c.bd};background:${c.bg};color:${c.fg};font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;">${sev}</span>
+        <a href="${esc(r.url || '')}" target="_blank" style="color:var(--accent,#6366f1);font-size:.78rem;font-weight:600;text-decoration:none;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(r.url || '')}</a>
+        <span style="font-size:.7rem;color:var(--text-muted);">${(r.js_diff.fields || []).length} field${((r.js_diff.fields || []).length)===1?'':'s'} differ</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="background:var(--surface,#fff);">
+          <th style="padding:5px 10px;font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;text-align:left;border-bottom:1px solid var(--border,#e5e7eb);"></th>
+          <th style="padding:5px 10px;font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;text-align:left;border-bottom:1px solid var(--border,#e5e7eb);border-left:1px solid var(--border,#e5e7eb);">Rendered (with JS)</th>
+          <th style="padding:5px 10px;font-size:.68rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;text-align:left;border-bottom:1px solid var(--border,#e5e7eb);border-left:1px solid var(--border,#e5e7eb);">Raw HTML (no JS)</th>
+        </tr></thead>
+        <tbody>
+          ${fieldRow('Title',           r.title,            nojs.title,            fields.has('title'))}
+          ${fieldRow('Meta description',r.meta_description, nojs.meta_description, fields.has('meta_description'))}
+          ${fieldRow('H1',              r.h1,               nojs.h1,               fields.has('h1'))}
+          ${fieldRow('Word count',      r.word_count,       nojs.word_count,       fields.has('word_count'))}
+          ${fieldRow('Schema types',    r.schema_types,     nojs.schema_types,     fields.has('schema_types'))}
+          ${fieldRow('Internal links',  r.internal_links,   nojs.internal_links_count, fields.has('internal_links'))}
+          ${fieldRow('External links',  r.external_links,   nojs.external_links_count, fields.has('external_links'))}
+          ${fieldRow('Image count',     r.images_total,     nojs.images_count,     fields.has('images_total'))}
+          ${fieldRow('Missing alts',    r.images_no_alt,    nojs.images_no_alt,    fields.has('images_no_alt'))}
+        </tbody>
+      </table>
+    </div>`;
+  };
+
+  const chipBtn = (sev, label, n, color) => `
+    <button type="button" class="jsdiff-chip" data-sev="${sev}" onclick="_scJsDiffSetFilter('${sev}')" style="padding:4px 12px;border-radius:14px;border:1px solid ${color.bd};background:${color.bg};color:${color.fg};font-size:11.5px;cursor:pointer;font-weight:600;">${label} <span style="opacity:.75;font-weight:400;">${n}</span></button>`;
+
+  panel.innerHTML = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border,#e5e7eb);background:var(--surface2,#f8fafc);">
+      <div style="font-size:.85rem;font-weight:600;color:var(--text);margin-bottom:4px;">JS vs non-JS HTML diff</div>
+      <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;line-height:1.55;">
+        Compared <b>${total}</b> pages in both modes. <b style="color:#991b1b;">${withDiff.length}</b> have content invisible to AI crawlers (ChatGPT, AI, Perplexity, Google-Extended) which mostly don't execute JS. <b style="color:#166534;">${clean}</b> render the same in both modes.
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <button type="button" class="jsdiff-chip" data-sev="all" onclick="_scJsDiffSetFilter('all')" style="padding:4px 12px;border-radius:14px;border:1px solid var(--text);background:var(--text);color:var(--surface,#fff);font-size:11.5px;cursor:pointer;font-weight:600;">All ${withDiff.length}</button>
+        ${counts.critical ? chipBtn('critical', '⚠ Critical', counts.critical, sevColor('critical')) : ''}
+        ${counts.high     ? chipBtn('high',     'High',       counts.high,     sevColor('high'))     : ''}
+        ${counts.medium   ? chipBtn('medium',   'Medium',     counts.medium,   sevColor('medium'))   : ''}
+      </div>
+    </div>
+    ${sorted.map(card).join('')}`;
+  main.appendChild(panel);
+  window._scJsDiffFilter = 'all';
+}
+window._scRenderJsDiffPanel = _scRenderJsDiffPanel;
+
 function _scRenderAllImagesPanel() {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
   if (!main) return;
@@ -1468,6 +1616,18 @@ function _scToggleNearDupCfg(checked) {
 }
 window._scToggleNearDupCfg = _scToggleNearDupCfg;
 
+// Show "Compare with non-JS HTML" sub-checkbox only when Render JS is on.
+// Mirrors the internal-tool helper.
+function _scToggleCompareNoJs(checked) {
+  const row = document.getElementById('crawler-compare-no-js-row');
+  if (row) row.style.display = checked ? '' : 'none';
+  if (!checked) {
+    const cb = document.getElementById('crawler-compare-no-js');
+    if (cb) cb.checked = false;
+  }
+}
+window._scToggleCompareNoJs = _scToggleCompareNoJs;
+
 window.runNearDupAnalysis = async function() {
   const thresholdEl = document.getElementById('crawler-neardup-threshold');
   const excludeEl = document.getElementById('crawler-neardup-exclude');
@@ -1760,6 +1920,16 @@ function updateCounts() {
       }
     }
     counts.__all_images = seen.size;
+  }
+  // __js_diff count: pages with a meaningful diff (severity != 'none').
+  // The sidebar entry stays hidden until the crawl actually compared, so
+  // a "0" entry doesn't permanently sit in the list.
+  if ('__js_diff' in counts) {
+    const compared = (crawlerResults || []).filter(r => r && r.js_diff);
+    const withDiff = compared.filter(r => r.js_diff.severity && r.js_diff.severity !== 'none');
+    counts.__js_diff = withDiff.length;
+    const cat = document.getElementById('js-diff-cat');
+    if (cat) cat.style.display = compared.length ? '' : 'none';
   }
 
   document.querySelectorAll('.ci-count, .sev-num').forEach(el => {
