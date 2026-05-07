@@ -161,10 +161,30 @@ def _normalize_url_for_dup(url):
         parsed = urlparse(url)
     except Exception:
         return url
+    # Collapse http vs https — the same URL on different schemes is the same
+    # page, not a duplicate-title issue. (HTTP-only pages are surfaced
+    # separately by the security report.)
+    scheme = 'https'
+    netloc = (parsed.netloc or '').lower()
+    if netloc.startswith('www.'):
+        netloc = netloc[4:]
     path = parsed.path or '/'
     path = _re.sub(r'/page/\d+/?$', '/', path)
     path = _re.sub(r'/comment-page-\d+/?$', '/', path)
-    return urlunparse((parsed.scheme, parsed.netloc, path, '', '', ''))
+    # Strip trailing whitespace / %20 / slashes in any combo so /foo,
+    # /foo/, /foo%20, /foo%20/ all collapse. Common on Shopify when an
+    # internal <a href> has a trailing space → encoded as %20.
+    while path and path != '/':
+        low = path.lower()
+        if low.endswith('%20'):
+            path = path[:-3]
+        elif path[-1].isspace() or path[-1] == '/':
+            path = path[:-1]
+        else:
+            break
+    if not path:
+        path = '/'
+    return urlunparse((scheme, netloc, path, '', '', ''))
 
 
 STATIC_VERSION = str(int(time.time()))
@@ -1149,14 +1169,25 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
 
         def _has_accessible_name(node):
             """Whether a parent link/button carries its own accessible name —
-            text, aria-label, or aria-labelledby — making a missing img alt fine."""
+            text, aria-label, aria-labelledby, or title (own or on a descendant
+            img per W3C accessible-name algorithm) — making a missing/empty img
+            alt fine for screen readers."""
             if not node:
                 return False
             if (node.get('aria-label') or '').strip():
                 return True
             if (node.get('aria-labelledby') or '').strip():
                 return True
-            # Visible text content excluding the image itself
+            if (node.get('title') or '').strip():
+                return True
+            try:
+                for d in node.find_all('img'):
+                    if (d.get('title') or '').strip():
+                        return True
+                    if (d.get('aria-label') or '').strip():
+                        return True
+            except Exception:
+                pass
             clone = node
             txt = (clone.get_text(separator=' ', strip=True) or '')
             return len(txt) >= 2
@@ -1204,10 +1235,24 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
             _block = img.find_parent(['p', 'div', 'section', 'article', 'figure', 'li'])
             _surrounding = (_block.get_text(separator=' ', strip=True)[:400]
                             if _block else '')
+            # Per W3C accessible-name computation: when alt="" inside a link,
+            # the link still has an accessible name if the img carries
+            # title/aria-label OR the link itself does. Don't flag those as
+            # "empty in link" — screen readers do read them.
             if alt_attr is None:
                 _classification = 'missing'
             elif alt_attr.strip() == '':
-                _classification = 'empty in link' if _ptag_name in ('a', 'button') else 'empty'
+                in_interactive = _ptag_name in ('a', 'button')
+                if in_interactive:
+                    img_title = (img.get('title') or '').strip()
+                    img_aria = (img.get('aria-label') or '').strip()
+                    parent_named = bool(_ptag) and _has_accessible_name(_ptag)
+                    if img_title or img_aria or parent_named:
+                        _classification = 'empty'
+                    else:
+                        _classification = 'empty in link'
+                else:
+                    _classification = 'empty'
             else:
                 _classification = 'present'
 
@@ -1670,15 +1715,34 @@ def _is_non_html_url(u):
 
 
 def _norm_url(u):
-    """Normalise a URL for set-comparison."""
+    """Normalise a URL for set-comparison.
+
+    Collapses http vs https, www vs non-www, and trailing slash so the
+    sitemap-vs-crawl comparison doesn't flag http variants as "missing from
+    sitemap" when the sitemap only lists https URLs. Also strips trailing
+    whitespace / %20 — Shopify and other CMSs serve the same page at /foo
+    and /foo%20 when an internal <a href> has a trailing space.
+    """
     if not u:
         return ''
     u = u.strip()
     try:
         p = urlparse(u)
         host = (p.netloc or '').lower()
-        path = (p.path or '').rstrip('/')
-        return f"{p.scheme}://{host}{path}".lower()
+        if host.startswith('www.'):
+            host = host[4:]
+        path = p.path or ''
+        while path:
+            low = path.lower()
+            if low.endswith('%20'):
+                path = path[:-3]
+            elif path[-1].isspace() or path[-1] == '/':
+                path = path[:-1]
+            else:
+                break
+        if not path:
+            path = '/'
+        return f"https://{host}{path if path != '/' else ''}".lower()
     except Exception:
         return u.rstrip('/').lower()
 
@@ -1784,13 +1848,28 @@ def sitemap_analyse():
             continue
         if _is_non_html_url(r.get('url')):
             continue
+        # Skip pages whose <link rel=canonical> points elsewhere — they're
+        # not the canonical version, so they shouldn't be in the sitemap.
+        # Critical on Shopify where /collections/X/products/Y
+        # canonicalises to /products/Y.
+        canonical = (r.get('canonical') or '').strip()
+        if canonical and _norm_url(canonical) != nrm:
+            continue
         missing_from_sitemap.append(r.get('url'))
+
+    # Build a canonical→row lookup so a sitemap URL whose canonical version
+    # was crawled under a non-canonical alias isn't reported as sitemap-only.
+    canonical_to_row = {}
+    for r in results:
+        can = (r.get('canonical') or '').strip()
+        if can:
+            canonical_to_row.setdefault(_norm_url(can), r)
 
     for nrm, entry in sitemap_by_norm.items():
         original_url = entry['url']
         if pag_re.search(urlparse(original_url).path) or pag_re.search('?' + (urlparse(original_url).query or '')):
             pagination_in_sitemap.append(original_url)
-        crawled = crawl_by_norm.get(nrm)
+        crawled = crawl_by_norm.get(nrm) or canonical_to_row.get(nrm)
         if crawled is None:
             sitemap_only.append({'url': original_url, 'lastmod': entry.get('lastmod')})
             continue
@@ -2516,10 +2595,18 @@ def crawl_site():
                     continue
                 if r.get('status_code') and r['status_code'] >= 300:
                     continue
+                # Skip canonicalised-elsewhere pages — rel=canonical already
+                # declares them duplicates of another URL, so flagging here
+                # is double-counting. Critical on Shopify where the same
+                # product is reachable via /products/X and
+                # /collections/Y/products/X (canonical points to bare URL).
+                url = r.get('url') or ''
+                canonical = (r.get('canonical') or '').strip()
+                if canonical and _norm_url(canonical) != _norm_url(url):
+                    continue
                 v = field_getter(r)
                 if not v:
                     continue
-                url = r.get('url')
                 norm = _normalize_url_for_dup(url)
                 if norm not in g[v]:
                     g[v][norm] = url
