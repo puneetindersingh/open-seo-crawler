@@ -1391,9 +1391,19 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
             else:
                 ext_count += 1
                 if len(ext_links_list) < 300:  # cap payload
-                    ext_links_list.append([resolved, anchor, placement])
+                    # Capture rel + target for the External Links report.
+                    # rel is multi-token ("nofollow ugc sponsored noopener") —
+                    # join with spaces and lowercase for cheap substring checks.
+                    rel_attr = a.get('rel') or []
+                    if isinstance(rel_attr, list):
+                        rel_str = ' '.join(rel_attr).strip().lower()
+                    else:
+                        rel_str = str(rel_attr).strip().lower()
+                    target_attr = (a.get('target') or '').strip().lower()
+                    ext_links_list.append([resolved, anchor, placement, rel_str, target_attr])
 
-        # Transport: [[target, anchor, placement], ...]
+        # Transport (internal): [[target, anchor, placement], ...]
+        # Transport (external): [[target, anchor, placement, rel, target_attr], ...]
         result['internal_link_urls'] = [[t, a, p] for t, (a, p) in int_links.items()]
         result['internal_links'] = len(int_links)
         result['external_link_urls'] = ext_links_list

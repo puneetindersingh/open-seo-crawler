@@ -963,6 +963,7 @@ window.selectCategory = function(cat) {
     '__schema_by_page': 'Schema by Page — every crawled page with the schema types it emits',
     '__sitemap_viz': 'Site Structure — sunburst, hierarchy and anchor-text cloud',
     '__all_images': 'All Images — every image across the crawl with alt text and the page(s) it appears on',
+    '__external_links': 'External Links — every off-domain link with rel/target attributes. Filter by follow / nofollow / same-window. Risky = follow + same-window (leaks link equity AND loses the visitor).',
     '__js_diff': 'JS vs non-JS Diff — pages whose content differs between rendered and raw HTML',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
@@ -974,7 +975,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__js_diff');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -989,6 +990,8 @@ window.selectCategory = function(cat) {
       _scRenderSiteStructurePanel();
     } else if (cat === '__all_images') {
       _scRenderAllImagesPanel();
+    } else if (cat === '__external_links') {
+      _scRenderExternalLinksPanel();
     } else if (cat === '__js_diff') {
       _scRenderJsDiffPanel();
     } else {
@@ -1442,6 +1445,164 @@ function _scAllImagesFilter(want) {
         'empty':         { bg:'#fef3c7', fg:'#92400e', bd:'#fcd34d' },
         'present':       { bg:'#dcfce7', fg:'#166534', bd:'#bbf7d0' },
       }[f] || { bg:'var(--surface)', fg:'var(--text)', bd:'var(--border)' };
+      b.style.background = restore.bg;
+      b.style.color = restore.fg;
+      b.style.borderColor = restore.bd;
+    }
+  });
+}
+
+// =============================================================================
+// External Links panel — every off-domain link with rel + target attributes.
+// Two SEO concerns surfaced separately:
+//   - dofollow links (no rel=nofollow) leak link equity to third parties
+//   - same-window links (no target=_blank) push the visitor off your site
+// "Risky" = both at once on the same link. The data is descriptive, not
+// auto-flagged — dofollow is correct for genuine citations, and same-window
+// is fine for some relationships. The user filters to find what to fix.
+// =============================================================================
+function _scRenderExternalLinksPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('external-links-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'external-links-panel';
+  panel.style.cssText = 'padding:0;font-size:12px;';
+
+  const allLinks = [];
+  for (const r of (crawlerResults || [])) {
+    const list = Array.isArray(r.external_link_urls) ? r.external_link_urls : [];
+    for (const entry of list) {
+      const url = entry[0] || '';
+      if (!url) continue;
+      const anchor    = entry[1] || '';
+      const placement = entry[2] || '';
+      const rel       = (entry[3] || '').toString();
+      const target    = (entry[4] || '').toString();
+      const nofollow  = /\bnofollow\b/.test(rel);
+      const newTab    = target === '_blank';
+      const risk = (!nofollow && !newTab) ? 'high'
+                 : (!nofollow ? 'follow'
+                 : (!newTab  ? 'samewindow' : 'ok'));
+      allLinks.push({source: r.url || '', url, anchor, rel, target, placement, nofollow, newTab, risk});
+    }
+  }
+
+  if (!allLinks.length) {
+    panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No external links captured in this crawl. Re-crawl to populate (older crawls predate the External Links capture, which records rel + target per off-domain link).</div>';
+    main.appendChild(panel);
+    return;
+  }
+
+  const counts = {
+    all:        allLinks.length,
+    high:       allLinks.filter(l => l.risk === 'high').length,
+    follow:     allLinks.filter(l => !l.nofollow).length,
+    nofollow:   allLinks.filter(l => l.nofollow).length,
+    samewindow: allLinks.filter(l => !l.newTab).length,
+    newtab:     allLinks.filter(l => l.newTab).length,
+  };
+
+  const domains = new Set();
+  for (const l of allLinks) {
+    try { const d = new URL(l.url).hostname.replace(/^www\./, ''); if (d) domains.add(d); } catch (e) {}
+  }
+
+  panel.innerHTML = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">External links found across the crawl</div>
+      <div style="font-size:.75rem;color:var(--text-muted);margin-bottom:8px;line-height:1.55;">
+        <b>${allLinks.length}</b> external link${allLinks.length === 1 ? '' : 's'} pointing to <b>${domains.size}</b> domain${domains.size === 1 ? '' : 's'}.
+        ${counts.high
+          ? ` <b style="color:#991b1b;">${counts.high} risky</b> <span>(follow + same-window — leaks SEO equity AND loses the visitor)</span>`
+          : ` <b style="color:#166534;">No risky links found.</b>`}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+        <button type="button" class="sc-el-chip sc-el-chip-active" data-filter="all" onclick="_scExternalLinksFilter('all')" style="padding:4px 12px;border-radius:14px;border:1px solid var(--text);background:var(--text);color:var(--surface);font-size:11.5px;cursor:pointer;font-weight:600;">All <span style="opacity:.75;font-weight:400;">${counts.all}</span></button>
+        ${counts.high ? `<button type="button" class="sc-el-chip" data-filter="high" onclick="_scExternalLinksFilter('high')" title="Follow + same-window — leaks link equity AND pushes the visitor off your site." style="padding:4px 12px;border-radius:14px;border:1px solid #fca5a5;background:#fee2e2;color:#991b1b;font-size:11.5px;cursor:pointer;font-weight:600;">⚠ Risky <span style="font-weight:400;">${counts.high}</span></button>` : ''}
+        ${counts.follow ? `<button type="button" class="sc-el-chip" data-filter="follow" onclick="_scExternalLinksFilter('follow')" title="No rel=nofollow. Passes SEO equity to the destination." style="padding:4px 12px;border-radius:14px;border:1px solid #fcd34d;background:#fef3c7;color:#92400e;font-size:11.5px;cursor:pointer;font-weight:600;">Follow <span style="font-weight:400;">${counts.follow}</span></button>` : ''}
+        ${counts.nofollow ? `<button type="button" class="sc-el-chip" data-filter="nofollow" onclick="_scExternalLinksFilter('nofollow')" title="Has rel=nofollow / ugc / sponsored. Doesn't pass equity." style="padding:4px 12px;border-radius:14px;border:1px solid #bbf7d0;background:#dcfce7;color:#166534;font-size:11.5px;cursor:pointer;font-weight:600;">Nofollow <span style="font-weight:400;">${counts.nofollow}</span></button>` : ''}
+        ${counts.samewindow ? `<button type="button" class="sc-el-chip" data-filter="samewindow" onclick="_scExternalLinksFilter('samewindow')" title="No target=_blank. Visitor leaves your site on click." style="padding:4px 12px;border-radius:14px;border:1px solid #fcd34d;background:#fef3c7;color:#92400e;font-size:11.5px;cursor:pointer;font-weight:600;">Same window <span style="font-weight:400;">${counts.samewindow}</span></button>` : ''}
+        ${counts.newtab ? `<button type="button" class="sc-el-chip" data-filter="newtab" onclick="_scExternalLinksFilter('newtab')" title="target=_blank set. Opens in a new tab; your page stays open." style="padding:4px 12px;border-radius:14px;border:1px solid #93c5fd;background:#dbeafe;color:#1e40af;font-size:11.5px;cursor:pointer;font-weight:600;">New tab <span style="font-weight:400;">${counts.newtab}</span></button>` : ''}
+      </div>
+      <details style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">
+        <summary style="cursor:pointer;user-select:none;">What does each filter mean?</summary>
+        <div style="padding:6px 0 0 14px;line-height:1.55;">
+          <div><b style="color:#991b1b;">Risky</b> — link has neither <code>rel=nofollow</code> nor <code>target=_blank</code>. Passes link equity to a third-party domain AND opens in the same tab so the visitor leaves your site.</div>
+          <div style="margin-top:4px;"><b style="color:#92400e;">Follow / dofollow</b> — no <code>rel=nofollow</code>. Passes SEO equity to the destination. Fine for trusted citations; problematic on user-generated content, sponsored posts, or untrusted sources.</div>
+          <div style="margin-top:4px;"><b style="color:#166534;">Nofollow</b> — has <code>rel=nofollow</code>, <code>ugc</code>, or <code>sponsored</code>. Doesn't pass equity. Right for paid links and untrusted content.</div>
+          <div style="margin-top:4px;"><b style="color:#92400e;">Same window</b> — no <code>target=_blank</code>. Visitor leaves your site on click. Usually bad UX on external links.</div>
+          <div style="margin-top:4px;"><b style="color:#1e40af;">New tab</b> — <code>target=_blank</code> set. External link opens in a new tab; your page stays open.</div>
+        </div>
+      </details>
+    </div>
+    <table id="sc-external-links-table" style="width:100%;border-collapse:collapse;font-size:.78rem;">
+      <colgroup>
+        <col style="width:280px"><col style="width:340px"><col style="width:220px"><col style="width:140px"><col style="width:90px"><col style="width:80px">
+      </colgroup>
+      <thead>
+        <tr style="background:var(--surface);position:sticky;top:0;">
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">Source page</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">External URL</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">Anchor</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">rel</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">target</th>
+          <th style="padding:8px 10px;text-align:left;font-weight:600;color:var(--text-muted);font-size:11px;border-bottom:1px solid var(--border);">Risk</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allLinks.map(l => {
+          const riskBadge = {
+            high:       '<span style="color:#991b1b;font-weight:600;">⚠ risky</span>',
+            follow:     '<span style="color:#92400e;">follow</span>',
+            samewindow: '<span style="color:#92400e;">same window</span>',
+            ok:         '<span style="color:#166534;">ok</span>',
+          }[l.risk] || '';
+          return `
+            <tr data-risk="${l.risk}" data-follow="${l.nofollow ? 'nofollow' : 'follow'}" data-window="${l.newTab ? 'newtab' : 'samewindow'}" style="border-bottom:1px solid var(--border);">
+              <td style="padding:6px 10px;word-break:break-all;white-space:normal;"><a href="${escapeHtml(l.source)}" target="_blank" rel="noopener" style="color:var(--accent);">${escapeHtml(l.source)}</a></td>
+              <td style="padding:6px 10px;word-break:break-all;white-space:normal;"><a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent);">${escapeHtml(l.url)}</a></td>
+              <td title="${escapeHtml(l.anchor)}" style="padding:6px 10px;white-space:normal;">${escapeHtml(l.anchor)}</td>
+              <td style="padding:6px 10px;"><code style="font-size:.7rem;color:var(--text-muted);">${escapeHtml(l.rel || '(none)')}</code></td>
+              <td style="padding:6px 10px;"><code style="font-size:.7rem;color:var(--text-muted);">${escapeHtml(l.target || '(none)')}</code></td>
+              <td style="padding:6px 10px;">${riskBadge}</td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  main.appendChild(panel);
+}
+
+function _scExternalLinksFilter(want) {
+  const tbody = document.querySelector('#sc-external-links-table tbody');
+  if (!tbody) return;
+  tbody.querySelectorAll('tr[data-risk]').forEach(tr => {
+    let show = false;
+    if (want === 'all')             show = true;
+    else if (want === 'high')       show = tr.dataset.risk === 'high';
+    else if (want === 'follow')     show = tr.dataset.follow === 'follow';
+    else if (want === 'nofollow')   show = tr.dataset.follow === 'nofollow';
+    else if (want === 'samewindow') show = tr.dataset.window === 'samewindow';
+    else if (want === 'newtab')     show = tr.dataset.window === 'newtab';
+    tr.style.display = show ? '' : 'none';
+  });
+  document.querySelectorAll('.sc-el-chip').forEach(b => {
+    const isActive = b.dataset.filter === want;
+    b.classList.toggle('sc-el-chip-active', isActive);
+    if (isActive) {
+      b.style.background = 'var(--text)';
+      b.style.color = 'var(--surface)';
+      b.style.borderColor = 'var(--text)';
+    } else {
+      const restore = {
+        'all':        { bg:'var(--surface)', fg:'var(--text)', bd:'var(--border)' },
+        'high':       { bg:'#fee2e2', fg:'#991b1b', bd:'#fca5a5' },
+        'follow':     { bg:'#fef3c7', fg:'#92400e', bd:'#fcd34d' },
+        'nofollow':   { bg:'#dcfce7', fg:'#166534', bd:'#bbf7d0' },
+        'samewindow': { bg:'#fef3c7', fg:'#92400e', bd:'#fcd34d' },
+        'newtab':     { bg:'#dbeafe', fg:'#1e40af', bd:'#93c5fd' },
+      }[b.dataset.filter] || { bg:'var(--surface)', fg:'var(--text)', bd:'var(--border)' };
       b.style.background = restore.bg;
       b.style.color = restore.fg;
       b.style.borderColor = restore.bd;
@@ -1921,6 +2082,14 @@ function updateCounts() {
     }
     counts.__all_images = seen.size;
   }
+  // __external_links count: total external link references (NOT unique URLs
+  // — same Twitter share-URL in 50 footers is 50 audit decisions, not 1).
+  // Tolerates older saved crawls where external_link_urls was the 3-tuple
+  // [url, anchor, placement] without rel/target.
+  if ('__external_links' in counts) {
+    counts.__external_links = (crawlerResults || []).reduce(
+      (n, r) => n + ((r.external_link_urls || []).filter(e => e && e[0]).length), 0);
+  }
   // __js_diff count: pages with a meaningful diff (severity != 'none').
   // The sidebar entry stays hidden until the crawl actually compared, so
   // a "0" entry doesn't permanently sit in the list.
@@ -2098,6 +2267,45 @@ function _buildExportForCategory(cat) {
     return { header: ['Page URL', 'Image Src', 'Alt', 'Classification', 'Page Title', 'Page H1'], rows };
   }
 
+  // External Links — every off-domain link with rel + target.
+  if (cat === '__external_links') {
+    const rows = [];
+    for (const r of crawlerResults) {
+      const list = Array.isArray(r.external_link_urls) ? r.external_link_urls : [];
+      for (const entry of list) {
+        const url = entry[0] || '';
+        if (!url) continue;
+        const anchor    = entry[1] || '';
+        const placement = entry[2] || '';
+        const rel       = (entry[3] || '').toString();
+        const target    = (entry[4] || '').toString();
+        const nofollow  = /\bnofollow\b/.test(rel);
+        const newTab    = target === '_blank';
+        const noopener  = /\bnoopener\b/.test(rel);
+        const risk = (!nofollow && !newTab) ? 'high'
+                   : (!nofollow ? 'follow'
+                   : (!newTab  ? 'samewindow' : 'ok'));
+        rows.push([
+          r.url || '',
+          url,
+          anchor,
+          rel || '(none)',
+          target || '(same window)',
+          nofollow ? 'nofollow' : 'follow',
+          newTab ? '_blank' : 'same window',
+          noopener ? 'noopener' : '(no noopener)',
+          risk,
+          placement,
+        ]);
+      }
+    }
+    return {
+      header: ['Source Page', 'External URL', 'Anchor', 'rel', 'target',
+               'Follow status', 'Window', 'noopener', 'Risk', 'Placement'],
+      rows,
+    };
+  }
+
   // Sitemap reports
   if (cat.startsWith('__sm_')) {
     const map = {
@@ -2174,6 +2382,7 @@ function _buildExportForCategory(cat) {
 function _crawlerExportViewLabel(cat, n) {
   const labels = {
     '__all_images':    `Export view (${n} image${n===1?'':'s'})`,
+    '__external_links':`Export view (${n} external link${n===1?'':'s'})`,
     '__sm_missing':    `Export view (${n} missing-from-sitemap)`,
     '__sm_orphan':     `Export view (${n} orphan-in-sitemap)`,
     '__sm_only':       `Export view (${n} sitemap-only orphan${n===1?'':'s'})`,
@@ -2247,6 +2456,7 @@ async function exportCrawlerXlsx() {
     const extraSheets = [];
     const cats = [
       ['__all_images',    'All Images'],
+      ['__external_links','External Links'],
       ['__schema_by_page','Schema by Page'],
       ['__nd_content',    'Near-Duplicate Pairs'],
     ];
