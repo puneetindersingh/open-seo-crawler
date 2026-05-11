@@ -858,6 +858,13 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
 
             result['redirect_kind'] = redirect_kind
 
+            # Canonicalize: the row should represent the URL that actually
+            # returned 200, not the URL we requested. Without this, the seed
+            # AND the redirect target both end up as separate "page" rows when
+            # the target is later discovered via an internal link.
+            result['url'] = resp.url
+            result['original_url'] = url
+
         # --- URL issues (from the source URL, not redirect target) ---
         from urllib.parse import urlparse as _urlparse2
         _parsed_url = _urlparse2(url)
@@ -2440,6 +2447,19 @@ def crawl_site():
                             matching_kws = [k for k in tracked_kws if k.get('url','').rstrip('/') == page_url_clean]
                             if matching_kws:
                                 page_data['tracked_keywords'] = matching_kws
+
+                        # If a redirect happened, _crawl_page rewrote page_data['url']
+                        # to the canonical final URL. Mark BOTH the requested URL and
+                        # the canonical URL as visited so a later internal link to
+                        # the canonical URL doesn't queue a duplicate row.
+                        canonical_url = page_data.get('url')
+                        if canonical_url and canonical_url != url:
+                            visited.add(canonical_url)
+                            _alt = _crawl_slash_alt(canonical_url)
+                            if _alt:
+                                visited.add(_alt)
+                            if any(r.get('url') == canonical_url for r in results):
+                                continue
 
                         results.append(page_data)
                         if page_data.get('error'):
