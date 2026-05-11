@@ -595,6 +595,53 @@ def _is_third_party_widget_image(abs_src):
     return False
 
 
+# alt="" is the spec-correct pattern for decorative images, but on real sites
+# the bucket also catches photos / screenshots / logos where the alt was simply
+# forgotten. Match the filename against page-builder shape exports (Elementor,
+# Figma, Sketch, XD) and common UI ornament names — anything that does NOT
+# match is treated as likely content and surfaced for owner review.
+_DECORATIVE_FILENAME_RE = _re.compile(
+    r'(?:'
+    r'^(?:layer|group|mask[-_]?group|path|vector|rectangle|ellipse|frame|union|subtract|clip|component|line|polygon|oval|artboard)[-_ ]?\d*'
+    r'|quotation|quote[-_]?mark'
+    r'|(?:^|[-_/])(?:bg|background|backdrop|hero[-_]?bg|pattern|texture|noise|gradient|overlay|stripe|grid|mesh)(?:[-_]|$)'
+    r'|(?:^|[-_/])(?:icon|ico|sprite|emoji|emote|bullet|chevron|caret|burger|hamburger|loader|spinner|placeholder|divider|separator|ornament|accent|swirl|squiggle|ribbon)(?:[-_]|$)'
+    r'|(?:^|[-_/])(?:star|sparkle|shape|blob|leaf|petal|circle|square|triangle)(?:[-_]|$)'
+    r')',
+    _re.I,
+)
+
+
+def _filename_looks_decorative(src):
+    """Heuristic: does this image filename look like a decorative shape /
+    icon / pattern export rather than a content photo / screenshot / logo?
+
+    Decorative (True):  Layer-1.svg, Group-83.png, Mask-Group-2.png,
+                        quotation.png, pattern-dots.svg, hero-bg.jpg,
+                        icon-arrow.svg, divider.png
+    Content (False):    hero-team.jpg, screenshot-2026-04-12.png,
+                        logo-white.png, unrecognizable-man-working.jpg
+
+    Used to split <img alt=""> into 'genuinely decorative' (info) and
+    'likely content with forgotten alt' (surfaced as an issue).
+    """
+    if not src:
+        return True
+    try:
+        from urllib.parse import urlparse as _up
+        path = _up(src).path or src
+    except Exception:
+        path = src
+    fname = path.rsplit('/', 1)[-1]
+    if not fname:
+        return True
+    fname = _re.sub(r'\.(svg|png|jpe?g|gif|webp|avif|ico|bmp)$', '', fname, flags=_re.I)
+    fname = _re.sub(r'[-_]\d{2,4}x\d{2,4}$', '', fname)
+    fname = _re.sub(r'@\d+x$', '', fname)
+    fname = _re.sub(r'[-_]scaled$', '', fname, flags=_re.I)
+    return bool(_DECORATIVE_FILENAME_RE.search(fname))
+
+
 def _parse_no_js_subset(html, base_url):
     """Parse a subset of SEO-critical fields from raw HTML — used for the
     JS-vs-non-JS comparison so we can show what content is missing when JS
@@ -1168,11 +1215,12 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         #     (the image doesn't need its own alt for screen readers).
         imgs = soup.find_all('img')
         result['images_total'] = len(imgs)
-        no_alt_imgs = []          # offending — no alt attr AND not decorative
-        no_alt_data = []          # rich per-image records — feeds the missing-alt detail row
-        all_images_data = []      # every meaningful image on the page — feeds the All Images panel
-        empty_alt_count = 0       # <img alt=""> — correct decorative pattern
-        skipped_decorative = 0    # skipped via heuristics (tracker px, aria-hidden, widgets, labeled parent)
+        no_alt_imgs = []              # offending — no alt attr AND not decorative
+        no_alt_data = []              # rich per-image records — feeds the missing-alt detail row
+        all_images_data = []          # every meaningful image on the page — feeds the All Images panel
+        empty_alt_count = 0           # <img alt=""> on genuinely decorative imagery — correct pattern
+        empty_alt_content_imgs = []   # <img alt=""> on what looks like content (photo/screenshot/logo) — needs review
+        skipped_decorative = 0        # skipped via heuristics (tracker px, aria-hidden, widgets, labeled parent)
 
         def _has_accessible_name(node):
             """Whether a parent link/button carries its own accessible name —
@@ -1258,8 +1306,10 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
                         _classification = 'empty'
                     else:
                         _classification = 'empty in link'
-                else:
+                elif _filename_looks_decorative(abs_src):
                     _classification = 'empty'
+                else:
+                    _classification = 'empty (likely content)'
             else:
                 _classification = 'present'
 
@@ -1276,7 +1326,19 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
 
             # Branch into the existing alt-correctness counters/lists.
             if alt_attr == '':
-                empty_alt_count += 1
+                if _classification == 'empty (likely content)':
+                    empty_alt_content_imgs.append(abs_src)
+                    if len(no_alt_data) < 20:
+                        no_alt_data.append({
+                            'src': abs_src,
+                            'alt': alt_attr,
+                            'classification': _classification,
+                            'parent_tag': _ptag_name,
+                            'parent_text': _ptext,
+                            'surrounding': _surrounding,
+                        })
+                else:
+                    empty_alt_count += 1
                 continue
             if alt_attr is not None and alt_attr.strip():
                 continue  # Has meaningful alt — good
@@ -1304,6 +1366,8 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         result['images_no_alt_data'] = no_alt_data       # rich per-image records (cap 20)
         result['images_all_data']    = all_images_data   # every meaningful img (cap 50) — feeds All Images panel
         result['images_empty_alt'] = empty_alt_count
+        result['images_empty_alt_content'] = len(empty_alt_content_imgs)
+        result['images_empty_alt_content_urls'] = empty_alt_content_imgs[:20]
         result['images_decorative_skipped'] = skipped_decorative
 
         # Links - extract internal + external with anchor text + placement.
@@ -1469,6 +1533,8 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
 
             if result['images_no_alt'] > 0:
                 result['issues'].append(f'{result["images_no_alt"]} imgs missing alt')
+            if result.get('images_empty_alt_content', 0) > 0:
+                result['issues'].append(f'{result["images_empty_alt_content"]} imgs with empty alt on content imagery')
 
             if not result['schema_types']:
                 result['issues'].append('No schema')
