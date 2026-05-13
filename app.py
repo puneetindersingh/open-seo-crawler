@@ -2393,7 +2393,21 @@ def crawl_site():
 
         # Per-host politeness: minimum gap between two requests to the same host.
         # Workers on DIFFERENT hosts run freely; same-host workers serialise via this lock+timestamp map.
-        from concurrent.futures import ThreadPoolExecutor, wait as _fwait, FIRST_COMPLETED
+        from concurrent.futures import ThreadPoolExecutor, Future, wait as _fwait, FIRST_COMPLETED
+
+        class SyncExecutor:
+            """Dummy executor that runs jobs in the current thread. Used to keep 
+            Playwright (sync API) in its originating thread to avoid greenlet errors."""
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def submit(self, fn, *args, **kwargs):
+                f = Future()
+                try:
+                    f.set_result(fn(*args, **kwargs))
+                except Exception as e:
+                    f.set_exception(e)
+                return f
+
         from urllib.parse import urlparse as _up
         host_last_fetch = {}
         host_lock = threading.Lock()
@@ -2470,7 +2484,11 @@ def crawl_site():
             return None
 
         try:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Playwright's sync API is not thread-safe and must be used from the thread 
+            # that initialized it. When render_js is on (forcing max_workers=1), we 
+            # bypass ThreadPoolExecutor and run jobs in the current thread.
+            _exec_ctx = SyncExecutor() if render_js else ThreadPoolExecutor(max_workers=max_workers)
+            with _exec_ctx as executor:
               # Outer loop lets /crawl/continue bump the page cap and resume
               # without restarting the crawl from scratch.
               while True:
