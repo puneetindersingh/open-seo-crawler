@@ -982,6 +982,12 @@ window.selectCategory = function(cat) {
     tbody.innerHTML = '';
     if (_tableWrap) _tableWrap.style.display = 'none';
     if (_expandHint) _expandHint.style.display = 'none';
+    // Strip any previously-rendered special panel so we don't stack them.
+    // Each renderer removes only its own ID; switching between special tabs
+    // without this would leave stale Schema/Images/etc. panels in the DOM.
+    ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
+     'all-images-panel','external-links-panel','js-diff-panel']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     if (cat === '__schema_by_page') {
       _renderSchemaByPagePanel();
     } else if (cat === '__nd_content') {
@@ -1177,7 +1183,7 @@ function _scRenderJsDiffPanel() {
   if (old) old.remove();
   const panel = document.createElement('div');
   panel.id = 'js-diff-panel';
-  panel.style.cssText = 'padding:0;font-size:12px;';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
 
   const allPages = (crawlerResults || []).filter(r => r && r.js_diff);
   if (!allPages.length) {
@@ -1298,7 +1304,7 @@ function _scRenderAllImagesPanel() {
   if (old) old.remove();
   const panel = document.createElement('div');
   panel.id = 'all-images-panel';
-  panel.style.cssText = 'padding:0;font-size:12px;';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
 
   if (!Array.isArray(crawlerResults) || !crawlerResults.length) {
     panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No pages crawled yet.</div>';
@@ -1468,7 +1474,7 @@ function _scRenderExternalLinksPanel() {
   if (old) old.remove();
   const panel = document.createElement('div');
   panel.id = 'external-links-panel';
-  panel.style.cssText = 'padding:0;font-size:12px;';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
 
   const allLinks = [];
   for (const r of (crawlerResults || [])) {
@@ -1646,7 +1652,7 @@ function _renderSchemaByPagePanel() {
   if (old) old.remove();
   const panel = document.createElement('div');
   panel.id = 'schema-by-page-panel';
-  panel.style.cssText = 'padding:0 14px 14px;font-size:12px;';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0 14px 14px;font-size:12px;';
   const rows = (crawlerResults || []).filter(r => !r.error);
   if (!rows.length) {
     panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No crawled pages yet.</div>';
@@ -1828,7 +1834,8 @@ window.runNearDupAnalysis = async function() {
 };
 
 function _renderNearDupPanel() {
-  const main = document.querySelector('section#crawler-results') || document.querySelector('section.results') || document.querySelector('main') || document.body;
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
   document.getElementById('near-dup-panel')?.remove();
   const panel = document.createElement('div');
   panel.id = 'near-dup-panel';
@@ -1952,7 +1959,7 @@ function _renderSitemapPanel(cat) {
   if (old) old.remove();
   const panel = document.createElement('div');
   panel.id = 'sitemap-panel';
-  panel.style.cssText = 'padding:0 14px 14px;font-size:12px;';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0 14px 14px;font-size:12px;';
   if (!d) {
     panel.innerHTML = '<div style="padding:20px;color:#64748b;">Click <b>Analyse</b> in the sidebar to run sitemap analysis.</div>';
     main.appendChild(panel);
@@ -3735,7 +3742,7 @@ function _scRenderSiteStructurePanel() {
   if (old) old.remove();
   const panel = document.createElement('div');
   panel.id = 'sitestructure-panel';
-  panel.style.cssText = 'padding:14px;font-size:12px;';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:14px;font-size:12px;';
   panel.innerHTML = _scRenderSiteStructure();
   main.appendChild(panel);
 }
