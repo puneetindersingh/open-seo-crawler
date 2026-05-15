@@ -137,23 +137,48 @@ echo ">>> Installing system packages..."
 sudo apt-get update -y
 sudo apt-get install -y python3 python3-venv python3-pip git curl software-properties-common
 
-# If we don't yet have a Python 3.10+, add deadsnakes PPA and install python3.10
+# If we don't yet have a Python 3.10+, add deadsnakes PPA and try installing
+# the newest version available for the host's release (3.13 -> 3.12 -> 3.11 -> 3.10).
+# deadsnakes drops older Python builds on older Ubuntu releases over time, so we
+# fall back through versions until apt actually finds one.
 if [ -z "$PYTHON_BIN" ]; then
-  echo ">>> System Python is too old — installing python${MIN_PY_MAJOR}.${MIN_PY_MINOR} via deadsnakes PPA..."
+  echo ">>> System Python is too old — installing a newer Python via deadsnakes PPA..."
   if [ -r /etc/os-release ]; then
     . /etc/os-release
     case "${ID:-}${ID_LIKE:-}" in
       *linuxmint*|*ubuntu*) : ;;
-      *) fail "deadsnakes PPA only supports Ubuntu/Mint. Install python${MIN_PY_MAJOR}.${MIN_PY_MINOR} manually first." ;;
+      *) fail "deadsnakes PPA only supports Ubuntu/Mint. Install python${MIN_PY_MAJOR}.${MIN_PY_MINOR}+ manually first." ;;
     esac
   fi
+
   sudo add-apt-repository -y ppa:deadsnakes/ppa
   sudo apt-get update -y
-  sudo apt-get install -y \
-    python${MIN_PY_MAJOR}.${MIN_PY_MINOR} \
-    python${MIN_PY_MAJOR}.${MIN_PY_MINOR}-venv \
-    python${MIN_PY_MAJOR}.${MIN_PY_MINOR}-distutils
-  PYTHON_BIN="python${MIN_PY_MAJOR}.${MIN_PY_MINOR}"
+
+  for ver in 3.13 3.12 3.11 3.10; do
+    echo ">>> Trying python${ver}..."
+    # distutils was removed from the stdlib in 3.12+; the deadsnakes package
+    # only exists for 3.10 / 3.11.
+    pkgs="python${ver} python${ver}-venv"
+    case "$ver" in
+      3.10|3.11) pkgs="$pkgs python${ver}-distutils" ;;
+    esac
+    # Confirm the main package actually exists in the index before invoking apt-get
+    # (avoids apt's "regex match" fallback that picks up libpython*, libqgis*, etc).
+    if ! apt-cache show "python${ver}" >/dev/null 2>&1; then
+      yellow "python${ver} not in apt index — trying older version"
+      continue
+    fi
+    if sudo apt-get install -y $pkgs; then
+      if command -v "python${ver}" >/dev/null 2>&1 && python_ok "python${ver}"; then
+        PYTHON_BIN="python${ver}"
+        ok "Installed $PYTHON_BIN"
+        break
+      fi
+    fi
+    yellow "python${ver} install failed — falling back"
+  done
+
+  [ -z "$PYTHON_BIN" ] && fail "Couldn't install any Python 3.10+ from deadsnakes. Check https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa for versions available on your release."
 fi
 
 # Re-verify
