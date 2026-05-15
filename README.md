@@ -58,6 +58,16 @@ python3 app.py
 
 Open [http://localhost:5002/](http://localhost:5002/) in your browser.
 
+### One-line install — auto-start + auto-update (Linux / macOS / Windows)
+
+Each installer registers the crawler as a background service that starts on boot/login and a daily auto-updater that pulls the latest from this repo (with rollback on failure). Installs to `~/open-seo-crawler` (or `%USERPROFILE%\open-seo-crawler` on Windows). Browser auto-opens to `http://localhost:5002/` when done.
+
+| Platform | Install command |
+|---|---|
+| **Linux Mint / Ubuntu / Debian** | See below — `install.sh` |
+| **macOS** (Intel + Apple Silicon) | See [macOS section](#one-line-install-on-macos) |
+| **Windows 10 / 11** | See [Windows section](#one-line-install-on-windows-10--11) |
+
 ### One-line install on Linux Mint / Ubuntu / Debian
 
 Installs to `~/open-seo-crawler`, registers a `systemd` service so it auto-starts on every boot, and sets up a daily + on-boot auto-updater that pulls the latest from this repo.
@@ -92,6 +102,71 @@ journalctl -u open-seo-crawler-update.service -n 50  # update history
 sudo systemctl disable --now open-seo-crawler-update.timer  # turn auto-update off
 tail -f /var/log/open-seo-crawler.log              # live app logs
 ```
+
+### One-line install on macOS
+
+Works on Intel + Apple Silicon, macOS 11 Big Sur and newer. Uses Homebrew + `launchd`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-macos.sh -o install-macos.sh
+chmod +x install-macos.sh
+./install-macos.sh --check   # dry-run preflight, no changes
+./install-macos.sh           # full install
+```
+
+What the installer does:
+
+- Verifies prerequisites (macOS, Python 3.10+, disk space, free port 5002, internet)
+- Installs Homebrew if missing (will prompt for your password)
+- Installs `python@3.12` + `git` via Homebrew if missing
+- Clones the repo, creates a virtualenv, installs Python deps
+- Registers `io.openseocrawler.app` LaunchAgent (starts on login, restarts on crash)
+- Registers `io.openseocrawler.update` LaunchAgent (runs 2 min after login + daily at 03:30 with auto-rollback)
+- Opens `http://localhost:5002/` in your default browser
+
+Useful commands after install:
+
+```bash
+launchctl list | grep openseocrawler                                                # is it running?
+launchctl kickstart -k gui/$(id -u)/io.openseocrawler.app                           # restart
+launchctl bootout gui/$(id -u)/io.openseocrawler.app                                # stop
+rm ~/Library/LaunchAgents/io.openseocrawler.app.plist                               # disable autostart
+./install-macos.sh --update-now                                                     # force update now
+tail -f ~/Library/Logs/OpenSEOCrawler/app.log                                       # live app logs
+tail -f ~/Library/Logs/OpenSEOCrawler/update.log                                    # update history
+```
+
+### One-line install on Windows 10 / 11
+
+Uses `winget` + Task Scheduler. Run from PowerShell:
+
+```powershell
+iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check   # dry-run preflight
+powershell -ExecutionPolicy Bypass -File .\install.ps1          # full install
+```
+
+What the installer does:
+
+- Verifies prerequisites (Windows, Python 3.10+, disk space, free port 5002, internet)
+- Installs Python 3.12 + Git via `winget` if missing
+- Clones the repo to `%USERPROFILE%\open-seo-crawler`, creates a virtualenv, installs Python deps
+- Registers a `OpenSeoCrawler` Task Scheduler task (starts at logon, runs in the background via `pythonw.exe` — no console window)
+- Registers a `OpenSeoCrawler-Update` Task Scheduler task (runs 2 min after boot + daily at 03:30 with auto-rollback)
+- Opens `http://localhost:5002/` in your default browser
+
+Useful commands after install (PowerShell):
+
+```powershell
+Get-ScheduledTask -TaskName OpenSeoCrawler                                          # is it registered?
+Stop-ScheduledTask -TaskName OpenSeoCrawler; Start-ScheduledTask -TaskName OpenSeoCrawler  # restart
+Stop-ScheduledTask -TaskName OpenSeoCrawler                                         # stop
+Unregister-ScheduledTask -TaskName OpenSeoCrawler -Confirm:$false                   # remove
+.\install-windows.ps1 -UpdateNow                                                    # force update
+Get-Content "$env:USERPROFILE\open-seo-crawler\update.log" -Tail 50 -Wait           # tail update log
+```
+
+> If PowerShell's execution policy blocks the script, prefix with `-ExecutionPolicy Bypass` as shown above. No admin rights are needed — `winget --scope user` and user-level scheduled tasks both work without UAC.
 
 ### Optional: JS rendering (for SPAs)
 
