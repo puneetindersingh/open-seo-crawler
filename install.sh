@@ -71,15 +71,39 @@ ok "systemd active"
 curl -fsSL --max-time 5 https://github.com >/dev/null 2>&1 || fail "Cannot reach github.com — check internet connection."
 ok "Internet reachable (github.com)"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  yellow "python3 not found — will install via apt."
+# Helper: check whether a given python binary is >= MIN_PY_MAJOR.MIN_PY_MINOR
+python_ok() {
+  local bin="$1"
+  command -v "$bin" >/dev/null 2>&1 || return 1
+  "$bin" -c "import sys; sys.exit(0 if sys.version_info >= (${MIN_PY_MAJOR}, ${MIN_PY_MINOR}) else 1)" 2>/dev/null
+}
+
+# Pick a Python binary to use. Try python3 first, then any python3.10+ already installed.
+PYTHON_BIN=""
+for candidate in python3 python3.13 python3.12 python3.11 python3.10; do
+  if python_ok "$candidate"; then PYTHON_BIN="$candidate"; break; fi
+done
+
+if [ -n "$PYTHON_BIN" ]; then
+  PY_VER=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  ok "Python $PY_VER ($PYTHON_BIN) — meets ${MIN_PY_MAJOR}.${MIN_PY_MINOR}+ requirement"
 else
-  PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-  PY_MAJ=${PY_VER%.*}; PY_MIN=${PY_VER#*.}
-  if [ "$PY_MAJ" -lt "$MIN_PY_MAJOR" ] || { [ "$PY_MAJ" -eq "$MIN_PY_MAJOR" ] && [ "$PY_MIN" -lt "$MIN_PY_MINOR" ]; }; then
-    fail "Python $PY_VER detected, need ${MIN_PY_MAJOR}.${MIN_PY_MINOR}+. Upgrade Mint or install python3.10+."
+  CUR_PY="(none)"
+  if command -v python3 >/dev/null 2>&1; then
+    CUR_PY=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
   fi
-  ok "Python $PY_VER (>= ${MIN_PY_MAJOR}.${MIN_PY_MINOR})"
+  warn "Python ${MIN_PY_MAJOR}.${MIN_PY_MINOR}+ not found (system has $CUR_PY)."
+  warn "Will install python${MIN_PY_MAJOR}.${MIN_PY_MINOR} via the deadsnakes PPA during install step."
+  if [ "$MODE" = "check" ]; then
+    # In --check mode we don't install, just confirm the path forward is viable
+    if [ -r /etc/os-release ]; then
+      . /etc/os-release
+      case "${ID:-}${ID_LIKE:-}" in
+        *linuxmint*|*ubuntu*) ok "OS is Ubuntu-based — deadsnakes PPA will work" ;;
+        *) fail "Old Python and not on Ubuntu/Mint — deadsnakes PPA not available. Install python${MIN_PY_MAJOR}.${MIN_PY_MINOR} manually first." ;;
+      esac
+    fi
+  fi
 fi
 
 FREE_MB=$(df -Pm "$HOME" | awk 'NR==2 {print $4}')
@@ -111,13 +135,33 @@ fi
 # ---------- Install ----------
 echo ">>> Installing system packages..."
 sudo apt-get update -y
-sudo apt-get install -y python3 python3-venv python3-pip git curl
+sudo apt-get install -y python3 python3-venv python3-pip git curl software-properties-common
 
-PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PY_MAJ=${PY_VER%.*}; PY_MIN=${PY_VER#*.}
-if [ "$PY_MAJ" -lt "$MIN_PY_MAJOR" ] || { [ "$PY_MAJ" -eq "$MIN_PY_MAJOR" ] && [ "$PY_MIN" -lt "$MIN_PY_MINOR" ]; }; then
-  fail "Python $PY_VER still too old after apt install. Aborting."
+# If we don't yet have a Python 3.10+, add deadsnakes PPA and install python3.10
+if [ -z "$PYTHON_BIN" ]; then
+  echo ">>> System Python is too old — installing python${MIN_PY_MAJOR}.${MIN_PY_MINOR} via deadsnakes PPA..."
+  if [ -r /etc/os-release ]; then
+    . /etc/os-release
+    case "${ID:-}${ID_LIKE:-}" in
+      *linuxmint*|*ubuntu*) : ;;
+      *) fail "deadsnakes PPA only supports Ubuntu/Mint. Install python${MIN_PY_MAJOR}.${MIN_PY_MINOR} manually first." ;;
+    esac
+  fi
+  sudo add-apt-repository -y ppa:deadsnakes/ppa
+  sudo apt-get update -y
+  sudo apt-get install -y \
+    python${MIN_PY_MAJOR}.${MIN_PY_MINOR} \
+    python${MIN_PY_MAJOR}.${MIN_PY_MINOR}-venv \
+    python${MIN_PY_MAJOR}.${MIN_PY_MINOR}-distutils
+  PYTHON_BIN="python${MIN_PY_MAJOR}.${MIN_PY_MINOR}"
 fi
+
+# Re-verify
+if ! python_ok "$PYTHON_BIN"; then
+  fail "Python ${MIN_PY_MAJOR}.${MIN_PY_MINOR}+ still not available after install. Aborting."
+fi
+PY_VER=$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+ok "Using $PYTHON_BIN (Python $PY_VER) for the venv"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo ">>> Updating existing repo at $INSTALL_DIR"
@@ -127,8 +171,8 @@ else
   git clone "$REPO_URL" "$INSTALL_DIR"
 fi
 
-echo ">>> Setting up Python venv..."
-python3 -m venv "$INSTALL_DIR/venv"
+echo ">>> Setting up Python venv with $PYTHON_BIN..."
+"$PYTHON_BIN" -m venv "$INSTALL_DIR/venv"
 "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
 "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
 
