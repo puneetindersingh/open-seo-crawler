@@ -58,9 +58,9 @@
       </label>
       <label class="check"><input type="checkbox" id="crawler-ignore-robots" /> Ignore robots.txt</label>
       <label class="check"><input type="checkbox" id="crawler-ignore-noindex" /> Ignore noindex <small>(audit noindex pages as if indexable)</small></label>
-      <label class="check"><input type="checkbox" id="crawler-run-sitemap" /> Sitemap analysis <small>(after crawl: missing / orphan / sitemap-only / etc.)</small></label>
-      <label class="check"><input type="checkbox" id="crawler-run-neardup" onchange="_scToggleNearDupCfg(this.checked)" /> Near-duplicate content <small>(content body only; Shingle Jaccard)</small></label>
-      <div id="crawler-neardup-cfg" style="display:none;padding:6px 8px 4px 22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;">
+      <label class="check"><input type="checkbox" id="crawler-run-sitemap" checked /> Sitemap analysis <small>(after crawl: missing / orphan / sitemap-only / etc.)</small></label>
+      <label class="check"><input type="checkbox" id="crawler-run-neardup" checked onchange="_scToggleNearDupCfg(this.checked)" /> Near-duplicate content <small>(content body only; Shingle Jaccard)</small></label>
+      <div id="crawler-neardup-cfg" style="padding:6px 8px 4px 22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;">
           <small>Similarity ≥</small>
           <input type="number" id="crawler-neardup-threshold" min="50" max="100" step="1" value="90" style="width:54px;text-align:right;padding:3px 6px;border:1px solid var(--border,#e2e8f0);border-radius:4px;" />
