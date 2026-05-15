@@ -2359,6 +2359,33 @@ function _buildExportForCategory(cat) {
   // Sitemap visualisation is a tree, not tabular — caller already hides btn.
   if (cat === '__sitemap_viz') return null;
 
+  // Inlinks-rich problem reports — one row per (source page, broken/redirected
+  // target) so the user knows WHICH page to edit AND what anchor text to look
+  // for. Without this, a 4xx export is just a list of URLs with no fix path.
+  if (cat === 'HTTP' || cat === 'Redirect') {
+    const filtered = crawlerResults.filter(d => matchesCategory(d, cat));
+    const header = ['Source URL', 'Anchor Text', 'Target URL', 'Target Status', 'Target Title', 'Issue'];
+    const rows = [];
+    filtered.forEach(d => {
+      const inlinks = (typeof getInlinksFor === 'function')
+        ? getInlinksFor(d.url)
+        : ((crawlerInlinks && (crawlerInlinks[d.url] || crawlerInlinks[d.url.replace(/\/$/, '')] || crawlerInlinks[d.url + '/'])) || []);
+      const issueLabel = cat === 'HTTP'
+        ? `Broken (${d.status_code || ''})`
+        : (d.redirect_kind || 'Redirect');
+      if (!inlinks.length) {
+        rows.push(['', '', d.url, d.status_code || '', d.title || '', issueLabel]);
+      } else {
+        inlinks.forEach(e => {
+          const src    = (typeof e === 'string') ? e : (e.source || '');
+          const anchor = (typeof e === 'string') ? '' : (e.anchor || '');
+          rows.push([src, anchor, d.url, d.status_code || '', d.title || '', issueLabel]);
+        });
+      }
+    });
+    return { header, rows };
+  }
+
   // Default: page-level summary using matchesCategory.
   const filtered = (cat === 'all')
     ? crawlerResults.slice()
@@ -2392,6 +2419,8 @@ function _crawlerExportViewLabel(cat, n) {
     '__sm_pagination': `Export view (${n} pagination URL${n===1?'':'s'} in sitemap)`,
     '__nd_content':    `Export view (${n} near-dup pair${n===1?'':'s'})`,
     '__schema_by_page':`Export view (${n} schema row${n===1?'':'s'})`,
+    'HTTP':            `Export view (${n} 4xx/5xx inlink${n===1?'':'s'})`,
+    'Redirect':        `Export view (${n} redirect inlink${n===1?'':'s'})`,
   };
   return labels[cat] || `Export view (${n} row${n===1?'':'s'})`;
 }
@@ -2459,6 +2488,10 @@ async function exportCrawlerXlsx() {
       ['__external_links','External Links'],
       ['__schema_by_page','Schema by Page'],
       ['__nd_content',    'Near-Duplicate Pairs'],
+      // Inlinks-rich problem reports — one row per (source page, broken/
+      // redirected target) so users can fix the link AND know the anchor text.
+      ['HTTP',            '4xx-5xx Inlinks'],
+      ['Redirect',        'Redirect Inlinks'],
     ];
     for (const [cat, name] of cats) {
       try {
