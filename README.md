@@ -73,6 +73,7 @@ What the installer does:
 
 - Verifies prerequisites (Python 3.10+, systemd, sudo, disk space, free port 5002, internet)
 - Installs `python3 / python3-venv / git / curl` via `apt` if missing
+- **Old Ubuntu/Mint support**: if the system ships Python < 3.10 (e.g. Mint 20.x = Python 3.8), the installer adds the deadsnakes PPA and tries `python3.13` → `3.12` → `3.11` → `3.10` until one installs cleanly. If none of those are available in the index, it falls back to **compiling Python 3.10.14 from source** automatically (~5–15 min).
 - Clones the repo, creates a virtualenv, installs Python deps
 - Registers `open-seo-crawler.service` so the crawler starts on every boot
 - Registers `open-seo-crawler-update.timer` to `git pull` + restart 2 min after every boot and once daily (auto-rolls-back on any failure)
@@ -104,7 +105,7 @@ playwright install chromium
 ## Usage
 
 1. Enter a website URL
-2. (Optional) tweak defaults — 200 pages, 5 workers, 0.4 s per-host delay, depth 10
+2. (Optional) tweak defaults — 500 pages, 5 workers, 0.4 s per-host delay, depth 10. **Sitemap analysis** and **Near-duplicate content (≥90% similarity)** are pre-checked so a fresh crawl runs both post-analyses automatically.
 3. Click **Start crawl**
 
 The tool detects the target's CMS on the first request and offers a one-click **Apply recommendations** button that populates sensible exclude patterns and worker counts.
@@ -122,12 +123,15 @@ Click any issue category in the left sidebar to filter results and see an info p
 
 | Setting | Default | Notes |
 |---|---|---|
-| Max pages | 200 | Cap on total URLs crawled |
+| Max pages | 500 | Cap on total URLs crawled (1-5000 + Unlimited) |
 | Workers | 5 | Concurrent HTTP workers (1-20) |
 | Per-host delay | 0.4 s | Min gap between two requests to the same host. A warning is shown if set below 0.4 s |
 | Max depth | 10 | Clicks from seed URL |
 | Render JS | off | Enable for SPAs (requires Playwright) |
 | Ignore robots.txt | off | Default: respect Disallow rules |
+| Ignore noindex | off | Default: noindex pages excluded from duplicate / orphan reports |
+| Sitemap analysis | **on** | Post-crawl: flags missing from sitemap, orphans, sitemap-only, non-200, redirects in sitemap |
+| Near-duplicate content | **on** at 90% | Shingle Jaccard on body content; flag pairs ≥ 90% similar (tweak to 80/85/90 or custom) |
 | Include / exclude patterns | empty | Glob wildcards, e.g. `*?variant=*`, `*/cart/*` |
 
 ## Performance
