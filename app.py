@@ -1959,10 +1959,16 @@ def sitemap_analyse():
         sc = crawled.get('status_code') or 0
         if sc and sc != 200:
             non_200_in_sitemap.append({'url': original_url, 'status_code': sc})
-        if crawled.get('redirect_url'):
+        # Only flag a "redirect in sitemap" when the redirect lands somewhere
+        # OTHER than the sitemap URL. Trailing-slash / case / scheme normalization
+        # often makes a crawled URL redirect to the canonical version that the
+        # sitemap already lists — that's not a sitemap problem, that's the sitemap
+        # being correct. _norm_url strips trailing slashes, so this catches it.
+        _rdest = crawled.get('redirect_url')
+        if _rdest and _norm_url(_rdest) != nrm:
             redirects_in_sitemap.append({
                 'url': original_url,
-                'redirects_to': crawled.get('redirect_url'),
+                'redirects_to': _rdest,
             })
         if not crawled.get('indexable', True):
             non_indexable_in_sitemap.append({
