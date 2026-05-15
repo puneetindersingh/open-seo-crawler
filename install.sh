@@ -178,7 +178,49 @@ if [ -z "$PYTHON_BIN" ]; then
     yellow "python${ver} install failed — falling back"
   done
 
-  [ -z "$PYTHON_BIN" ] && fail "Couldn't install any Python 3.10+ from deadsnakes. Check https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa for versions available on your release."
+  # Last-resort fallback: compile Python 3.10 from source.
+  # This runs when deadsnakes ships none of 3.10–3.13 cleanly for the host's
+  # Ubuntu/Mint release. Takes ~5–15 minutes depending on hardware.
+  if [ -z "$PYTHON_BIN" ]; then
+    PY_SRC_VER="3.10.14"
+    yellow "All deadsnakes options failed — falling back to compiling Python ${PY_SRC_VER} from source."
+    yellow "This takes 5–15 minutes. Grab a coffee."
+
+    echo ">>> Installing build deps..."
+    sudo apt-get install -y \
+      build-essential wget \
+      libssl-dev libffi-dev zlib1g-dev libbz2-dev libsqlite3-dev \
+      libreadline-dev libncurses-dev libgdbm-dev liblzma-dev \
+      tk-dev uuid-dev
+
+    BUILD_DIR=$(mktemp -d)
+    pushd "$BUILD_DIR" >/dev/null
+
+    echo ">>> Downloading Python ${PY_SRC_VER} source..."
+    wget -q "https://www.python.org/ftp/python/${PY_SRC_VER}/Python-${PY_SRC_VER}.tgz" \
+      || fail "Could not download Python ${PY_SRC_VER} source."
+    tar -xf "Python-${PY_SRC_VER}.tgz"
+    cd "Python-${PY_SRC_VER}"
+
+    echo ">>> Configuring (with optimizations)..."
+    ./configure --enable-optimizations --prefix=/usr/local >/dev/null
+
+    echo ">>> Building (this is the slow part)..."
+    make -j "$(nproc)" >/dev/null
+
+    echo ">>> Installing to /usr/local/bin/python3.10..."
+    sudo make altinstall >/dev/null
+
+    popd >/dev/null
+    rm -rf "$BUILD_DIR"
+
+    if command -v python3.10 >/dev/null 2>&1 && python_ok python3.10; then
+      PYTHON_BIN="python3.10"
+      ok "Built and installed $(python3.10 --version) from source"
+    else
+      fail "Source build appeared to succeed but python3.10 is not callable. Aborting."
+    fi
+  fi
 fi
 
 # Re-verify
