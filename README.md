@@ -58,6 +58,40 @@ python3 app.py
 
 Open [http://localhost:5002/](http://localhost:5002/) in your browser.
 
+### One-line install on Linux Mint / Ubuntu / Debian
+
+Installs to `~/open-seo-crawler`, registers a `systemd` service so it auto-starts on every boot, and sets up a daily + on-boot auto-updater that pulls the latest from this repo.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install.sh -o install.sh
+chmod +x install.sh
+./install.sh --check   # dry-run preflight, no changes
+./install.sh           # full install
+```
+
+What the installer does:
+
+- Verifies prerequisites (Python 3.10+, systemd, sudo, disk space, free port 5002, internet)
+- Installs `python3 / python3-venv / git / curl` via `apt` if missing
+- Clones the repo, creates a virtualenv, installs Python deps
+- Registers `open-seo-crawler.service` so the crawler starts on every boot
+- Registers `open-seo-crawler-update.timer` to `git pull` + restart 2 min after every boot and once daily (auto-rolls-back on any failure)
+- Prints the access URLs (`http://localhost:5002/` plus your LAN IP) and auto-opens the browser if you're on a desktop
+- Saves the URLs to `~/open-seo-crawler/ACCESS_URLS.txt` for later
+
+Useful commands after install:
+
+```bash
+systemctl status open-seo-crawler                  # is it running?
+sudo systemctl restart open-seo-crawler            # restart
+sudo systemctl disable open-seo-crawler            # stop autostarting on boot
+./install.sh --update-now                          # force a git-pull + restart now
+systemctl list-timers | grep open-seo-crawler      # when's the next auto-update?
+journalctl -u open-seo-crawler-update.service -n 50  # update history
+sudo systemctl disable --now open-seo-crawler-update.timer  # turn auto-update off
+tail -f /var/log/open-seo-crawler.log              # live app logs
+```
+
 ### Optional: JS rendering (for SPAs)
 
 Only needed for React / Vue / Wix / heavy Squarespace sites. Adds ~400 MB of browser dependencies.
