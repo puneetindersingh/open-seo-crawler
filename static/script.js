@@ -445,6 +445,19 @@ function renderDock() {
       <dt>Depth</dt><dd>${page.depth || 0}</dd>
       <dt>Indexable</dt><dd>${page.indexable ? '<span class="badge info">yes</span>' : '<span class="badge error">no</span>'}</dd>
       ${page.redirect_url ? `<dt>Redirects to</dt><dd>${escapeHtml(page.redirect_url)} <span style="color:var(--text-muted)">(${page.redirect_hops || 1} hop${(page.redirect_hops||1)>1?'s':''})</span></dd>` : ''}
+      ${(page.redirect_chain && page.redirect_chain.length) ? `<dt>Redirect chain</dt><dd>
+        <ol style="margin:0;padding-left:18px;list-style:decimal;">
+          ${page.redirect_chain.map((h, i) => {
+            const isLast = i === page.redirect_chain.length - 1;
+            const sc = h.status || 0;
+            const scCol = sc >= 400 ? '#ef4444' : sc >= 300 ? '#f59e0b' : '#22c55e';
+            return `<li style="margin:2px 0;font-size:12px;line-height:1.4;">
+              <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener" style="color:var(--accent);word-break:break-all;">${escapeHtml(h.url)}</a>
+              <span style="color:${scCol};font-weight:700;margin-left:4px;">${sc}</span>${isLast ? ' <span style="color:var(--text-muted);font-size:10px;">final</span>' : ''}
+            </li>`;
+          }).join('')}
+        </ol>
+      </dd>` : ''}
       <dt>Images</dt><dd>${page.images_no_alt || 0}/${page.images_total || 0} missing alt</dd>
       <dt>Schema</dt><dd>${(page.schema_types || []).length ? page.schema_types.map(escapeHtml).join(', ') : '<em>none</em>'}</dd>
       <dt>OG tags</dt><dd>${og.title ? '<span class="badge info">title</span>' : '<span class="badge error">no title</span>'} ${og.image ? '<span class="badge info">image</span>' : '<span class="badge error">no image</span>'} ${og.description ? '<span class="badge info">desc</span>' : '<span class="badge error">no desc</span>'}</dd>
