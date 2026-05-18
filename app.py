@@ -252,6 +252,31 @@ def update_self():
         return jsonify({'ok': False, 'error': str(e)[:300]}), 500
 
 
+@app.route('/restart', methods=['POST'])
+def restart_self():
+    """Detached restart of the running Flask process. Spawns a shell
+    that waits 1s (so this response can flush), kills the parent PID,
+    then re-execs python3 app.py with nohup. Survives the parent's
+    death because it runs in its own session."""
+    import subprocess as _sp
+    repo = os.path.dirname(os.path.abspath(__file__))
+    own_pid = os.getpid()
+    log_path = os.path.expanduser('~/site-crawler/.restart.log')
+    # Bash backgrounded with start_new_session — survives parent exit.
+    # Logs to ~/site-crawler/.restart.log for post-mortem if it fails.
+    cmd = (
+        f"sleep 1 && "
+        f"kill {own_pid} 2>/dev/null; sleep 1; "
+        f"cd {repo} && nohup python3 app.py >/dev/null 2>&1 &"
+    )
+    try:
+        _sp.Popen(['bash', '-c', cmd], start_new_session=True,
+                  stdout=open(log_path, 'a'), stderr=_sp.STDOUT)
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)[:300]}), 500
+    return jsonify({'ok': True, 'message': 'Restarting in ~2s'})
+
+
 @app.route('/')
 def index():
     return render_template('index.html', v=STATIC_VERSION, build_sha=_local_commit_sha())

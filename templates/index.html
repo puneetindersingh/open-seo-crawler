@@ -108,18 +108,20 @@
         window._scBuildLocal = local;
         window._scBuildRemote = remote;
         if (remote && remote !== local) {
-          badge.style.color = '#f59e0b';
-          badge.style.borderColor = '#f59e0b';
+          badge.style.color = '#fff';
+          badge.style.background = '#f59e0b';
           badge.style.border = '1px solid #f59e0b';
-          badge.title = `Update available — running ${local}, latest is ${remote}. Click to pull.`;
-          badge.innerHTML = `v ${local} <span style="color:#f59e0b;margin-left:4px;">• update available</span>`;
+          badge.style.fontWeight = '700';
+          badge.title = `Update available — running ${local}, latest is ${remote}. Click to update.`;
+          badge.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Update now`;
         }
       })();
     });
-    // Click handler — offers one-click git pull when an update is
-    // available; otherwise opens the GitHub commit history. Pull does
-    // NOT auto-restart the server (the user's process supervisor owns
-    // that) — we just nudge them to restart after a successful pull.
+    // Click handler — one-click pull + restart + page reload.
+    //   1. POST /update         (git pull --ff-only)
+    //   2. POST /restart        (detached shell kills+respawns the app)
+    //   3. Poll /version until the new SHA shows up, then reload.
+    // If we're already up to date, opens the GitHub commit history.
     async function versionBadgeClick() {
       const local = window._scBuildLocal || '';
       const remote = window._scBuildRemote || '';
@@ -127,21 +129,45 @@
         window.open('https://github.com/puneetindersingh/open-seo-crawler/commits/master', '_blank');
         return;
       }
-      if (!confirm(`Update available\\n\\nLocal:  ${local}\\nLatest: ${remote}\\n\\nClick OK to run "git pull" on this checkout. You'll need to restart the app to load the new code.`)) return;
+      const badge = document.getElementById('build-version');
+      const setBadge = (txt, color) => {
+        if (!badge) return;
+        badge.innerHTML = txt;
+        if (color) { badge.style.background = color; badge.style.borderColor = color; }
+      };
+      setBadge('Pulling…', '#0ea5e9');
       try {
         const r = await fetch('/update', { method: 'POST' });
         const d = await r.json();
-        if (!d.ok) {
-          alert(`Update failed:\\n\\n${d.error}`);
-          return;
+        if (!d.ok) { alert('Update failed:\n\n' + d.error); setBadge('Update now', '#f59e0b'); return; }
+        if (!d.changed) { alert('Already up to date.'); setBadge('v ' + local); badge.style.background = ''; badge.style.color = 'var(--text-muted)'; return; }
+        setBadge('Restarting…', '#0ea5e9');
+        // Fire-and-forget restart; the response may not flush because
+        // the server kills itself, so don't await indefinitely.
+        try { await Promise.race([fetch('/restart', { method: 'POST' }), new Promise(r => setTimeout(r, 1500))]); } catch {}
+        // Poll /version until the new SHA appears (server is back up).
+        const start = Date.now();
+        while (Date.now() - start < 30000) {
+          await new Promise(r => setTimeout(r, 1000));
+          try {
+            const vr = await fetch('/version', { cache: 'no-store' });
+            if (vr.ok) {
+              const vd = await vr.json();
+              if (vd.sha && vd.sha === d.after) {
+                setBadge('Updated ✓', '#22c55e');
+                localStorage.removeItem('sc_remote_sha_v2');
+                await new Promise(r => setTimeout(r, 600));
+                location.reload();
+                return;
+              }
+            }
+          } catch {}
         }
-        if (!d.changed) {
-          alert('Already up to date.');
-          return;
-        }
-        alert(`Updated ${d.before} → ${d.after}\\n\\nRestart the app to apply:\\n  pkill -f 'site-crawler/app.py' && cd ~/site-crawler && nohup python3 app.py >/dev/null 2>&1 &`);
+        alert('Restart timed out. Check the app manually.');
+        setBadge('Update now', '#f59e0b');
       } catch (e) {
         alert('Update request failed: ' + e.message);
+        setBadge('Update now', '#f59e0b');
       }
     }
   </script>
