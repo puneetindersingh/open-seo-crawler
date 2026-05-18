@@ -89,7 +89,9 @@ const ISSUE_META = {
 
 function sevOf(issue) {
   const l = (issue || '').toLowerCase();
-  if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content|^noindex|^canonicalised/.test(l)) return 'error';
+  // noindex / canonicalised are intentional states — surfaced in their
+  // own dedicated tabs, not lumped into Errors.
+  if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
   if (/too (long|short)|imgs missing alt|thin content|multiple h1|h1 same as title|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
   return 'info';
 }
@@ -958,9 +960,14 @@ window.crawlerShowQueue = crawlerShowQueue;
 function matchesCategory(page, cat) {
   if (cat === 'all') return true;
   const issues = page.issues || [];
+  // noindex / canonicalised are intentional content states, not errors —
+  // surface them in their dedicated tabs (Noindex Pages / Canonicalised)
+  // instead of inflating the Errors badge with every legitimately-hidden
+  // page. Same as a thank-you page being noindex: that's a feature, not
+  // a bug, and lumping it into "must fix" buries the real errors.
   const sev = (i) => {
     const l = i.toLowerCase();
-    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content|^noindex|^canonicalised/.test(l)) return 'error';
+    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
     if (/too (long|short)|imgs missing alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     return 'info';
   };
@@ -1743,7 +1750,18 @@ function _scRenderAllValuesPanel(cat) {
   }[cat];
   if (!spec) return;
 
-  const filtered = crawlerResults.filter(r => !r.is_pagination);
+  // Show only canonical, indexable, 2xx pages so the counts line up
+  // with the per-issue tabs (Title too short / Missing meta / etc.) —
+  // those skip noindex/redirected/non-200 URLs by design, so including
+  // them here created confusing mismatches between "47 short titles"
+  // in All Titles vs "7" in Title Too Short.
+  const filtered = crawlerResults.filter(r => {
+    if (r.is_pagination) return false;
+    if (r.indexable === false) return false;
+    if (r.redirect_url) return false;
+    if (r.status_code && (r.status_code < 200 || r.status_code >= 300)) return false;
+    return true;
+  });
   const rows = filtered.slice().sort((a, b) => {
     const av = (a[spec.field] || '').toLowerCase();
     const bv = (b[spec.field] || '').toLowerCase();
@@ -1884,6 +1902,7 @@ function _scRenderDuplicatesPanel(cat) {
     const m = new Map();
     for (const r of crawlerResults) {
       if (r.is_pagination) continue;
+      if (r.indexable === false) continue;                       // noindex — out of scope per user request
       if (r.redirect_url) continue;                              // redirected — not unique content
       if (r.status_code && r.status_code >= 300) continue;       // non-200 — not indexable
       const canon = (r.canonical || '').trim();
@@ -2668,7 +2687,9 @@ function updateCounts() {
   const counts = { all: crawlerResults.length, __err: 0, __warn: 0, __info: 0 };
   const sev = (i) => {
     const l = i.toLowerCase();
-    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content|^noindex|^canonicalised/.test(l)) return 'error';
+    // noindex / canonicalised are intentional states, not errors —
+    // surfaced in their own tabs instead of polluting the Errors badge.
+    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
     if (/too (long|short)|imgs missing alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     return 'info';
   };
@@ -2728,7 +2749,17 @@ function updateCounts() {
   // "Dup *" = number of duplicate GROUPS (matches the panel header), preferring
   // the server-computed reports payload and falling back to client-side
   // grouping so the sidebar isn't stuck at 0 on older saved crawls.
-  const _pages = (crawlerResults || []).filter(r => !r.is_pagination);
+  // Match _scRenderAllValuesPanel's filter: canonical + indexable + 2xx
+  // only. Noindex/redirected/non-200 pages don't belong in the "All *"
+  // bulk reports — the per-issue tabs ignore them too, so including them
+  // here made the sidebar badge inconsistent with the panel row count.
+  const _pages = (crawlerResults || []).filter(r => {
+    if (r.is_pagination) return false;
+    if (r.indexable === false) return false;
+    if (r.redirect_url) return false;
+    if (r.status_code && (r.status_code < 200 || r.status_code >= 300)) return false;
+    return true;
+  });
   if ('__all_titles' in counts)     counts.__all_titles     = _pages.filter(r => r.title).length;
   if ('__all_metas' in counts)      counts.__all_metas      = _pages.filter(r => r.meta_description).length;
   if ('__all_h1s' in counts)        counts.__all_h1s        = _pages.filter(r => r.h1).length;
@@ -2755,6 +2786,7 @@ function updateCounts() {
     if (fromServer) return fromServer;
     const m = new Map();  // value -> Set(normalised URLs)
     for (const r of _pages) {
+      if (r.indexable === false) continue;
       if (r.redirect_url) continue;
       if (r.status_code && r.status_code >= 300) continue;
       const canon = (r.canonical || '').trim();
