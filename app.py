@@ -190,9 +190,38 @@ def _normalize_url_for_dup(url):
 STATIC_VERSION = str(int(time.time()))
 
 
+def _local_commit_sha():
+    """Short SHA of the currently-installed build, or 'dev' if not a
+    git checkout. Resolved once at import — never crashes the app."""
+    try:
+        import subprocess as _sp
+        out = _sp.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)),
+                       'rev-parse', '--short', 'HEAD'],
+                      capture_output=True, text=True, timeout=2)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return 'dev'
+
+
+BUILD_SHA = _local_commit_sha()
+
+
+@app.route('/version')
+def version():
+    """Local build SHA, served to the UI for display + comparison
+    against the GitHub master HEAD (client-side fetch). Cheap and
+    cache-safe — just a JSON string."""
+    return jsonify({
+        'sha': BUILD_SHA,
+        'repo': 'puneetindersingh/open-seo-crawler',
+    })
+
+
 @app.route('/')
 def index():
-    return render_template('index.html', v=STATIC_VERSION)
+    return render_template('index.html', v=STATIC_VERSION, build_sha=BUILD_SHA)
 
 
 # =============================================================================
