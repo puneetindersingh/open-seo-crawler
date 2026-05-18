@@ -2818,6 +2818,11 @@ def crawl_site():
 # =============================================================================
 
 _CRAWL_FOLDER = os.path.expanduser('~/.site-crawler-crawls')
+# Sibling tool's save dir — listed/loadable here too so a crawl saved
+# in seo-tool shows up in site-crawler's Load saved list (and vice
+# versa). Writes still go to _CRAWL_FOLDER so we don't fight over
+# ownership; this is read-only union.
+_CRAWL_FOLDERS_RO = [os.path.expanduser('~/.seo-tool-crawls')]
 
 @app.route('/crawl/save', methods=['POST'])
 def crawl_save():
@@ -2865,30 +2870,51 @@ def crawl_save():
     return jsonify({'ok': True, 'file': os.path.basename(path), 'name': name})
 
 
+def _all_crawl_folders():
+    """Folders to scan for /crawl/list and /crawl/load. Own dir first
+    so collisions on filename prefer our own copy."""
+    return [_CRAWL_FOLDER] + _CRAWL_FOLDERS_RO
+
+
 @app.route('/crawl/list', methods=['GET'])
 def crawl_list():
-    """List ALL saved crawls from the last 30 days (shared across users)."""
-    if not os.path.isdir(_CRAWL_FOLDER):
-        return jsonify({'crawls': []})
+    """List ALL saved crawls from the last 30 days, unioning across this
+    tool's dir + the sibling tool's dir (read-only) so users see the
+    same list whichever app they open."""
     cutoff = int(time.time()) - 30 * 86400
     out = []
-    for fn in sorted(os.listdir(_CRAWL_FOLDER), reverse=True):
-        if not fn.endswith('.json'): continue
-        path = os.path.join(_CRAWL_FOLDER, fn)
-        try:
-            with open(path) as f: d = json.load(f)
-            if (d.get('saved_at') or 0) < cutoff: continue
-            out.append({
-                'file': fn,
-                'name': d.get('name', fn),
-                'saved_at': d.get('saved_at'),
-                'pages': d.get('pages', 0),
-                'seed': d.get('seed', ''),
-                'saved_by': d.get('saved_by', '') or 'unknown',
-            })
-        except Exception:
-            continue
+    seen_files = set()
+    for folder in _all_crawl_folders():
+        if not os.path.isdir(folder): continue
+        source = 'seo-tool' if 'seo-tool-crawls' in folder else 'site-crawler'
+        for fn in sorted(os.listdir(folder), reverse=True):
+            if not fn.endswith('.json') or fn in seen_files: continue
+            seen_files.add(fn)
+            path = os.path.join(folder, fn)
+            try:
+                with open(path) as f: d = json.load(f)
+                if (d.get('saved_at') or 0) < cutoff: continue
+                out.append({
+                    'file': fn,
+                    'name': d.get('name', fn),
+                    'saved_at': d.get('saved_at'),
+                    'pages': d.get('pages', 0),
+                    'seed': d.get('seed', ''),
+                    'saved_by': d.get('saved_by', '') or 'unknown',
+                    'source': source,
+                })
+            except Exception:
+                continue
+    out.sort(key=lambda r: r.get('saved_at') or 0, reverse=True)
     return jsonify({'crawls': out})
+
+
+def _find_crawl_path(fn):
+    """Locate a saved-crawl file in any of our read folders."""
+    for folder in _all_crawl_folders():
+        p = os.path.join(folder, fn)
+        if os.path.exists(p): return p
+    return None
 
 
 @app.route('/crawl/load', methods=['GET'])
@@ -2896,8 +2922,8 @@ def crawl_load():
     fn = request.args.get('file', '')
     if not fn or '/' in fn or '\\' in fn or not fn.endswith('.json'):
         return jsonify({'error': 'Invalid file'}), 400
-    path = os.path.join(_CRAWL_FOLDER, fn)
-    if not os.path.exists(path):
+    path = _find_crawl_path(fn)
+    if not path:
         return jsonify({'error': 'Not found'}), 404
     try:
         with open(path) as f: d = json.load(f)
@@ -2917,8 +2943,8 @@ def crawl_delete():
     fn = (request.json or {}).get('file', '')
     if not fn or '/' in fn or '\\' in fn or not fn.endswith('.json'):
         return jsonify({'error': 'Invalid file'}), 400
-    path = os.path.join(_CRAWL_FOLDER, fn)
-    if not os.path.exists(path):
+    path = _find_crawl_path(fn)
+    if not path:
         return jsonify({'error': 'Not found'}), 404
     try:
         os.remove(path)

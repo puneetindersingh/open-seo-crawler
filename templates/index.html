@@ -12,8 +12,8 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand" style="display:flex;align-items:center;gap:9px;">
-      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" style="flex-shrink:0;border-radius:6px;">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
         <rect width="32" height="32" rx="7" fill="#4f46e5"/>
         <circle cx="13.5" cy="13.5" r="5.5" fill="none" stroke="white" stroke-width="2.4"/>
         <line x1="17.8" y1="17.8" x2="24" y2="24" stroke="white" stroke-width="2.6" stroke-linecap="round"/>
@@ -31,8 +31,8 @@
       </label>
 
       <div class="slider-row">
-        <label>Max pages: <strong id="crawler-max-label">500</strong></label>
-        <input type="range" id="crawler-max" min="10" max="5000" value="500" step="10"
+        <label>Max pages: <strong id="crawler-max-label">1500</strong></label>
+        <input type="range" id="crawler-max" min="10" max="5000" value="1500" step="10"
                oninput="document.getElementById('crawler-max-label').textContent=this.value>=5000?'Unlimited':this.value" />
       </div>
       <div class="slider-row">
@@ -253,15 +253,26 @@
           </button>
           <button type="button" onclick="crawlerDismissErrorBanner()" title="Dismiss" style="flex-shrink:0;background:none;border:none;color:#991b1b;font-size:18px;line-height:1;cursor:pointer;padding:4px 6px;">×</button>
         </div>
-        <div id="crawler-limit-banner" style="display:none;padding:10px 14px;border-bottom:1px solid #fcd34d;background:rgba(245,158,11,0.10);color:#78350f;font-size:12.5px;font-weight:500;align-items:center;gap:10px;line-height:1.4;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:700;color:#78350f;">Hit page limit — crawl paused</div>
-            <div id="crawler-limit-banner-msg" style="margin-top:2px;color:#78350f;word-break:break-word;"></div>
+        <!-- Hit-page-limit prompt — modal so the user has to explicitly
+             choose Continue / Finalize instead of an inline banner that
+             can be missed when the table is scrolled. -->
+        <div id="crawler-limit-banner" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,0.55);align-items:center;justify-content:center;">
+          <div style="background:#fff;border-radius:12px;box-shadow:0 20px 50px rgba(0,0,0,.25);max-width:520px;width:92%;padding:24px 26px;font-size:13px;line-height:1.5;">
+            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;">
+              <div style="flex-shrink:0;width:36px;height:36px;border-radius:50%;background:rgba(245,158,11,0.15);display:flex;align-items:center;justify-content:center;color:#b45309;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              </div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-weight:700;font-size:15px;color:#0f172a;margin-bottom:4px;">Hit page limit — crawl paused</div>
+                <div id="crawler-limit-banner-msg" style="color:#475569;word-break:break-word;"></div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
+              <button id="crawler-limit-finalize-btn" type="button" onclick="crawlerFinalizeCrawl()" style="padding:8px 16px;background:transparent;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;">Finalize now</button>
+              <button id="crawler-limit-continue-1k-btn" type="button" onclick="crawlerContinueCrawl(1000)" style="padding:8px 16px;background:transparent;color:#0ea5e9;border:1px solid #0ea5e9;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;">Continue +1000</button>
+              <button id="crawler-limit-continue-btn" type="button" onclick="crawlerContinueCrawl(500)" style="padding:8px 16px;background:#0ea5e9;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;">Continue +500</button>
+            </div>
           </div>
-          <button id="crawler-limit-continue-btn" type="button" onclick="crawlerContinueCrawl(500)" style="flex-shrink:0;padding:6px 14px;background:#0ea5e9;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Continue +500</button>
-          <button id="crawler-limit-continue-1k-btn" type="button" onclick="crawlerContinueCrawl(1000)" style="flex-shrink:0;padding:6px 14px;background:transparent;color:#0ea5e9;border:1px solid #0ea5e9;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+1000</button>
-          <button id="crawler-limit-finalize-btn" type="button" onclick="crawlerFinalizeCrawl()" style="flex-shrink:0;padding:6px 14px;background:transparent;color:#78350f;border:1px solid #78350f;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Finalize now</button>
         </div>
         <div id="crawler-queue-panel" style="display:none;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
           <div onclick="crawlerToggleQueuePanel()" style="display:flex;align-items:center;gap:8px;padding:8px 14px;cursor:pointer;font-size:12px;font-weight:600;color:#0f172a;user-select:none;">
