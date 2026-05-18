@@ -139,20 +139,22 @@ function renderRow(d) {
   const issues = (d.issues || []).map(i => `<span class="badge ${sevOf(i)}" title="${sevOf(i).toUpperCase()}">${escapeHtml(i)}</span>`).join('');
   const safe = d.url.replace(/"/g, '&quot;').replace(/'/g, "\\'");
   tr.innerHTML = `
-    <td title="${escapeHtml(d.url)}">
+    <td data-col="url" title="${escapeHtml(d.url)}">
       <span style="display:flex;align-items:center;gap:2px;min-width:0;">
         <span class="url-cell" onclick="openDock('${safe}')" style="flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(path)}</span>
         <span class="cs-cell-actions" style="display:inline-flex;align-items:center;gap:2px;flex-shrink:0;">${_scOpenIcon(d.url)}${_scRefetchIcon(d.url)}</span>
       </span>
     </td>
-    <td style="color:${statusColor};font-weight:700">${d.status_code}</td>
-    <td title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:#ef4444">missing</em>'}</td>
-    <td>${d.title_len || 0}</td>
-    <td title="${escapeHtml(d.meta_description||'')}">${d.meta_description ? escapeHtml(d.meta_description) : '<em style="color:#ef4444">missing</em>'}</td>
-    <td title="${escapeHtml(d.h1||'')}">${d.h1 ? escapeHtml(d.h1) : '<em style="color:#ef4444">missing</em>'}</td>
-    <td>${d.word_count || 0}</td>
-    <td>${d.response_time || 0}s</td>
-    <td>${issues || '<span style="color:#22c55e">OK</span>'}</td>
+    <td data-col="status" style="color:${statusColor};font-weight:700">${d.status_code}</td>
+    ${_scRedirToCell(d)}
+    ${_scInlinksCell(d)}
+    <td data-col="title" title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:#ef4444">missing</em>'}</td>
+    <td data-col="tlen">${d.title_len || 0}</td>
+    <td data-col="meta" title="${escapeHtml(d.meta_description||'')}">${d.meta_description ? escapeHtml(d.meta_description) : '<em style="color:#ef4444">missing</em>'}</td>
+    ${_scH1Cells(d)}
+    <td data-col="words">${d.word_count || 0}</td>
+    <td data-col="speed">${d.response_time || 0}s</td>
+    <td data-col="issues">${issues || '<span style="color:#22c55e">OK</span>'}</td>
   `;
   tbody.appendChild(tr);
 }
@@ -993,6 +995,7 @@ window.selectCategory = function(cat) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
     tbody.innerHTML = '';
+    _scApplyMultiH1Columns(0);
     if (_tableWrap) _tableWrap.style.display = 'none';
     if (_expandHint) _expandHint.style.display = 'none';
     // Strip any previously-rendered special panel so we don't stack them.
@@ -1021,17 +1024,12 @@ window.selectCategory = function(cat) {
     if (typeof _refreshCrawlerExportViewBtn === 'function') _refreshCrawlerExportViewBtn();
     return;
   }
-  // Drop any sitemap/schema/near-dup/site-structure/all-images panel content when switching back.
-  const smPanel = document.getElementById('sitemap-panel');
-  if (smPanel) smPanel.remove();
-  const schemaPanel = document.getElementById('schema-by-page-panel');
-  if (schemaPanel) schemaPanel.remove();
-  const ndPanel = document.getElementById('near-dup-panel');
-  if (ndPanel) ndPanel.remove();
-  const svPanel = document.getElementById('sitestructure-panel');
-  if (svPanel) svPanel.remove();
-  const aiPanel = document.getElementById('all-images-panel');
-  if (aiPanel) aiPanel.remove();
+  // Drop any report-style panel content when switching back to a normal
+  // table category. Missing IDs here cause the panel to leak below the
+  // new view (e.g. External Links lingering under Redirects).
+  ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
+   'all-images-panel','external-links-panel','js-diff-panel']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
 
@@ -1044,6 +1042,14 @@ window.selectCategory = function(cat) {
   tbody.innerHTML = '';
   let rows = crawlerResults.filter(r => matchesCategory(r, cat));
   if (typeof _scSortCol === 'number') rows = _scSortRows(rows);
+  // Multiple H1s view: expand the single H1 column into H1 (1), H1 (2)…
+  // one per H1 found on the worst page. Restored on every other view.
+  if (cat === 'Multiple H1s') {
+    const maxH1 = rows.reduce((m, r) => Math.max(m, (r.h1_list || []).length), 0);
+    _scApplyMultiH1Columns(maxH1);
+  } else {
+    _scApplyMultiH1Columns(0);
+  }
   let _matched = 0;
   for (const r of rows) { renderRow(r); _matched++; }
   // Show the bulk-recrawl button for any category that has rows. Lets the
@@ -2857,13 +2863,14 @@ window.scBulkRecrawlVisible = async function(btn) {
 // Column sort: click any header to sort ASC, click again to flip DESC.
 let _scSortCol = null;
 let _scSortAsc = true;
-const _SC_SORT_KEYS = ['url','status_code','title','title_len','meta_description','h1','word_count','response_time','issues'];
+const _SC_SORT_KEYS = ['url','status_code','redirect_url','__inlinks_count','title','title_len','meta_description','h1','word_count','response_time','issues'];
 function _scSortRows(rows) {
   const key = _SC_SORT_KEYS[_scSortCol];
   if (!key) return rows;
   return rows.slice().sort((a, b) => {
     let va = a[key], vb = b[key];
     if (key === 'issues') { va = (va||[]).length; vb = (vb||[]).length; }
+    if (key === '__inlinks_count') { va = _scLookupInlinks(a.url).length; vb = _scLookupInlinks(b.url).length; }
     if (typeof va === 'string') return _scSortAsc ? (va||'').localeCompare(vb||'') : (vb||'').localeCompare(va||'');
     return _scSortAsc ? (va||0) - (vb||0) : (vb||0) - (va||0);
   });
@@ -2910,10 +2917,79 @@ async function scRecrawlUrl(btn, url) {
   }
 }
 
+// Multiple H1s view expands the single H1 column into one column per H1
+// found on the worst-offending page so users can see every conflicting
+// heading inline instead of clicking each row. Active only in that view;
+// passing n<=1 restores the single-column layout.
+let _scMultiH1N = 0;
+function _scApplyMultiH1Columns(n) {
+  const want = (n > 1) ? n : 0;
+  if (want === _scMultiH1N) return;
+  _scMultiH1N = want;
+  const tbl = document.getElementById('crawler-table');
+  if (!tbl) return;
+  const colgroup = tbl.querySelector('colgroup');
+  const headerRow = tbl.querySelector('thead tr');
+  if (!colgroup || !headerRow) return;
+  // Drop any prior dynamic H1 cols/ths
+  colgroup.querySelectorAll('col[data-h1-extra="1"]').forEach(el => el.remove());
+  headerRow.querySelectorAll('th[data-h1-extra="1"]').forEach(el => el.remove());
+  const h1Col = colgroup.querySelector('col[data-col="h1"]');
+  const h1Th = headerRow.querySelector('th[data-col-idx="7"]');
+  if (!h1Col || !h1Th) return;
+  if (want > 1) {
+    h1Th.querySelector('.th-label').innerHTML = 'H1 (1) <span class="sc-sort-ind" data-col="7"></span>';
+    for (let i = 2; i <= want; i++) {
+      const col = document.createElement('col');
+      col.setAttribute('data-col', 'h1');
+      col.setAttribute('data-h1-extra', '1');
+      col.style.width = '170px';
+      h1Col.insertAdjacentElement('afterend', col);
+      const th = document.createElement('th');
+      th.setAttribute('data-col', 'h1');
+      th.setAttribute('data-h1-extra', '1');
+      th.innerHTML = `<span class="th-label">H1 (${i})</span>`;
+      h1Th.insertAdjacentElement('afterend', th);
+    }
+  } else {
+    h1Th.querySelector('.th-label').innerHTML = 'H1 <span class="sc-sort-ind" data-col="7"></span>';
+  }
+  if (typeof _scSyncTableWidth === 'function') _scSyncTableWidth();
+}
+// Redirect destination cell. Shows the full target URL of a 3xx redirect.
+// Default-hidden for most categories; shown in the Redirect view.
+function _scRedirToCell(d) {
+  const to = d.redirect_url || '';
+  const hops = d.redirect_hops || 0;
+  if (!to) return '<td data-col="redirto"><em style="color:#94a3b8">—</em></td>';
+  const safe = escapeHtml(to);
+  const hopBadge = hops > 1 ? ` <span style="color:var(--text-muted);font-size:.7rem">(${hops} hops)</span>` : '';
+  return `<td data-col="redirto" title="${safe}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safe}${hopBadge}</td>`;
+}
+// Inlinks count cell — number of internal pages linking to this URL.
+// Useful in Redirect view to show which redirects still have inbound link debt.
+function _scInlinksCell(d) {
+  const n = (typeof _scLookupInlinks === 'function') ? _scLookupInlinks(d.url).length : 0;
+  if (!n) return '<td data-col="inlinks" style="text-align:center;color:#94a3b8">0</td>';
+  return `<td data-col="inlinks" style="text-align:center;font-weight:600">${n}</td>`;
+}
+function _scH1Cells(d) {
+  if (_scMultiH1N > 1) {
+    const list = d.h1_list || (d.h1 ? [d.h1] : []);
+    const cells = [];
+    for (let i = 0; i < _scMultiH1N; i++) {
+      const v = list[i];
+      cells.push(`<td data-col="h1" title="${escapeHtml(v||'')}">${v ? escapeHtml(v) : '<em style="color:#94a3b8">—</em>'}</td>`);
+    }
+    return cells.join('');
+  }
+  return `<td data-col="h1" title="${escapeHtml(d.h1||'')}">${d.h1 ? escapeHtml(d.h1) : '<em style="color:#ef4444">missing</em>'}</td>`;
+}
+
 function _scSetColumns(cat) {
   const table = document.getElementById('crawler-table');
   if (!table) return;
-  const all = ['title','tlen','meta','h1','words','speed'];
+  const all = ['redirto','inlinks','title','tlen','meta','h1','words','speed'];
   table.classList.remove(...all.map(c => 'hide-col-' + c));
   const show = (cols) => {
     table.classList.add(...all.filter(c => !cols.includes(c)).map(c => 'hide-col-' + c));
@@ -2927,6 +3003,7 @@ function _scSetColumns(cat) {
   if (cat === 'H1 identical to title tag') return show(['url','status','title','h1','issues']);
   if (cat === 'Thin content') return show(['url','status','words','issues']);
   if (cat === 'Slow') return show(['url','status','speed','issues']);
+  if (cat === 'Redirect') return show(['url','status','redirto','inlinks','issues']);
   // Image alt is image-level, not page-level — page Title is just noise on
   // this view. Mirrors internal-tool's treatment.
   if (cat === 'imgs missing alt') return show(['url','status','issues']);
