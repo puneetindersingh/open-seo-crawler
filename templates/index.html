@@ -168,9 +168,13 @@
 
       <div class="cat-label">Redirects & Status</div>
       <div class="ci-cat" data-cat="Redirect" onclick="selectCategory('Redirect')"><span>Redirects</span><span class="ci-count warn" data-count="Redirect">0</span></div>
+      <div class="ci-cat" data-cat="__redir_chains" onclick="selectCategory('__redir_chains')"><span title="Pages reached via 2+ redirect hops — every hop wastes crawl budget and link equity">Redirect Chains</span><span class="ci-count warn" data-count="__redir_chains">0</span></div>
       <div class="ci-cat" data-cat="HTTP" onclick="selectCategory('HTTP')"><span>HTTP Errors (4xx/5xx)</span><span class="ci-count err" data-count="HTTP">0</span></div>
+      <div class="ci-cat" data-cat="__response_codes" onclick="selectCategory('__response_codes')"><span title="Status code distribution across the crawl (2xx / 3xx / 4xx / 5xx breakdown)">Response Codes</span><span class="ci-count" data-count="__response_codes">0</span></div>
       <div class="ci-cat" data-cat="noindex" onclick="selectCategory('noindex')"><span>Noindex Pages</span><span class="ci-count warn" data-count="noindex">0</span></div>
       <div class="ci-cat" data-cat="Canonicalised" onclick="selectCategory('Canonicalised')"><span>Canonicalised</span><span class="ci-count warn" data-count="Canonicalised">0</span></div>
+      <div class="ci-cat" data-cat="__deep" onclick="selectCategory('__deep')"><span title="Pages 4+ clicks from homepage — usually under-linked and hard for crawlers + users to reach">Deep Pages (4+ clicks)</span><span class="ci-count warn" data-count="__deep">0</span></div>
+      <div class="ci-cat" data-cat="__hreflang" id="hreflang-cat" onclick="selectCategory('__hreflang')"><span title="Hreflang implementation: every alternate-language URL declared, plus validation errors (missing return tags, conflicts, invalid codes)">Hreflang</span><span class="ci-count" data-count="__hreflang">0</span></div>
 
       <div class="cat-label">Social & Security</div>
       <div class="ci-cat" data-cat="Missing Open Graph" onclick="selectCategory('Missing Open Graph')"><span>Missing Open Graph</span><span class="ci-count warn" data-count="Missing Open Graph">0</span></div>

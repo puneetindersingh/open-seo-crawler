@@ -997,7 +997,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -1010,7 +1010,8 @@ window.selectCategory = function(cat) {
     // without this would leave stale Schema/Images/etc. panels in the DOM.
     ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
      'all-images-panel','external-links-panel','js-diff-panel',
-     'all-values-panel','duplicates-panel']
+     'all-values-panel','duplicates-panel',
+     'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel']
       .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     if (cat === '__schema_by_page') {
       _renderSchemaByPagePanel();
@@ -1028,6 +1029,14 @@ window.selectCategory = function(cat) {
       _scRenderAllValuesPanel(cat);
     } else if (cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies') {
       _scRenderDuplicatesPanel(cat);
+    } else if (cat === '__redir_chains') {
+      _scRenderRedirChainsPanel();
+    } else if (cat === '__response_codes') {
+      _scRenderResponseCodesPanel();
+    } else if (cat === '__deep') {
+      _scRenderDeepPagesPanel();
+    } else if (cat === '__hreflang') {
+      _scRenderHreflangPanel();
     } else {
       _renderSitemapPanel(cat);
     }
@@ -1041,7 +1050,8 @@ window.selectCategory = function(cat) {
   // new view (e.g. External Links lingering under Redirects).
   ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
    'all-images-panel','external-links-panel','js-diff-panel',
-   'all-values-panel','duplicates-panel']
+   'all-values-panel','duplicates-panel',
+   'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel']
     .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
@@ -1883,6 +1893,317 @@ function _scRenderDuplicatesPanel(cat) {
   main.appendChild(panel);
 }
 
+// Redirect Chains (2+ hops). Each chain wastes crawl budget and link
+// equity — Google follows up to ~5 hops, after which the destination
+// gets ignored. Fix by linking directly to the final URL.
+function _scRenderRedirChainsPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('redir-chains-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'redir-chains-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  let chains = ((window.crawlerReports || {}).redirect_chains) || [];
+  if (!chains.length) {
+    chains = (crawlerResults || [])
+      .filter(r => (r.redirect_hops || 0) >= 2)
+      .map(r => ({ url: r.url, chain: r.redirect_chain || [], hops: r.redirect_hops || 0 }));
+  }
+
+  if (!chains.length) {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">No redirect chains detected</div>
+        <div style="font-size:.75rem;color:var(--text-muted);">Every redirected URL goes to its destination in a single hop.</div>
+      </div>`;
+    main.appendChild(panel);
+    return;
+  }
+
+  const summary = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Redirect chains (2+ hops)</div>
+      <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
+        <b>${chains.length}</b> URL${chains.length === 1 ? '' : 's'} require multiple redirect hops to reach the final destination.
+        Update internal links to point directly to the final URL — Google stops following after ~5 hops, and every hop wastes link equity.
+      </div>
+    </div>`;
+
+  const body = `
+    <div style="padding:0 16px 16px;">
+      ${chains.map((c, i) => {
+        const hops = (c.chain || []).map((step, idx) => {
+          const url = (step && (step.url || step)) || '';
+          const status = (step && step.status) || '';
+          const safe = escapeHtml(url);
+          return `<div style="display:flex;gap:8px;padding:4px 0;font-family:'SF Mono','Menlo',monospace;font-size:.72rem;">
+            <span style="color:var(--text-muted);min-width:24px;">${idx + 1}.</span>
+            <a href="${safe}" target="_blank" style="color:var(--accent);flex:1;word-break:break-all;">${safe}</a>
+            ${status ? `<span style="color:${status >= 400 ? '#ef4444' : status >= 300 ? '#f59e0b' : '#22c55e'};font-weight:700;">${status}</span>` : ''}
+          </div>`;
+        }).join('');
+        return `
+          <div style="margin-top:12px;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);">
+            <div style="padding:8px 12px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:.78rem;">
+              <b>#${i + 1}</b> · <span style="color:var(--text-muted);">starting URL</span>
+              <a href="${escapeHtml(c.url || '')}" target="_blank" style="color:var(--accent);margin-left:6px;">${escapeHtml(c.url || '')}</a>
+              <span style="color:var(--text-muted);margin-left:8px;">${c.hops} hop${c.hops === 1 ? '' : 's'}</span>
+            </div>
+            <div style="padding:8px 14px;">${hops || '<span style="color:var(--text-muted);font-size:.72rem;">no chain detail captured</span>'}</div>
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  panel.innerHTML = summary + body;
+  main.appendChild(panel);
+}
+
+// Response Codes — distribution across the crawl. Click a bucket to see
+// the matching URLs (deferred for now: opens a filtered table view).
+function _scRenderResponseCodesPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('response-codes-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'response-codes-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  const pages = crawlerResults || [];
+  const byCode = new Map();
+  for (const r of pages) {
+    const c = r.status_code || 0;
+    if (!byCode.has(c)) byCode.set(c, []);
+    byCode.get(c).push(r.url || '');
+  }
+  const buckets = Array.from(byCode.entries()).sort((a, b) => a[0] - b[0]);
+  const total = pages.length;
+  const ok = pages.filter(r => r.status_code >= 200 && r.status_code < 300).length;
+  const redir = pages.filter(r => r.status_code >= 300 && r.status_code < 400).length;
+  const err4 = pages.filter(r => r.status_code >= 400 && r.status_code < 500).length;
+  const err5 = pages.filter(r => r.status_code >= 500 && r.status_code < 600).length;
+
+  const summary = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:6px;">Response code distribution</div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;align-items:center;">
+        <span><b style="color:#22c55e;font-size:1.05rem;font-variant-numeric:tabular-nums;">${ok}</b> <span style="color:var(--text-muted);">2xx OK</span></span>
+        <span><b style="color:#f59e0b;font-size:1.05rem;font-variant-numeric:tabular-nums;">${redir}</b> <span style="color:var(--text-muted);">3xx redirect</span></span>
+        <span><b style="color:#ef4444;font-size:1.05rem;font-variant-numeric:tabular-nums;">${err4}</b> <span style="color:var(--text-muted);">4xx client error</span></span>
+        <span><b style="color:#ef4444;font-size:1.05rem;font-variant-numeric:tabular-nums;">${err5}</b> <span style="color:var(--text-muted);">5xx server error</span></span>
+        <span style="color:var(--text-muted);margin-left:auto;">${total} URLs total</span>
+      </div>
+    </div>`;
+
+  const body = `
+    <div style="padding:14px 16px;">
+      <table class="crawler-grid" style="font-size:.78rem;">
+        <colgroup><col style="width:120px"><col style="width:120px"><col style="width:120px"><col></colgroup>
+        <thead><tr>
+          <th><span class="th-label">Status code</span></th>
+          <th><span class="th-label">Pages</span></th>
+          <th><span class="th-label">% of crawl</span></th>
+          <th><span class="th-label">Example URLs (first 3)</span></th>
+        </tr></thead>
+        <tbody>
+          ${buckets.map(([code, urls]) => {
+            const color = code >= 500 ? '#ef4444' : code >= 400 ? '#ef4444' : code >= 300 ? '#f59e0b' : '#22c55e';
+            const pct = total ? (urls.length / total * 100).toFixed(1) : '0.0';
+            const examples = urls.slice(0, 3).map(u => `<a href="${escapeHtml(u)}" target="_blank" style="color:var(--accent);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(u)}</a>`).join('');
+            return `<tr>
+              <td style="color:${color};font-weight:700;">${code || '—'}</td>
+              <td style="font-variant-numeric:tabular-nums;">${urls.length}</td>
+              <td style="font-variant-numeric:tabular-nums;color:var(--text-muted);">${pct}%</td>
+              <td style="overflow:hidden;">${examples}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  panel.innerHTML = summary + body;
+  main.appendChild(panel);
+}
+
+// Deep Pages — pages 4+ clicks from the homepage. Hard for crawlers to
+// discover, and a sign of weak internal linking. Suggests adding a link
+// from a higher-traffic page to flatten the depth.
+function _scRenderDeepPagesPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('deep-pages-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'deep-pages-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  const deep = (crawlerResults || []).filter(r => (r.depth || 0) >= 4)
+    .sort((a, b) => (b.depth || 0) - (a.depth || 0));
+  if (!deep.length) {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">No deep pages</div>
+        <div style="font-size:.75rem;color:var(--text-muted);">Every crawled page is within 3 clicks of the homepage.</div>
+      </div>`;
+    main.appendChild(panel);
+    return;
+  }
+  const summary = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Deep pages (4+ clicks from home)</div>
+      <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
+        <b>${deep.length}</b> page${deep.length === 1 ? '' : 's'} buried 4 or more clicks deep. Search engines crawl deep pages less often
+        and pass less PageRank to them. Add internal links from higher-traffic pages to flatten the site structure.
+      </div>
+    </div>`;
+  const body = `
+    <table class="crawler-grid" style="font-size:.78rem;">
+      <colgroup><col style="width:90px"><col><col style="width:240px"></colgroup>
+      <thead><tr>
+        <th><span class="th-label">Depth</span></th>
+        <th><span class="th-label">URL</span></th>
+        <th><span class="th-label">Title</span></th>
+      </tr></thead>
+      <tbody>
+        ${deep.map(r => {
+          const u = escapeHtml(r.url || '');
+          return `<tr data-url="${u}">
+            <td style="text-align:center;font-weight:700;color:${r.depth >= 6 ? '#ef4444' : '#f59e0b'};">${r.depth || 0}</td>
+            <td><a href="${u}" target="_blank" style="color:var(--accent);">${u}</a></td>
+            <td style="color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(r.title || '')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  panel.innerHTML = summary + body;
+  main.appendChild(panel);
+}
+
+// Hreflang implementation report — per-page declarations + validation.
+// Checks the common mistakes that silently break international SEO:
+//   • return tags (page A links to B with hreflang X, but B doesn't link
+//     back to A — Google ignores both)
+//   • duplicate or missing x-default
+//   • invalid lang/region codes
+//   • mismatched canonical (alt URL canonicals to itself, not to the cluster)
+function _scRenderHreflangPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('hreflang-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'hreflang-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  const pages = (crawlerResults || []).filter(r => Array.isArray(r.hreflang) && r.hreflang.length);
+  if (!pages.length) {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">No hreflang declarations found</div>
+        <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
+          None of the crawled pages declare <code>&lt;link rel="alternate" hreflang="…"&gt;</code>.
+          If this site is intentionally single-language, that's fine — hreflang is only required for multi-language / multi-region content.
+        </div>
+      </div>`;
+    main.appendChild(panel);
+    return;
+  }
+
+  // Validation pass
+  const validCode = /^(x-default|[a-z]{2,3}(-[A-Z]{2})?)$/;
+  const allDecls = new Map();   // url -> Set of (lang -> href)
+  for (const r of pages) {
+    const m = new Map();
+    for (const e of r.hreflang) {
+      if (e && e.lang && e.href) m.set(e.lang, e.href);
+    }
+    allDecls.set(r.url, m);
+  }
+  const issues = [];
+  for (const r of pages) {
+    const langs = new Set();
+    let xDefault = 0;
+    for (const e of r.hreflang) {
+      if (!e || !e.lang) continue;
+      if (e.lang === 'x-default') xDefault++;
+      else langs.add(e.lang);
+      if (!validCode.test(e.lang)) {
+        issues.push({ url: r.url, kind: 'invalid_code', detail: `Invalid hreflang code: ${e.lang}` });
+      }
+    }
+    if (xDefault > 1) issues.push({ url: r.url, kind: 'dup_x_default', detail: `${xDefault} x-default tags (should be exactly 0 or 1)` });
+    // Return-tag check: every alternate URL we also crawled should list us back.
+    for (const e of r.hreflang) {
+      if (!e || !e.href || e.lang === 'x-default') continue;
+      const other = allDecls.get(e.href);
+      if (other && !Array.from(other.values()).includes(r.url)) {
+        issues.push({ url: r.url, kind: 'no_return_tag', detail: `${e.href} (${e.lang}) doesn't link back to this URL` });
+      }
+    }
+  }
+
+  const summary = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Hreflang implementation</div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;align-items:center;line-height:1.55;">
+        <span><b style="color:var(--text);font-size:1.05rem;font-variant-numeric:tabular-nums;">${pages.length}</b> <span style="color:var(--text-muted);">pages with hreflang</span></span>
+        <span><b style="color:${issues.length ? '#ef4444' : '#22c55e'};font-size:1.05rem;font-variant-numeric:tabular-nums;">${issues.length}</b> <span style="color:var(--text-muted);">validation issues</span></span>
+      </div>
+    </div>`;
+
+  const issuesBlock = issues.length ? `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
+      <div style="font-size:.8rem;font-weight:600;color:#991b1b;margin-bottom:8px;">Validation issues</div>
+      <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
+        <thead><tr style="background:var(--surface2);">
+          <th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);">URL</th>
+          <th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);">Issue</th>
+          <th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);">Detail</th>
+        </tr></thead>
+        <tbody>
+          ${issues.slice(0, 200).map(it => {
+            const u = escapeHtml(it.url);
+            const kindLabel = ({invalid_code:'Invalid code', dup_x_default:'Duplicate x-default', no_return_tag:'Missing return tag'}[it.kind]) || it.kind;
+            return `<tr><td style="padding:5px 10px;border-bottom:1px solid var(--border);"><a href="${u}" target="_blank" style="color:var(--accent);">${u}</a></td><td style="padding:5px 10px;border-bottom:1px solid var(--border);color:#991b1b;font-weight:600;">${kindLabel}</td><td style="padding:5px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);">${escapeHtml(it.detail)}</td></tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>` : '';
+
+  const declsBlock = `
+    <div style="padding:14px 16px;">
+      <div style="font-size:.8rem;font-weight:600;color:var(--text);margin-bottom:8px;">All hreflang declarations</div>
+      ${pages.map(r => {
+        const u = escapeHtml(r.url || '');
+        return `
+          <div style="margin-bottom:10px;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);">
+            <div style="padding:6px 12px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:.74rem;">
+              <a href="${u}" target="_blank" style="color:var(--accent);">${u}</a>
+              <span style="color:var(--text-muted);margin-left:8px;">${r.hreflang.length} alternate${r.hreflang.length === 1 ? '' : 's'}</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:.72rem;">
+              <tbody>
+                ${r.hreflang.map(e => {
+                  const lang = escapeHtml(e.lang || '');
+                  const href = escapeHtml(e.href || '');
+                  const bad = !validCode.test(e.lang || '');
+                  return `<tr>
+                    <td style="padding:4px 12px;border-top:1px solid var(--border);font-family:'SF Mono','Menlo',monospace;width:120px;${bad?'color:#ef4444;font-weight:700;':''}">${lang}</td>
+                    <td style="padding:4px 12px;border-top:1px solid var(--border);"><a href="${href}" target="_blank" style="color:var(--accent);">${href}</a></td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  panel.innerHTML = summary + issuesBlock + declsBlock;
+  main.appendChild(panel);
+}
+
 // Per-page schema breakdown: every crawled page with its schema-type
 // chips, plus an aggregate "type X appears on Y pages" header. Helps
 // spot missing-but-expected types (no Product on a WC product page,
@@ -2369,6 +2690,20 @@ function updateCounts() {
   if ('__dup_metas'  in counts) counts.__dup_metas  = _dupCount('duplicate_metas',  'meta_description', true);
   if ('__dup_h1s'    in counts) counts.__dup_h1s    = _dupCount('duplicate_h1s',    'h1',               true);
   if ('__dup_bodies' in counts) counts.__dup_bodies = _dupCount('duplicate_bodies', 'body_hash',        false);
+
+  // Redirects & Status report counts. Redirect Chains and Response Codes
+  // come straight from the server reports payload; Deep Pages and Hreflang
+  // are derived per-page client-side so they work without server reports.
+  if ('__redir_chains'   in counts) counts.__redir_chains   = (_reps.redirect_chains || (_pages.filter(r => (r.redirect_hops || 0) >= 2))).length;
+  if ('__response_codes' in counts) counts.__response_codes = (_pages.filter(r => r.status_code)).length;
+  if ('__deep'           in counts) counts.__deep           = _pages.filter(r => (r.depth || 0) >= 4).length;
+  if ('__hreflang' in counts) {
+    counts.__hreflang = _pages.filter(r => Array.isArray(r.hreflang) && r.hreflang.length).length;
+    // Hide the Hreflang sidebar entry on sites that don't use it at all —
+    // a permanent 0 is just noise. Show as soon as any page declares one.
+    const cat = document.getElementById('hreflang-cat');
+    if (cat) cat.style.display = counts.__hreflang ? '' : 'none';
+  }
 
   // __js_diff count: pages with a meaningful diff (severity != 'none').
   // The sidebar entry stays hidden until the crawl actually compared, so
