@@ -217,6 +217,41 @@ def version():
     })
 
 
+@app.route('/update', methods=['POST'])
+def update_self():
+    """git pull origin master in the app's checkout, return result.
+    Restart is NOT automatic — that needs whatever process supervisor
+    the user has (systemd / pm2 / nohup loop). The UI nudges them to
+    restart manually after a successful pull."""
+    import subprocess as _sp
+    repo = os.path.dirname(os.path.abspath(__file__))
+    if not os.path.isdir(os.path.join(repo, '.git')):
+        return jsonify({'ok': False, 'error': 'Not a git checkout — install via git clone to use auto-update.'}), 400
+    before = _local_commit_sha()
+    try:
+        # Refuse pull if the working tree is dirty — pulling on top of
+        # local edits is how people lose work. Tell the user instead.
+        st = _sp.run(['git', '-C', repo, 'status', '--porcelain'],
+                     capture_output=True, text=True, timeout=5)
+        if st.stdout.strip():
+            return jsonify({'ok': False, 'error': 'Working tree has uncommitted changes — commit or stash before updating.'}), 409
+        # Fast-forward only — never auto-resolve a merge.
+        pull = _sp.run(['git', '-C', repo, 'pull', '--ff-only', 'origin', 'master'],
+                       capture_output=True, text=True, timeout=30)
+        if pull.returncode != 0:
+            return jsonify({'ok': False, 'error': (pull.stderr or pull.stdout)[:400]}), 500
+        after = _local_commit_sha()
+        return jsonify({
+            'ok': True,
+            'before': before,
+            'after': after,
+            'changed': before != after,
+            'message': pull.stdout.strip()[:400],
+        })
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)[:300]}), 500
+
+
 @app.route('/')
 def index():
     return render_template('index.html', v=STATIC_VERSION, build_sha=_local_commit_sha())
