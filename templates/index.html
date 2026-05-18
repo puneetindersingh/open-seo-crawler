@@ -25,7 +25,7 @@
     <!-- Build version + update-check. JS in head queries GitHub API for
          master HEAD; if different from local, swap the title to indicate
          update available + show a 'Pull update' link. -->
-    <span id="build-version" title="Installed build commit. Click for update options." style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;cursor:pointer;padding:3px 8px;border-radius:4px;" onclick="versionBadgeClick()">v {{ build_sha }}</span>
+    <span id="build-version" title="Installed build. Click to check for updates." style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;cursor:pointer;padding:3px 8px;border-radius:4px;" onclick="versionBadgeClick()">v {{ build_sha }}</span>
     <!-- Global exports — sit in the topbar (not per-view header) because they
          always export the whole crawl, regardless of which tab the user is on.
          Hidden until a crawl has data. -->
@@ -121,12 +121,18 @@
     //   1. POST /update         (git pull --ff-only)
     //   2. POST /restart        (detached shell kills+respawns the app)
     //   3. Poll /version until the new SHA shows up, then reload.
-    // If we're already up to date, opens the GitHub commit history.
+    // If already up to date, just say so — never link out to the source
+    // repo (users shouldn't have to leave the app to check for updates).
     async function versionBadgeClick() {
       const local = window._scBuildLocal || '';
       const remote = window._scBuildRemote || '';
       if (!remote || remote === local || local === 'dev') {
-        window.open('https://github.com/puneetindersingh/open-seo-crawler/commits/master', '_blank');
+        const badge = document.getElementById('build-version');
+        if (badge) {
+          const prev = badge.textContent;
+          badge.textContent = local === 'dev' ? 'Dev build' : 'Up to date ✓';
+          setTimeout(() => { badge.textContent = prev; }, 1400);
+        }
         return;
       }
       const badge = document.getElementById('build-version');
