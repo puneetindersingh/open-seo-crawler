@@ -70,6 +70,21 @@ const ISSUE_META = {
   'Missing Open Graph': { sev: 'warn', why: 'Without og:title/og:description/og:image, Facebook/LinkedIn/Slack previews scrape random page elements. Shares look ugly, CTR drops.', sources: [['Ahrefs — Open Graph Tags', 'https://ahrefs.com/blog/open-graph-meta-tags/']] },
   'Missing og:image': { sev: 'warn', why: 'Without an og:image, shared links render as text-only cards — significantly lower engagement. Recommended size: 1200×630.', sources: [['Ahrefs — Open Graph Tags', 'https://ahrefs.com/blog/open-graph-meta-tags/']] },
   'Missing Twitter Card': { sev: 'info', why: 'Without twitter:card metadata, X falls back to Open Graph or plain text. Summary Large Image card gives the best preview.', sources: [['Ahrefs — Open Graph Tags', 'https://ahrefs.com/blog/open-graph-meta-tags/']] },
+  // Bulk Reports — informational panels (no severity). renderIssueInfo()
+  // surfaces the why text + sources above the panel so users get context
+  // without having to remember what each report is for.
+  '__all_titles':     { sev: 'info', why: 'Every crawled page with its title tag — review for keyword coverage, length, and brand consistency across the site. Use the chars column to spot truncation risk.', sources: [['Ahrefs — Title Tag', 'https://ahrefs.com/blog/title-tag/'], ['Moz — Title Tag', 'https://moz.com/learn/seo/title-tag']] },
+  '__all_metas':      { sev: 'info', why: 'Every crawled page with its meta description — scan for missing descriptions, duplication, length issues, and brand voice consistency. Google rewrites ~70% of descriptions but a strong starting point still wins CTR.', sources: [['Ahrefs — Meta Description', 'https://ahrefs.com/blog/meta-description/']] },
+  '__all_h1s':        { sev: 'info', why: 'Every crawled page with its primary H1 — confirms the page-level topical signal Google sees. Look for H1s that don\'t match the URL/title intent (template misuse).', sources: [['Ahrefs — H1 Tag', 'https://ahrefs.com/blog/h1-tag/']] },
+  '__all_canonicals': { sev: 'info', why: 'Every crawled page with its rel=canonical target. Spot self-canonicals (good), cross-canonicals to unrelated URLs (often template bugs), and missing tags.', sources: [['Ahrefs — Canonical Tags', 'https://ahrefs.com/blog/canonical-tags/']] },
+  '__dup_titles':     { sev: 'warn', why: 'Pages sharing the same title compete with each other for the same query — Google picks one and ignores the rest. Either canonicalise, consolidate, or rewrite to differentiate.', sources: [['Ahrefs — Duplicate Content', 'https://ahrefs.com/blog/duplicate-content/']] },
+  '__dup_metas':      { sev: 'warn', why: 'Duplicate meta descriptions across many pages = generic templated copy. Pages get the same SERP snippet, weakening CTR uplift for whichever page Google picks.', sources: [['Ahrefs — Meta Description', 'https://ahrefs.com/blog/meta-description/']] },
+  '__dup_h1s':        { sev: 'warn', why: 'Multiple pages with identical H1s look like duplicate content to Google. Either the pages truly are duplicates (consolidate) or the H1 isn\'t specific enough.', sources: [['Ahrefs — H1 Tag', 'https://ahrefs.com/blog/h1-tag/']] },
+  '__dup_bodies':     { sev: 'warn', why: 'Identical body content (MD5 match on stripped text) is hard duplicate content — Google will pick one and drop the rest. Check for template bleed, paginated archives, or cross-domain syndication.', sources: [['Ahrefs — Duplicate Content', 'https://ahrefs.com/blog/duplicate-content/']] },
+  '__redir_chains':   { sev: 'warn', why: 'Each redirect hop wastes crawl budget and link equity. Google stops following after ~5 hops, after which the destination gets ignored. Always link directly to the final URL.', sources: [['Ahrefs — 301 Redirects', 'https://ahrefs.com/blog/301-redirects/'], ['Moz — Redirection', 'https://moz.com/learn/seo/redirection']] },
+  '__response_codes': { sev: 'info', why: 'Crawl-wide HTTP status code distribution. A healthy site is mostly 2xx with a small tail of 3xx redirects; spikes in 4xx/5xx mean indexable URLs are bleeding link equity to error pages.', sources: [['Ahrefs — HTTP Status Codes', 'https://ahrefs.com/blog/http-status-codes/']] },
+  '__deep':           { sev: 'warn', why: 'Pages 4+ clicks from the homepage get crawled less often and receive less PageRank. Surface them via category pages, related-content modules, or footer hub links to flatten depth.', sources: [['Ahrefs — Internal Links', 'https://ahrefs.com/blog/internal-links-for-seo/']] },
+  '__hreflang':       { sev: 'info', why: 'Hreflang tells Google which language/region a page targets. Common mistakes that silently break it: invalid lang codes, duplicate x-default, and missing return tags (page A links to B but B doesn\'t link back to A — Google ignores both).', sources: [['Ahrefs — Hreflang Guide', 'https://ahrefs.com/blog/hreflang/'], ['Google — hreflang docs', 'https://developers.google.com/search/docs/specialty/international/localized-versions']] },
 };
 
 function sevOf(issue) {
@@ -987,6 +1002,18 @@ window.selectCategory = function(cat) {
     '__all_images': 'All Images — every image across the crawl with alt text and the page(s) it appears on',
     '__external_links': 'External Links — every off-domain link with rel/target attributes. Filter by follow / nofollow / same-window. Risky = follow + same-window (leaks link equity AND loses the visitor).',
     '__js_diff': 'JS vs non-JS Diff — pages whose content differs between rendered and raw HTML',
+    '__all_titles':    'All Titles — every crawled page with its title tag',
+    '__all_metas':     'All Meta Descriptions — every crawled page with its meta description',
+    '__all_h1s':       'All H1s — every crawled page with its primary H1',
+    '__all_canonicals':'All Canonicals — every crawled page with its rel=canonical target',
+    '__dup_titles':    'Duplicate Titles — groups of pages sharing a title',
+    '__dup_metas':     'Duplicate Meta Descriptions — groups of pages sharing a meta description',
+    '__dup_h1s':       'Duplicate H1s — groups of pages sharing an H1',
+    '__dup_bodies':    'Duplicate Body Content — groups of pages with identical body hash',
+    '__redir_chains':  'Redirect Chains (2+ hops)',
+    '__response_codes':'Response Code Distribution',
+    '__deep':          'Deep Pages (4+ clicks from home)',
+    '__hreflang':      'Hreflang Implementation',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
