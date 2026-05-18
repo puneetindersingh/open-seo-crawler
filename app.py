@@ -2876,12 +2876,24 @@ def _all_crawl_folders():
     return [_CRAWL_FOLDER] + _CRAWL_FOLDERS_RO
 
 
+def _ip_name_map():
+    """Shared IP → friendly name map (lives in seo-tool's home file).
+    Falls back to empty dict if the file is missing/unreadable."""
+    try:
+        with open(os.path.expanduser('~/.seo-tool-users.json')) as f:
+            m = json.load(f)
+            return m if isinstance(m, dict) else {}
+    except Exception:
+        return {}
+
+
 @app.route('/crawl/list', methods=['GET'])
 def crawl_list():
     """List ALL saved crawls from the last 30 days, unioning across this
     tool's dir + the sibling tool's dir (read-only) so users see the
     same list whichever app they open."""
     cutoff = int(time.time()) - 30 * 86400
+    name_map = _ip_name_map()
     out = []
     seen_files = set()
     for folder in _all_crawl_folders():
@@ -2894,13 +2906,20 @@ def crawl_list():
             try:
                 with open(path) as f: d = json.load(f)
                 if (d.get('saved_at') or 0) < cutoff: continue
+                # Cross-tool field reconciliation: site-crawler stores the
+                # IP in 'saved_by'; seo-tool stores it in 'user_ip'. Read
+                # both, then translate via the shared name map so the
+                # column shows "Puneet" / "Yvonne" / etc instead of raw
+                # 192.168.x.x (per the seo-tool-user-map convention).
+                raw_ip = d.get('user_ip') or d.get('saved_by') or ''
+                saved_by = name_map.get(raw_ip, '') or raw_ip or 'unknown'
                 out.append({
                     'file': fn,
                     'name': d.get('name', fn),
                     'saved_at': d.get('saved_at'),
                     'pages': d.get('pages', 0),
                     'seed': d.get('seed', ''),
-                    'saved_by': d.get('saved_by', '') or 'unknown',
+                    'saved_by': saved_by,
                     'source': source,
                 })
             except Exception:

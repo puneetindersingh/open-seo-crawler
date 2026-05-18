@@ -93,29 +93,51 @@
   color: var(--text) !important;
   border-color: var(--border) !important;
 }
-[data-theme="dark"] #crawl-loader-modal,
 [data-theme="dark"] #crawler-limit-banner > div {
   background: var(--surface) !important;
   color: var(--text) !important;
 }
+/* Saved crawls modal: the loader rows are built with deeply-nested
+   inline color:#0f172a / color:#64748b / background:#fff styles. Reach
+   into every descendant and pull onto the theme tokens. */
 [data-theme="dark"] #crawl-loader-body,
-[data-theme="dark"] #crawl-loader-body [data-crawl-row],
 [data-theme="dark"] #crawl-loader-body input {
   background: var(--surface) !important;
   color: var(--text) !important;
   border-color: var(--border) !important;
 }
-[data-theme="dark"] #crawl-loader-body [data-crawl-row] > div {
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] {
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] div {
   color: var(--text) !important;
 }
-[data-theme="dark"] #crawl-loader-body [data-crawl-row] > div > div[style*="color:#64748b"] {
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] [style*="color:#64748b"],
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] [style*="color: #64748b"] {
   color: var(--text-muted) !important;
 }
-/* Modal headers + close buttons inside dark */
-[data-theme="dark"] [id$="-modal"] header,
-[data-theme="dark"] [id$="-modal"] h2,
-[data-theme="dark"] [id$="-modal"] h3 {
+/* Header note + filter input above the rows — inline-styled with
+   background:#f8fafc / color:#0f172a / color:#64748b / border:#e2e8f0. */
+[data-theme="dark"] #crawl-loader-body > div[style*="background:#f8fafc"],
+[data-theme="dark"] #crawl-loader-body > div[style*="background: #f8fafc"] {
+  background: var(--surface2) !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawl-loader-body > div[style*="background:#f8fafc"] strong {
   color: var(--text) !important;
+}
+[data-theme="dark"] #crawl-loader-search {
+  background: var(--surface2) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+/* The "Date / Time / Website / Saved by / Pages" header row */
+[data-theme="dark"] #crawl-loader-body > div[style*="background:#f1f5f9"],
+[data-theme="dark"] #crawl-loader-body > div[style*="background: #f1f5f9"] {
+  background: var(--surface2) !important;
+  color: var(--text-muted) !important;
+  border-color: var(--border) !important;
 }
 body {
   margin: 0;
