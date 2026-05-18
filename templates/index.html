@@ -25,7 +25,7 @@
     <!-- Build version + update-check. JS in head queries GitHub API for
          master HEAD; if different from local, swap the title to indicate
          update available + show a 'Pull update' link. -->
-    <span id="build-version" title="Installed build commit. Click to see release on GitHub." style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;cursor:pointer;padding:3px 8px;border-radius:4px;" onclick="window.open('https://github.com/puneetindersingh/open-seo-crawler/commits/master','_blank')">v {{ build_sha }}</span>
+    <span id="build-version" title="Installed build commit. Click for update options." style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;cursor:pointer;padding:3px 8px;border-radius:4px;" onclick="versionBadgeClick()">v {{ build_sha }}</span>
     <!-- Global exports — sit in the topbar (not per-view header) because they
          always export the whole crawl, regardless of which tab the user is on.
          Hidden until a crawl has data. -->
@@ -99,15 +99,45 @@
             }
           } catch {}
         }
+        window._scBuildLocal = local;
+        window._scBuildRemote = remote;
         if (remote && remote !== local) {
           badge.style.color = '#f59e0b';
           badge.style.borderColor = '#f59e0b';
           badge.style.border = '1px solid #f59e0b';
-          badge.title = `Update available — running ${local}, latest is ${remote}. Click to see what changed.`;
+          badge.title = `Update available — running ${local}, latest is ${remote}. Click to pull.`;
           badge.innerHTML = `v ${local} <span style="color:#f59e0b;margin-left:4px;">• update available</span>`;
         }
       })();
     });
+    // Click handler — offers one-click git pull when an update is
+    // available; otherwise opens the GitHub commit history. Pull does
+    // NOT auto-restart the server (the user's process supervisor owns
+    // that) — we just nudge them to restart after a successful pull.
+    async function versionBadgeClick() {
+      const local = window._scBuildLocal || '';
+      const remote = window._scBuildRemote || '';
+      if (!remote || remote === local || local === 'dev') {
+        window.open('https://github.com/puneetindersingh/open-seo-crawler/commits/master', '_blank');
+        return;
+      }
+      if (!confirm(`Update available\\n\\nLocal:  ${local}\\nLatest: ${remote}\\n\\nClick OK to run "git pull" on this checkout. You'll need to restart the app to load the new code.`)) return;
+      try {
+        const r = await fetch('/update', { method: 'POST' });
+        const d = await r.json();
+        if (!d.ok) {
+          alert(`Update failed:\\n\\n${d.error}`);
+          return;
+        }
+        if (!d.changed) {
+          alert('Already up to date.');
+          return;
+        }
+        alert(`Updated ${d.before} → ${d.after}\\n\\nRestart the app to apply:\\n  pkill -f 'site-crawler/app.py' && cd ~/site-crawler && nohup python3 app.py >/dev/null 2>&1 &`);
+      } catch (e) {
+        alert('Update request failed: ' + e.message);
+      }
+    }
   </script>
 
   <main class="wrap">
