@@ -74,11 +74,16 @@
 [data-theme="dark"] #crawler-export-sitemap-btn,
 [data-theme="dark"] #crawler-export-view-btn,
 [data-theme="dark"] #crawler-export-xlsx-btn,
-[data-theme="dark"] .url-cell,
 [data-theme="dark"] .export-btn {
   background: var(--surface2) !important;
   color: var(--text) !important;
   border-color: var(--border) !important;
+}
+/* .url-cell is the clickable URL inside a regular table cell — must
+   stay transparent so it inherits the row's striping/hover bg.
+   Painting it surface2 made every URL look like a pill button. */
+[data-theme="dark"] .url-cell {
+  color: var(--accent) !important;
 }
 [data-theme="dark"] #crawler-empty {
   color: var(--text-muted) !important;
