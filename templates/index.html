@@ -22,6 +22,17 @@
       <span>Open SEO Crawler</span>
     </div>
     <div class="sub">Fast concurrent crawl · CMS-aware · severity-tagged issues</div>
+    <!-- Global exports — sit in the topbar (not per-view header) because they
+         always export the whole crawl, regardless of which tab the user is on.
+         Hidden until a crawl has data. -->
+    <button id="topbar-export-sitemap" type="button" onclick="exportCrawlerSitemap()" title="Export an XML sitemap of all 200-status indexable pages found in this crawl" class="topbar-btn" style="display:none;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Sitemap.xml
+    </button>
+    <button id="topbar-export-xlsx" type="button" onclick="exportCrawlerXlsx()" title="Export the entire crawl as a multi-sheet .xlsx workbook (All Pages + Issues + per-tab data sheets)" class="topbar-btn" style="display:none;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      .xlsx
+    </button>
     <button type="button" class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light / dark theme">
       <svg id="theme-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="4"/>
@@ -162,7 +173,13 @@
 
     <!-- Issues sidebar (middle column, shown after crawl starts) -->
     <aside class="issues-sidebar" id="issues-sidebar" style="display:none">
-      <div class="ci-cat active" data-cat="all" onclick="selectCategory('all')">
+      <div class="ci-cat active" data-cat="__summary" onclick="selectCategory('__summary')" title="What needs fixing — grouped by severity, click any issue to drill in">
+        <span style="display:inline-flex;align-items:center;gap:6px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="13" width="3" height="6"/><rect x="12" y="9" width="3" height="10"/><rect x="17" y="5" width="3" height="14"/></svg>
+          Summary
+        </span><span class="ci-count" data-count="__summary"></span>
+      </div>
+      <div class="ci-cat" data-cat="all" onclick="selectCategory('all')">
         <span>All Pages</span><span class="ci-count" data-count="all">0</span>
       </div>
 
@@ -265,18 +282,17 @@
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-5.97"/></svg>
             <span id="crawler-bulk-recrawl-label">Re-crawl all</span>
           </button>
-          <button id="crawler-export-sitemap-btn" onclick="exportCrawlerSitemap()" title="Export an XML sitemap of all 200-status indexable pages found in this crawl" style="display:none;align-items:center;gap:5px;padding:4px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:11px;font-weight:600;cursor:pointer;line-height:1;" onmouseover="this.style.borderColor='#0ea5e9';this.style.color='#0ea5e9'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span>Sitemap.xml</span>
-          </button>
+          <!-- Sitemap.xml + .xlsx moved to the topbar — they're whole-crawl
+               exports, not view-specific, and confused users on issue tabs
+               who thought clicking would export the issue rows only. -->
           <button id="crawler-export-view-btn" onclick="exportCrawlerView()" title="Export the current view as CSV — shape matches whichever tab you're on (e.g. one row per image on All Images, one row per page on the page-level filters)" style="display:none;align-items:center;gap:5px;padding:4px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:11px;font-weight:600;cursor:pointer;line-height:1;" onmouseover="this.style.borderColor='#0ea5e9';this.style.color='#0ea5e9'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             <span>Export view</span>
           </button>
-          <button id="crawler-export-xlsx-btn" onclick="exportCrawlerXlsx()" title="Export the entire crawl as a multi-sheet .xlsx workbook (All Pages + Issues + per-tab data sheets)" style="display:none;align-items:center;gap:5px;padding:4px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-size:11px;font-weight:600;cursor:pointer;line-height:1;" onmouseover="this.style.borderColor='#0ea5e9';this.style.color='#0ea5e9'" onmouseout="this.style.borderColor='#e2e8f0';this.style.color='#0f172a'">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span>.xlsx</span>
-          </button>
+          <!-- Hidden shims so legacy JS that toggles the old per-view IDs
+               doesn't NPE. The real buttons live in the topbar now. -->
+          <button id="crawler-export-sitemap-btn" style="display:none;"></button>
+          <button id="crawler-export-xlsx-btn" style="display:none;"></button>
           <div style="display:flex;align-items:center;gap:3px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:3px 8px;">
             <svg width="12" height="12" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" style="color:#94a3b8;flex-shrink:0;"><circle cx="9" cy="9" r="6"/><path d="M13.5 13.5L18 18"/></svg>
             <input type="text" id="sc-url-search" placeholder="Filter by URL…" oninput="scFilterByUrl(this.value)" autocomplete="off" spellcheck="false" style="background:none;border:none;outline:none;font-size:11px;width:150px;padding:2px 0;" />

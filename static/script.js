@@ -617,6 +617,9 @@ function startCrawl(opts) {
   document.getElementById('issues-sidebar').style.display = '';
   { const _smBtn = document.getElementById('crawler-export-sitemap-btn'); if (_smBtn) _smBtn.style.display = 'none'; }
   { const _xBtn = document.getElementById('crawler-export-xlsx-btn'); if (_xBtn) _xBtn.style.display = 'none'; }
+  // Mirror to the new topbar buttons (global, not per-view).
+  { const _t = document.getElementById('topbar-export-sitemap'); if (_t) _t.style.display = 'none'; }
+  { const _t = document.getElementById('topbar-export-xlsx'); if (_t) _t.style.display = 'none'; }
   { const _vBtn = document.getElementById('crawler-export-view-btn'); if (_vBtn) _vBtn.style.display = 'none'; }
   if (!resumeFromId) {
     document.getElementById('crawler-tbody').innerHTML = '';
@@ -731,6 +734,13 @@ function startCrawl(opts) {
               if (p.reports && typeof p.reports === 'object') {
                 window.crawlerReports = p.reports;
               }
+              // Post-crawl landing: switch to Summary so users immediately
+              // see what needs fixing instead of staring at the raw row
+              // table. Wrapped in setTimeout so the last batch of row
+              // renders flushes before we swap views.
+              setTimeout(() => {
+                if (typeof selectCategory === 'function') selectCategory('__summary');
+              }, 50);
             }
           } catch {}
         }
@@ -1027,6 +1037,7 @@ window.selectCategory = function(cat) {
     '__response_codes':'Response Code Distribution',
     '__deep':          'Deep Pages (4+ clicks from home)',
     '__hreflang':      'Hreflang Implementation',
+    '__summary':       'Crawl Summary — what needs fixing, grouped by severity',
   };
   document.getElementById('detail-title-text').textContent = titleMap[cat] || cat;
 
@@ -1037,7 +1048,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang' || cat === '__err' || cat === '__warn' || cat === '__info');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang' || cat === '__err' || cat === '__warn' || cat === '__info' || cat === '__summary');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -1052,7 +1063,7 @@ window.selectCategory = function(cat) {
      'all-images-panel','external-links-panel','js-diff-panel',
      'all-values-panel','duplicates-panel',
      'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
-     'severity-panel']
+     'severity-panel','summary-panel']
       .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     if (cat === '__schema_by_page') {
       _renderSchemaByPagePanel();
@@ -1080,6 +1091,8 @@ window.selectCategory = function(cat) {
       _scRenderHreflangPanel();
     } else if (cat === '__err' || cat === '__warn' || cat === '__info') {
       _scRenderSeverityPanel(cat);
+    } else if (cat === '__summary') {
+      _scRenderSummaryPanel();
     } else {
       _renderSitemapPanel(cat);
     }
@@ -2173,6 +2186,148 @@ function _scRenderDeepPagesPanel() {
 //   • duplicate or missing x-default
 //   • invalid lang/region codes
 //   • mismatched canonical (alt URL canonicals to itself, not to the cluster)
+// Post-crawl Summary view — default landing after a crawl finishes
+// or a saved crawl is loaded. Shows total crawled, severity tile
+// breakdown, and the same grouped issue cards from the severity panel
+// stacked by tier (errors → warnings → info). Each card clicks through
+// to the dedicated issue tab. Designed for users who don't know to
+// click Errors/Warnings — the summary surfaces everything at once.
+function _scRenderSummaryPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('summary-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'summary-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:18px 20px;font-size:13px;';
+
+  const pages = crawlerResults || [];
+  if (!pages.length) {
+    panel.innerHTML = `<div style="padding:60px 20px;text-align:center;color:var(--text-muted);">No crawl loaded.</div>`;
+    main.appendChild(panel);
+    return;
+  }
+
+  // Reuse the severity panel's grouping logic — duplicated here because
+  // _scRenderSeverityPanel writes into the DOM directly; we want the
+  // groups data without mounting.
+  const normalize = (issue) => {
+    const stripped = issue.replace(/\s*\(.*$/, '').trim();
+    const map = {
+      'Title too long':              ['Title too long','Title too long'],
+      'Title too short':             ['Title too short','Title too short'],
+      'Meta desc too long':          ['Meta description too long','Meta desc too long'],
+      'Meta desc too short':         ['Meta description too short','Meta desc too short'],
+      'Multiple H1s':                ['Multiple H1s','Multiple H1s'],
+      'H1 same as title':            ['H1 same as title','H1 same as title'],
+      'H1 identical to title tag':   ['H1 same as title','H1 same as title'],
+      'Missing title':               ['Missing title','Missing title'],
+      'Missing H1':                  ['Missing H1','Missing H1'],
+      'Missing meta description':    ['Missing meta description','Missing meta description'],
+      'Missing canonical':           ['Missing canonical','Missing canonical'],
+      'Missing viewport':            ['Missing viewport','Missing viewport'],
+      'Missing Open Graph':          ['Missing Open Graph tags','Missing Open Graph'],
+      'Missing og:image':            ['Missing og:image','Missing og:image'],
+      'Missing Twitter Card':        ['Missing Twitter Card','Missing Twitter Card'],
+      'Mixed content':               ['Mixed content','Mixed content'],
+      'noindex':                     ['Noindex pages','noindex'],
+      'Canonicalised':               ['Canonicalised','Canonicalised'],
+      'Thin content':                ['Thin content','Thin content'],
+      'Slow':                        ['Slow response','Slow'],
+      'No schema':                   ['No schema markup','No schema'],
+      'Redirect':                    ['Redirects','Redirect'],
+      'Trailing slash redirect':     ['Redirects','Redirect'],
+      'HTTP→HTTPS redirect':         ['Redirects','Redirect'],
+      'www normalization':           ['Redirects','Redirect'],
+    };
+    if (map[stripped]) return map[stripped];
+    if (/^imgs missing alt|imgs with empty alt/i.test(stripped) ||
+        /^\d+ imgs missing alt|^\d+ imgs with empty alt/i.test(issue)) return ['Images missing alt','imgs missing alt'];
+    if (/^HTTP \d{3}/i.test(stripped)) return ['HTTP errors (4xx / 5xx)','HTTP'];
+    if (/^URL:/i.test(stripped))       return ['URL hygiene','URL:'];
+    return [stripped, stripped];
+  };
+  const groupsBySev = { error: new Map(), warn: new Map(), info: new Map() };
+  let pagesAffected = { error: 0, warn: 0, info: 0 };
+  for (const r of pages) {
+    const seenSev = new Set();
+    const seenSlug = new Set();
+    for (const issue of (r.issues || [])) {
+      const s = sevOf(issue);
+      if (!groupsBySev[s]) continue;
+      const [label, slug] = normalize(issue);
+      if (seenSlug.has(slug)) continue;
+      seenSlug.add(slug);
+      const g = groupsBySev[s];
+      if (!g.has(slug)) g.set(slug, { label, count: 0 });
+      g.get(slug).count++;
+      seenSev.add(s);
+    }
+    for (const s of seenSev) pagesAffected[s]++;
+  }
+
+  const stat = (label, value, color) => `
+    <div style="flex:1;min-width:130px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-muted);margin-bottom:4px;">${label}</div>
+      <div style="font-size:26px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;line-height:1.1;">${value}</div>
+    </div>`;
+
+  const tier = (title, sevKey, sevColor) => {
+    const g = groupsBySev[sevKey];
+    const rows = Array.from(g.entries())
+      .map(([slug, v]) => ({ slug, label: v.label, count: v.count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    if (!rows.length) {
+      return `
+        <div style="margin-top:18px;">
+          <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:8px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${sevColor};"></span>
+            ${title}
+            <span style="color:var(--text-muted);font-weight:500;font-size:12px;">— nothing to fix</span>
+          </div>
+        </div>`;
+    }
+    return `
+      <div style="margin-top:18px;">
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:10px;display:flex;align-items:center;gap:8px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:${sevColor};"></span>
+          ${title}
+          <span style="color:var(--text-muted);font-weight:500;font-size:12px;">— ${pagesAffected[sevKey]} page${pagesAffected[sevKey]===1?'':'s'} affected</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;">
+          ${rows.map(r => `
+            <div onclick="selectCategory('${r.slug.replace(/'/g, "\\'")}')"
+                 style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border);border-radius:6px;background:var(--surface);cursor:pointer;transition:border-color .12s,background .12s;"
+                 onmouseover="this.style.borderColor='${sevColor}';this.style.background='var(--surface2)'"
+                 onmouseout="this.style.borderColor='var(--border)';this.style.background='var(--surface)'">
+              <span style="font-weight:600;color:var(--text);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(r.label)}</span>
+              <span style="display:flex;align-items:center;gap:6px;flex-shrink:0;margin-left:8px;">
+                <span style="font-size:15px;font-weight:700;color:${sevColor};font-variant-numeric:tabular-nums;">${r.count}</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-muted);"><polyline points="9 18 15 12 9 6"/></svg>
+              </span>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+  };
+
+  panel.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+      ${stat('Pages crawled', pages.length, 'var(--text)')}
+      ${stat('Errors', pagesAffected.error, '#ef4444')}
+      ${stat('Warnings', pagesAffected.warn, '#f59e0b')}
+      ${stat('Info', pagesAffected.info, '#0ea5e9')}
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-top:10px;font-size:12.5px;color:var(--text-muted);line-height:1.55;">
+      Below: every distinct issue found, grouped by severity. <b style="color:var(--text);">Click any card</b> to see the affected URLs in its dedicated tab.
+    </div>
+    ${tier('Errors — must fix', 'error', '#ef4444')}
+    ${tier('Warnings — should fix', 'warn', '#f59e0b')}
+    ${tier('Info — intentional content states', 'info', '#0ea5e9')}
+  `;
+  main.appendChild(panel);
+}
+
 // Errors / Warnings / Info severity views: instead of a per-page row
 // table where Issues falls off the right edge, render a grouped list:
 // "Title too long — 7", "Missing meta description — 1". Each row click
@@ -3487,6 +3642,10 @@ function crawlFinished() {
     if (_smBtn) _smBtn.style.display = 'inline-flex';
     const _xBtn = document.getElementById('crawler-export-xlsx-btn');
     if (_xBtn) _xBtn.style.display = 'inline-flex';
+    const _t1 = document.getElementById('topbar-export-sitemap');
+    if (_t1) _t1.style.display = 'inline-flex';
+    const _t2 = document.getElementById('topbar-export-xlsx');
+    if (_t2) _t2.style.display = 'inline-flex';
   }
   // Sitemap analysis is opt-in via the 'Sitemap analysis' checkbox.
   if (Array.isArray(crawlerResults) && crawlerResults.length) {
@@ -4188,8 +4347,12 @@ function loadSavedCrawl(file) {
       if (post) post.style.display = 'flex';
       { const _smBtn = document.getElementById('crawler-export-sitemap-btn'); if (_smBtn && crawlerResults.length) _smBtn.style.display = 'inline-flex'; }
       { const _xBtn = document.getElementById('crawler-export-xlsx-btn'); if (_xBtn && crawlerResults.length) _xBtn.style.display = 'inline-flex'; }
+      { const _t = document.getElementById('topbar-export-sitemap'); if (_t && crawlerResults.length) _t.style.display = 'inline-flex'; }
+      { const _t = document.getElementById('topbar-export-xlsx'); if (_t && crawlerResults.length) _t.style.display = 'inline-flex'; }
       if (typeof updateCounts === 'function') updateCounts();
-      if (typeof window.selectCategory === 'function') window.selectCategory('all');
+      // Default to Summary on load so users see what needs fixing
+      // immediately, not an opaque 500-row table.
+      if (typeof window.selectCategory === 'function') window.selectCategory('__summary');
       showToast(`Loaded "${d.name}" · ${crawlerResults.length} pages`, 'success');
       closeCrawlLoader();
     }, 120);

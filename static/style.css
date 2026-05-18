@@ -63,6 +63,25 @@
 }
 .theme-toggle:hover { color: var(--text); border-color: var(--accent); }
 .theme-toggle svg { width: 13px; height: 13px; }
+.topbar-btn {
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color .12s, border-color .12s;
+}
+.topbar-btn:hover { color: var(--accent); border-color: var(--accent); }
+/* Push the first topbar-btn (Sitemap.xml) to the right edge so the
+   theme toggle and export buttons cluster together on the right. */
+.topbar-btn:first-of-type { margin-left: auto; }
 
 /* Inline-style buttons can't be re-themed via tokens without !important.
    These hardcoded #0f172a / #fff / #f1f5f9 patterns pre-date the dark
