@@ -204,6 +204,18 @@ body {
     background: #ffffff;
   }
 }
+/* Explicit data-theme="light" mirror — beats the OS-preference media
+   query so the manual toggle wins. Same for dark in case the OS is
+   light but the user toggled the app to dark. */
+[data-theme="light"] .sidebar input[type=url],
+[data-theme="light"] .sidebar textarea {
+  background: #ffffff;
+}
+[data-theme="dark"] .sidebar input[type=url],
+[data-theme="dark"] .sidebar textarea {
+  background: var(--surface2);
+  color: var(--text);
+}
 .sidebar textarea { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
 .slider-row input[type=range] { width: 100%; margin-top: 3px; }
 /* Block layout (not flex) so the label text + <small> flow as inline
