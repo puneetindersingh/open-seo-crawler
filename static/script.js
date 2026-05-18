@@ -2405,44 +2405,52 @@ function _scRenderSeverityPanel(cat) {
 
   const sevLabel = cat === '__err' ? 'Errors' : cat === '__warn' ? 'Warnings' : 'Info';
   const sevDesc  = cat === '__err'
-    ? 'Must-fix issues found across the crawl. Click any issue to see the affected pages.'
+    ? 'Must-fix issues found across the crawl. Click any card to see the affected URLs.'
     : cat === '__warn'
-    ? 'Should-fix issues. Click any issue to see the affected pages.'
+    ? 'Should-fix issues. Click any card to see the affected URLs.'
     : 'Informational findings (intentional content states). Click any to drill in.';
   const sevColor = cat === '__err' ? '#ef4444' : cat === '__warn' ? '#f59e0b' : '#0ea5e9';
-
-  if (!rows.length) {
-    panel.innerHTML = `
-      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
-        <div style="font-size:.95rem;font-weight:600;color:var(--text);margin-bottom:4px;">${sevLabel} — none found</div>
-        <div style="font-size:.75rem;color:var(--text-muted);">Nothing at this severity on the crawled pages.</div>
-      </div>`;
-    main.appendChild(panel);
-    return;
-  }
-
-  panel.innerHTML = `
-    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
-      <div style="font-size:.95rem;font-weight:600;color:var(--text);margin-bottom:4px;">${sevLabel} (${rows.reduce((n, r) => n + r.count, 0)} pages affected)</div>
-      <div style="font-size:.75rem;color:var(--text-muted);">${sevDesc}</div>
-    </div>
-    <div style="max-width:680px;margin:14px auto;padding:0 16px;">
+  const totalPages = (crawlerResults || []).length;
+  const pagesAffected = (crawlerResults || []).filter(r => (r.issues || []).some(i => sevOf(i) === wantedSev)).length;
+  // Match the Summary view styling: stat cards on top, then a grid of
+  // clickable issue cards — same density and layout no matter which
+  // severity tab the user lands on. Was a centered 680px column before,
+  // which looked unrelated to Summary.
+  panel.style.padding = '18px 20px';
+  const stat = (label, value, color) => `
+    <div style="flex:1;min-width:130px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 16px;">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-muted);margin-bottom:4px;">${label}</div>
+      <div style="font-size:26px;font-weight:700;color:${color};font-variant-numeric:tabular-nums;line-height:1.1;">${value}</div>
+    </div>`;
+  const cardsHtml = rows.length ? `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px;margin-top:18px;">
       ${rows.map(r => `
         <div onclick="selectCategory('${r.slug.replace(/'/g, "\\'")}')"
-             style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;margin-bottom:6px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer;transition:border-color .12s,background .12s;"
+             style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border:1px solid var(--border);border-radius:6px;background:var(--surface);cursor:pointer;transition:border-color .12s,background .12s;"
              onmouseover="this.style.borderColor='${sevColor}';this.style.background='var(--surface2)'"
              onmouseout="this.style.borderColor='var(--border)';this.style.background='var(--surface)'">
-          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-            <span style="width:6px;height:6px;border-radius:50%;background:${sevColor};flex-shrink:0;"></span>
-            <span style="font-weight:600;color:var(--text);">${escapeHtml(r.label)}</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-            <span style="font-size:18px;font-weight:700;color:${sevColor};font-variant-numeric:tabular-nums;">${r.count}</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-muted);"><polyline points="9 18 15 12 9 6"/></svg>
-          </div>
+          <span style="font-weight:600;color:var(--text);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(r.label)}</span>
+          <span style="display:flex;align-items:center;gap:6px;margin-left:8px;flex-shrink:0;">
+            <span style="font-size:15px;font-weight:700;color:${sevColor};font-variant-numeric:tabular-nums;">${r.count}</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-muted);"><polyline points="9 18 15 12 9 6"/></svg>
+          </span>
         </div>
       `).join('')}
+    </div>` : `
+    <div style="margin-top:18px;padding:24px;border:1px dashed var(--border);border-radius:8px;text-align:center;color:var(--text-muted);font-size:13px;">
+      Nothing at this severity on the crawled pages.
     </div>`;
+
+  panel.innerHTML = `
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+      ${stat('Pages crawled', totalPages, 'var(--text)')}
+      ${stat(sevLabel, pagesAffected, sevColor)}
+      ${stat('Issue types', rows.length, 'var(--text)')}
+    </div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-top:10px;font-size:12.5px;color:var(--text-muted);line-height:1.55;">
+      ${sevDesc}
+    </div>
+    ${cardsHtml}`;
   main.appendChild(panel);
 }
 
