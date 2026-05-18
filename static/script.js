@@ -3596,6 +3596,10 @@ function _scSetColumns(cat) {
   // Image alt is image-level, not page-level — page Title is just noise on
   // this view. Mirrors internal-tool's treatment.
   if (cat === 'imgs missing alt') return show(['url','status','issues']);
+  // Severity views (Errors / Warnings / Info) — without an explicit show()
+  // every column renders, pushing Issues off the right edge and forcing a
+  // horizontal scroll just to see what's wrong.
+  if (cat === '__err' || cat === '__warn' || cat === '__info') return show(['url','status','title','issues']);
   if (cat !== 'all' && !cat.startsWith('__')) return show(['url','status','title','issues']);
   _scSyncTableWidth();
 }
