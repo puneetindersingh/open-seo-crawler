@@ -32,15 +32,35 @@ body {
   font-size: 14px;
 }
 .topbar {
-  padding: 12px 22px;
+  padding: 10px 22px;
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 14px;
   background: var(--surface);
 }
-.brand { font-weight: 700; font-size: 16px; }
-.sub { color: var(--text-muted); font-size: 12px; }
+.brand {
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+.brand svg {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  box-shadow: 0 1px 3px rgba(79, 70, 229, 0.25);
+}
+.sub {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+  letter-spacing: 0.01em;
+}
 .wrap {
   display: grid;
   grid-template-columns: 300px 240px 1fr;

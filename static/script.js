@@ -150,11 +150,17 @@ function renderRow(d) {
   tr.style.cursor = 'pointer';
   tr.dataset.url = d.url;
   const statusColor = d.status_code >= 400 ? '#ef4444' : d.status_code >= 300 ? '#f59e0b' : '#22c55e';
-  const path = d.url.replace(/^https?:\/\/[^\/]+/, '') || '/';
+  // app.py canonicalizes redirect rows so result['url'] is the FINAL URL
+  // and result['original_url'] is what we requested. For the URL column
+  // we want the user to see the URL they (or an internal link) actually
+  // hit — otherwise "URL" and "Redirect To" both show the destination and
+  // look identical in the Redirects view.
+  const displayUrl = (d.original_url && d.original_url !== d.url) ? d.original_url : d.url;
+  const path = displayUrl.replace(/^https?:\/\/[^\/]+/, '') || '/';
   const issues = (d.issues || []).map(i => `<span class="badge ${sevOf(i)}" title="${sevOf(i).toUpperCase()}">${escapeHtml(i)}</span>`).join('');
   const safe = d.url.replace(/"/g, '&quot;').replace(/'/g, "\\'");
   tr.innerHTML = `
-    <td data-col="url" title="${escapeHtml(d.url)}">
+    <td data-col="url" title="${escapeHtml(displayUrl)}">
       <span style="display:flex;align-items:center;gap:2px;min-width:0;">
         <span class="url-cell" onclick="openDock('${safe}')" style="flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(path)}</span>
         <span class="cs-cell-actions" style="display:inline-flex;align-items:center;gap:2px;flex-shrink:0;">${_scOpenIcon(d.url)}${_scRefetchIcon(d.url)}</span>
@@ -3894,7 +3900,10 @@ function openCrawlLoader(opts) {
           <div style="color:#0f172a;font-variant-numeric:tabular-nums;">${dateStr}</div>
           <div style="color:#64748b;font-variant-numeric:tabular-nums;font-family:'SF Mono','Menlo',monospace;">${timeStr}</div>
           <div style="min-width:0;">
-            <div style="font-weight:600;color:#0f172a;word-break:break-all;">${seed || c.name}</div>
+            <div style="font-weight:600;color:#0f172a;word-break:break-all;">${seed || c.name}
+              ${c.source === 'internal-tool' ? '<span title="Saved in internal-tool" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#ede9fe;color:#5b21b6;border-radius:3px;font-size:9.5px;font-weight:600;vertical-align:middle;">internal-tool</span>' : ''}
+              ${c.source === 'site-crawler' ? '<span title="Saved in site-crawler" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#dbeafe;color:#1e40af;border-radius:3px;font-size:9.5px;font-weight:600;vertical-align:middle;">site-crawler</span>' : ''}
+            </div>
             <div style="font-size:10px;color:#64748b;word-break:break-all;">${c.name}</div>
           </div>
           <div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${savedBy}">${savedBy}</div>
