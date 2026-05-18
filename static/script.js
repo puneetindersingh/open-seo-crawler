@@ -1860,21 +1860,50 @@ function _scRenderDuplicatesPanel(cat) {
   let groups = ((window.crawlerReports || {})[spec.key]) || [];
   // Fallback: compute from crawlerResults when the server payload is absent
   // (saved crawls predating the reports field, or in-progress views).
+  // Mirrors app.py:_normalize_url_for_dup so two crawl rows for the same
+  // page (trailing-slash, http/https, www variants, pagination tails)
+  // collapse to one entry — otherwise the user sees "duplicate group"
+  // alerts that are really one page reached two ways.
   if (!groups.length && Array.isArray(crawlerResults) && crawlerResults.length) {
+    const normUrl = (u) => {
+      if (!u) return '';
+      let p;
+      try { p = new URL(u); } catch { return u.toLowerCase(); }
+      let host = (p.hostname || '').toLowerCase().replace(/^www\./, '');
+      let path = p.pathname || '/';
+      path = path.replace(/\/page\/\d+\/?$/, '/').replace(/\/comment-page-\d+\/?$/, '/');
+      while (path && path !== '/') {
+        const low = path.toLowerCase();
+        if (low.endsWith('%20')) path = path.slice(0, -3);
+        else if (path.endsWith(' ') || path.endsWith('/')) path = path.slice(0, -1);
+        else break;
+      }
+      if (!path) path = '/';
+      return 'https://' + host + path;
+    };
     const m = new Map();
     for (const r of crawlerResults) {
       if (r.is_pagination) continue;
+      if (r.redirect_url) continue;                              // redirected — not unique content
+      if (r.status_code && r.status_code >= 300) continue;       // non-200 — not indexable
+      const canon = (r.canonical || '').trim();
+      const url = r.url || '';
+      if (canon && normUrl(canon) !== normUrl(url)) continue;    // canonicalised elsewhere
       const v = (r[spec.field] || '').trim();
       if (!v) continue;
       const k = (cat === '__dup_bodies') ? v : v.toLowerCase();
-      const list = m.get(k) || [];
-      list.push(r.url || '');
-      m.set(k, list);
+      const bucket = m.get(k) || new Map();                      // {normUrl: originalUrl}
+      const nu = normUrl(url);
+      if (!bucket.has(nu)) bucket.set(nu, url);
+      m.set(k, bucket);
     }
     groups = Array.from(m.entries())
-      .filter(([, urls]) => urls.length > 1)
-      .sort((a, b) => b[1].length - a[1].length)
-      .map(([k, urls]) => ({ value: (cat === '__dup_bodies') ? k.slice(0, 8) : k, urls }));
+      .filter(([, bucket]) => bucket.size > 1)
+      .sort((a, b) => b[1].size - a[1].size)
+      .map(([k, bucket]) => ({
+        value: (cat === '__dup_bodies') ? k.slice(0, 8) : k,
+        urls: Array.from(bucket.values()),
+      }));
   }
 
   const pageCount = groups.reduce((n, g) => n + (g.urls || []).length, 0);
@@ -2705,18 +2734,40 @@ function updateCounts() {
   if ('__all_h1s' in counts)        counts.__all_h1s        = _pages.filter(r => r.h1).length;
   if ('__all_canonicals' in counts) counts.__all_canonicals = _pages.filter(r => r.canonical).length;
   const _reps = window.crawlerReports || {};
+  // Mirror app.py:_normalize_url_for_dup so trailing-slash and www
+  // variants of the same page don't inflate duplicate counts.
+  const _normForDup = (u) => {
+    if (!u) return '';
+    let p;
+    try { p = new URL(u); } catch { return u.toLowerCase(); }
+    let host = (p.hostname || '').toLowerCase().replace(/^www\./, '');
+    let path = (p.pathname || '/').replace(/\/page\/\d+\/?$/, '/').replace(/\/comment-page-\d+\/?$/, '/');
+    while (path && path !== '/') {
+      const low = path.toLowerCase();
+      if (low.endsWith('%20')) path = path.slice(0, -3);
+      else if (path.endsWith(' ') || path.endsWith('/')) path = path.slice(0, -1);
+      else break;
+    }
+    return 'https://' + host + (path || '/');
+  };
   const _dupCount = (serverKey, field, ci) => {
     const fromServer = (_reps[serverKey] || []).length;
     if (fromServer) return fromServer;
-    const m = new Map();
+    const m = new Map();  // value -> Set(normalised URLs)
     for (const r of _pages) {
+      if (r.redirect_url) continue;
+      if (r.status_code && r.status_code >= 300) continue;
+      const canon = (r.canonical || '').trim();
+      const url = r.url || '';
+      if (canon && _normForDup(canon) !== _normForDup(url)) continue;
       const v = (r[field] || '').trim();
       if (!v) continue;
       const k = ci ? v.toLowerCase() : v;
-      m.set(k, (m.get(k) || 0) + 1);
+      if (!m.has(k)) m.set(k, new Set());
+      m.get(k).add(_normForDup(url));
     }
     let n = 0;
-    for (const v of m.values()) if (v > 1) n++;
+    for (const s of m.values()) if (s.size > 1) n++;
     return n;
   };
   if ('__dup_titles' in counts) counts.__dup_titles = _dupCount('duplicate_titles', 'title',            true);
