@@ -265,6 +265,8 @@
             <colgroup>
               <col data-col="url" style="width:280px;" />
               <col data-col="status" style="width:70px;" />
+              <col data-col="redirto" style="width:280px;" />
+              <col data-col="inlinks" style="width:70px;" />
               <col data-col="title" style="width:220px;" />
               <col data-col="tlen" style="width:60px;" />
               <col data-col="meta" style="width:200px;" />
@@ -275,15 +277,17 @@
             </colgroup>
             <thead id="crawler-thead">
               <tr>
-                <th data-col-idx="0"><span class="th-label" onclick="scSortTable(0)">URL <span class="sc-sort-ind" data-col="0"></span></span><span class="th-resize" data-col-idx="0"></span></th>
-                <th data-col-idx="1"><span class="th-label" onclick="scSortTable(1)">Status <span class="sc-sort-ind" data-col="1"></span></span><span class="th-resize" data-col-idx="1"></span></th>
-                <th data-col-idx="2"><span class="th-label" onclick="scSortTable(2)">Title <span class="sc-sort-ind" data-col="2"></span></span><span class="th-resize" data-col-idx="2"></span></th>
-                <th data-col-idx="3"><span class="th-label" onclick="scSortTable(3)">TLen <span class="sc-sort-ind" data-col="3"></span></span><span class="th-resize" data-col-idx="3"></span></th>
-                <th data-col-idx="4"><span class="th-label" onclick="scSortTable(4)">Meta <span class="sc-sort-ind" data-col="4"></span></span><span class="th-resize" data-col-idx="4"></span></th>
-                <th data-col-idx="5"><span class="th-label" onclick="scSortTable(5)">H1 <span class="sc-sort-ind" data-col="5"></span></span><span class="th-resize" data-col-idx="5"></span></th>
-                <th data-col-idx="6"><span class="th-label" onclick="scSortTable(6)">Words <span class="sc-sort-ind" data-col="6"></span></span><span class="th-resize" data-col-idx="6"></span></th>
-                <th data-col-idx="7"><span class="th-label" onclick="scSortTable(7)">Time <span class="sc-sort-ind" data-col="7"></span></span><span class="th-resize" data-col-idx="7"></span></th>
-                <th data-col-idx="8"><span class="th-label" onclick="scSortTable(8)">Issues <span class="sc-sort-ind" data-col="8"></span></span><span class="th-resize" data-col-idx="8"></span></th>
+                <th data-col="url" data-col-idx="0"><span class="th-label" onclick="scSortTable(0)">URL <span class="sc-sort-ind" data-col="0"></span></span><span class="th-resize" data-col-idx="0"></span></th>
+                <th data-col="status" data-col-idx="1"><span class="th-label" onclick="scSortTable(1)">Status <span class="sc-sort-ind" data-col="1"></span></span><span class="th-resize" data-col-idx="1"></span></th>
+                <th data-col="redirto" data-col-idx="2"><span class="th-label" onclick="scSortTable(2)">Redirect To <span class="sc-sort-ind" data-col="2"></span></span><span class="th-resize" data-col-idx="2"></span></th>
+                <th data-col="inlinks" data-col-idx="3"><span class="th-label" onclick="scSortTable(3)">Inlinks <span class="sc-sort-ind" data-col="3"></span></span><span class="th-resize" data-col-idx="3"></span></th>
+                <th data-col="title" data-col-idx="4"><span class="th-label" onclick="scSortTable(4)">Title <span class="sc-sort-ind" data-col="4"></span></span><span class="th-resize" data-col-idx="4"></span></th>
+                <th data-col="tlen" data-col-idx="5"><span class="th-label" onclick="scSortTable(5)">TLen <span class="sc-sort-ind" data-col="5"></span></span><span class="th-resize" data-col-idx="5"></span></th>
+                <th data-col="meta" data-col-idx="6"><span class="th-label" onclick="scSortTable(6)">Meta <span class="sc-sort-ind" data-col="6"></span></span><span class="th-resize" data-col-idx="6"></span></th>
+                <th data-col="h1" data-col-idx="7"><span class="th-label" onclick="scSortTable(7)">H1 <span class="sc-sort-ind" data-col="7"></span></span><span class="th-resize" data-col-idx="7"></span></th>
+                <th data-col="words" data-col-idx="8"><span class="th-label" onclick="scSortTable(8)">Words <span class="sc-sort-ind" data-col="8"></span></span><span class="th-resize" data-col-idx="8"></span></th>
+                <th data-col="speed" data-col-idx="9"><span class="th-label" onclick="scSortTable(9)">Time <span class="sc-sort-ind" data-col="9"></span></span><span class="th-resize" data-col-idx="9"></span></th>
+                <th data-col="issues" data-col-idx="10"><span class="th-label" onclick="scSortTable(10)">Issues <span class="sc-sort-ind" data-col="10"></span></span><span class="th-resize" data-col-idx="10"></span></th>
               </tr>
             </thead>
             <tbody id="crawler-tbody"></tbody>

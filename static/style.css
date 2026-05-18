@@ -514,20 +514,17 @@ body.is-col-resizing * { cursor: col-resize !important; }
 }
 
 /* Column visibility per category — JS adds classes to #crawler-table.
-   Site-crawler columns: 1=URL 2=Status 3=Title 4=TLen 5=Meta 6=H1 7=Words 8=Speed 9=Issues
-   Hide the matching <col> too so _scSyncTableWidth excludes its width from the table sum. */
-#crawler-table.hide-col-title th:nth-child(3), #crawler-table.hide-col-title td:nth-child(3),
-#crawler-table.hide-col-title colgroup col:nth-child(3) { display: none; }
-#crawler-table.hide-col-tlen th:nth-child(4), #crawler-table.hide-col-tlen td:nth-child(4),
-#crawler-table.hide-col-tlen colgroup col:nth-child(4) { display: none; }
-#crawler-table.hide-col-meta th:nth-child(5), #crawler-table.hide-col-meta td:nth-child(5),
-#crawler-table.hide-col-meta colgroup col:nth-child(5) { display: none; }
-#crawler-table.hide-col-h1 th:nth-child(6), #crawler-table.hide-col-h1 td:nth-child(6),
-#crawler-table.hide-col-h1 colgroup col:nth-child(6) { display: none; }
-#crawler-table.hide-col-words th:nth-child(7), #crawler-table.hide-col-words td:nth-child(7),
-#crawler-table.hide-col-words colgroup col:nth-child(7) { display: none; }
-#crawler-table.hide-col-speed th:nth-child(8), #crawler-table.hide-col-speed td:nth-child(8),
-#crawler-table.hide-col-speed colgroup col:nth-child(8) { display: none; }
+   Selectors target data-col on <col>, <th>, <td> so dynamically-injected
+   columns (e.g. H1 (2), H1 (3) in the Multiple H1s view) don't shift
+   nth-child indices and silently break the hide rules. */
+#crawler-table.hide-col-redirto [data-col="redirto"] { display: none; }
+#crawler-table.hide-col-inlinks [data-col="inlinks"] { display: none; }
+#crawler-table.hide-col-title [data-col="title"] { display: none; }
+#crawler-table.hide-col-tlen [data-col="tlen"] { display: none; }
+#crawler-table.hide-col-meta [data-col="meta"] { display: none; }
+#crawler-table.hide-col-h1 [data-col="h1"] { display: none; }
+#crawler-table.hide-col-words [data-col="words"] { display: none; }
+#crawler-table.hide-col-speed [data-col="speed"] { display: none; }
 
 /* Drag-select row highlighting */
 /* Row selection highlight — scope to any tbody, not just the main #crawler-tbody,
