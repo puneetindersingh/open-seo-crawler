@@ -86,16 +86,22 @@
         if (!badge) return;
         const local = (badge.textContent || '').replace(/^v\s*/, '').trim();
         if (!local || local === 'dev') return;
-        const ck = 'sc_remote_sha_v1';
+        const ck = 'sc_remote_sha_v2';  // bumped from v1 — old key may have stale remote
+        // Cache the remote SHA scoped to a known LOCAL SHA so that the
+        // moment the local build advances (dev pushes a commit, restarts),
+        // we re-fetch instead of comparing against a stale cached remote.
+        // Otherwise restarting to a NEW local SHA keeps showing "update
+        // available" until the 1h cache expires.
         const cache = JSON.parse(localStorage.getItem(ck) || '{}');
-        let remote = (Date.now() - (cache.t || 0) < 3600 * 1000) ? cache.sha : null;
+        const cacheFresh = (Date.now() - (cache.t || 0) < 600 * 1000) && cache.local === local;
+        let remote = cacheFresh ? cache.sha : null;
         if (!remote) {
           try {
             const r = await fetch('https://api.github.com/repos/puneetindersingh/open-seo-crawler/commits/master', { headers: { 'Accept': 'application/vnd.github+json' } });
             if (r.ok) {
               const d = await r.json();
               remote = (d.sha || '').slice(0, 7);
-              if (remote) localStorage.setItem(ck, JSON.stringify({ sha: remote, t: Date.now() }));
+              if (remote) localStorage.setItem(ck, JSON.stringify({ sha: remote, local, t: Date.now() }));
             }
           } catch {}
         }
