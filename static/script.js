@@ -700,6 +700,16 @@ function startCrawl(opts) {
                 crawlerUpdateQueuePanel(p.queue_sample, p.queued);
               }
               updateCounts();
+              // If Summary is the active view, re-render it on each page
+              // so users see counts climb in real time as the crawl runs.
+              // Throttled to ~1 render/sec via a simple debounce so we
+              // don't burn cycles on big crawls.
+              if (activeCategory === '__summary') {
+                clearTimeout(window._scSummaryRerenderT);
+                window._scSummaryRerenderT = setTimeout(() => {
+                  if (activeCategory === '__summary' && typeof _scRenderSummaryPanel === 'function') _scRenderSummaryPanel();
+                }, 800);
+              }
               // Refresh dock if the open URL got fresh data (new inlinks or its own page row)
               if (dockUrl && (dockUrl === src || (p.data.internal_link_urls || []).some(e => (Array.isArray(e) ? e[0] : e) === dockUrl))) {
                 renderDock();
@@ -937,7 +947,12 @@ function crawlerHideQueuePanel() {
 }
 
 function crawlerShowAllCrawled() {
-  if (typeof selectCategory === 'function') selectCategory('all');
+  // Default landing while a crawl runs is now Summary, not All Pages.
+  // Summary updates live as new pages stream in (updateCounts re-runs
+  // on every 'page' event). Users who want the live row stream can
+  // click All Pages — but most users just want to know "what's broken",
+  // which is exactly what Summary surfaces.
+  if (typeof selectCategory === 'function') selectCategory('__summary');
   const empty = document.getElementById('crawler-empty');
   const results = document.getElementById('crawler-results');
   if (empty) empty.style.display = 'none';
