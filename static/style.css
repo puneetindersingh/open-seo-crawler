@@ -63,6 +63,55 @@
 }
 .theme-toggle:hover { color: var(--text); border-color: var(--accent); }
 .theme-toggle svg { width: 13px; height: 13px; }
+
+/* Inline-style buttons can't be re-themed via tokens without !important.
+   These hardcoded #0f172a / #fff / #f1f5f9 patterns pre-date the dark
+   mode toggle — overriding them here keeps the markup untouched. */
+[data-theme="dark"] #crawler-load-btn,
+[data-theme="dark"] #crawler-save-btn,
+[data-theme="dark"] #crawler-compare-btn,
+[data-theme="dark"] #crawler-bulk-recrawl-btn,
+[data-theme="dark"] #crawler-export-sitemap-btn,
+[data-theme="dark"] #crawler-export-view-btn,
+[data-theme="dark"] #crawler-export-xlsx-btn,
+[data-theme="dark"] .url-cell,
+[data-theme="dark"] .export-btn {
+  background: var(--surface2) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawler-empty {
+  color: var(--text-muted) !important;
+}
+[data-theme="dark"] #crawler-empty button {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawl-loader-modal,
+[data-theme="dark"] #crawler-limit-banner > div {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+[data-theme="dark"] #crawl-loader-body,
+[data-theme="dark"] #crawl-loader-body [data-crawl-row],
+[data-theme="dark"] #crawl-loader-body input {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] > div {
+  color: var(--text) !important;
+}
+[data-theme="dark"] #crawl-loader-body [data-crawl-row] > div > div[style*="color:#64748b"] {
+  color: var(--text-muted) !important;
+}
+/* Modal headers + close buttons inside dark */
+[data-theme="dark"] [id$="-modal"] header,
+[data-theme="dark"] [id$="-modal"] h2,
+[data-theme="dark"] [id$="-modal"] h3 {
+  color: var(--text) !important;
+}
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
