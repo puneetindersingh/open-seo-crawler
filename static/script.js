@@ -701,6 +701,13 @@ function startCrawl(opts) {
               showToast(`Crawl resumed — page cap raised to ${p.new_max}`, 'info');
             } else if (p.type === 'complete') {
               crawlerLastCrawlId = null;  // crawl finished naturally
+              // Server-computed reports (duplicates, redirect chains, response
+              // codes, orphans, depth distribution) — needed by Bulk Reports
+              // panels. Falls back to client-side computation on saved-crawl
+              // loads where this event never fires.
+              if (p.reports && typeof p.reports === 'object') {
+                window.crawlerReports = p.reports;
+              }
             }
           } catch {}
         }
@@ -990,7 +997,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -1002,7 +1009,8 @@ window.selectCategory = function(cat) {
     // Each renderer removes only its own ID; switching between special tabs
     // without this would leave stale Schema/Images/etc. panels in the DOM.
     ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
-     'all-images-panel','external-links-panel','js-diff-panel']
+     'all-images-panel','external-links-panel','js-diff-panel',
+     'all-values-panel','duplicates-panel']
       .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     if (cat === '__schema_by_page') {
       _renderSchemaByPagePanel();
@@ -1016,6 +1024,10 @@ window.selectCategory = function(cat) {
       _scRenderExternalLinksPanel();
     } else if (cat === '__js_diff') {
       _scRenderJsDiffPanel();
+    } else if (cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals') {
+      _scRenderAllValuesPanel(cat);
+    } else if (cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies') {
+      _scRenderDuplicatesPanel(cat);
     } else {
       _renderSitemapPanel(cat);
     }
@@ -1028,7 +1040,8 @@ window.selectCategory = function(cat) {
   // table category. Missing IDs here cause the panel to leak below the
   // new view (e.g. External Links lingering under Redirects).
   ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
-   'all-images-panel','external-links-panel','js-diff-panel']
+   'all-images-panel','external-links-panel','js-diff-panel',
+   'all-values-panel','duplicates-panel']
     .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
@@ -1659,6 +1672,217 @@ function _scCopyAllImages() {
   );
 }
 
+// "All Titles / Metas / H1s / Canonicals" bulk-report panel.
+// One row per crawled page (pagination filtered out — same value as the
+// parent archive). Sortable by URL or value. Copy-as-TSV and copy-values-only
+// helpers below. No Bulk Meta / AI rewrite affordances here — site-crawler
+// stays pure-crawler.
+function _scRenderAllValuesPanel(cat) {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('all-values-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'all-values-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  if (!Array.isArray(crawlerResults) || !crawlerResults.length) {
+    panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No pages crawled yet.</div>';
+    main.appendChild(panel);
+    return;
+  }
+
+  const spec = {
+    '__all_titles':    { field: 'title',            len: 'title_len', label: 'Title',            limit: 60,  minLen: 30, emptyClass: 'Missing title' },
+    '__all_metas':     { field: 'meta_description', len: 'meta_len',  label: 'Meta description', limit: 150, minLen: 70, emptyClass: 'Missing meta description' },
+    '__all_h1s':       { field: 'h1',               len: null,        label: 'H1',               limit: null,minLen: 0,  emptyClass: 'Missing H1' },
+    '__all_canonicals':{ field: 'canonical',        len: null,        label: 'Canonical',        limit: null,minLen: 0,  emptyClass: 'Missing canonical' },
+  }[cat];
+  if (!spec) return;
+
+  const filtered = crawlerResults.filter(r => !r.is_pagination);
+  const rows = filtered.slice().sort((a, b) => {
+    const av = (a[spec.field] || '').toLowerCase();
+    const bv = (b[spec.field] || '').toLowerCase();
+    if (!av && bv) return 1;
+    if (av && !bv) return -1;
+    return av.localeCompare(bv) || (a.url || '').localeCompare(b.url || '');
+  });
+
+  const total = rows.length;
+  const filled = rows.filter(r => r[spec.field]).length;
+  const empty  = total - filled;
+  const overLimit = spec.limit ? rows.filter(r => r[spec.field] && (r[spec.len] ? r[spec.len] : r[spec.field].length) > spec.limit).length : 0;
+
+  const summary = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:.78rem;align-items:center;">
+        <span><b style="color:var(--text);font-size:1.05rem;font-variant-numeric:tabular-nums;">${total}</b> <span style="color:var(--text-muted);">pages</span></span>
+        <span><b style="color:var(--text);font-size:1.05rem;font-variant-numeric:tabular-nums;">${filled}</b> <span style="color:var(--text-muted);">with ${escapeHtml(spec.label.toLowerCase())}</span></span>
+        ${empty ? `<span><b style="color:#ef4444;font-size:1.05rem;font-variant-numeric:tabular-nums;">${empty}</b> <span style="color:var(--text-muted);">missing</span></span>` : ''}
+        ${spec.limit ? `<span><b style="color:${overLimit ? '#ef4444' : 'var(--text)'};font-size:1.05rem;font-variant-numeric:tabular-nums;">${overLimit}</b> <span style="color:var(--text-muted);">over ${spec.limit} chars</span></span>` : ''}
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">
+          <button class="export-btn" type="button" onclick="_scCopyAllValues('${cat}')" title="Copy URL → ${escapeHtml(spec.label)} as TSV (paste into Sheets/Excel)" style="padding:5px 12px;font-size:11.5px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-weight:600;cursor:pointer;">Copy as TSV</button>
+          <button class="export-btn" type="button" onclick="_scCopyValuesOnly('${cat}')" title="Copy just the ${escapeHtml(spec.label.toLowerCase())} values, one per line" style="padding:5px 12px;font-size:11.5px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-weight:600;cursor:pointer;">Copy values only</button>
+        </div>
+      </div>
+    </div>`;
+
+  const hasChars = !!spec.limit;
+  const valueColW = (cat === '__all_metas') ? ' style="width:780px"' : ' style="width:680px"';
+  const body = `
+    <table class="crawler-grid" data-resize-key="all-values-${cat}" style="font-size:.78rem;">
+      <colgroup>
+        <col style="width:520px">
+        <col${valueColW}>
+        ${hasChars ? '<col style="width:80px">' : ''}
+      </colgroup>
+      <thead>
+        <tr>
+          <th style="position:relative;"><span class="th-label">URL</span><span class="th-resize" data-col-idx="0"></span></th>
+          <th style="position:relative;"><span class="th-label">${escapeHtml(spec.label)}</span><span class="th-resize" data-col-idx="1"></span></th>
+          ${hasChars ? '<th style="position:relative;"><span class="th-label th-center">Chars</span><span class="th-resize" data-col-idx="2"></span></th>' : ''}
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => {
+          const v = r[spec.field] || '';
+          const n = spec.len ? (r[spec.len] || (v ? v.length : 0)) : (v ? v.length : 0);
+          const over  = spec.limit && v && n > spec.limit;
+          const under = spec.limit && v && spec.minLen && n < spec.minLen;
+          const u = r.url || '';
+          const safeU = escapeHtml(u);
+          const safeV = v ? escapeHtml(v) : `<span style="color:#ef4444;font-style:italic;">— ${escapeHtml(spec.emptyClass)}</span>`;
+          const cellStyle = over ? 'color:#ef4444;' : (under ? 'color:#f59e0b;' : '');
+          return `
+            <tr data-url="${safeU}">
+              <td title="${safeU}"><a href="${safeU}" target="_blank" style="color:var(--accent);">${safeU}</a></td>
+              <td title="${escapeHtml(v)}" style="${cellStyle}">${safeV}</td>
+              ${hasChars ? `<td style="text-align:right;${cellStyle}">${v ? n : ''}</td>` : ''}
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+
+  panel.innerHTML = summary + body;
+  main.appendChild(panel);
+  if (typeof _scWireNestedGrids === 'function') _scWireNestedGrids(panel);
+}
+
+function _scAllValuesField(cat) {
+  return {'__all_titles':'title','__all_metas':'meta_description','__all_h1s':'h1','__all_canonicals':'canonical'}[cat];
+}
+window._scCopyAllValues = function(cat) {
+  const f = _scAllValuesField(cat);
+  if (!f) return;
+  const lbl = {title:'Title',meta_description:'Meta Description',h1:'H1',canonical:'Canonical'}[f];
+  const lines = ['URL\t' + lbl];
+  crawlerResults.forEach(r => lines.push((r.url || '') + '\t' + (r[f] || '').replace(/\t/g, ' ').replace(/\n/g, ' ')));
+  navigator.clipboard.writeText(lines.join('\n')).then(
+    () => showToast(`Copied ${crawlerResults.length} rows as TSV.`, 'success'),
+    () => showToast('Clipboard write failed.', 'error')
+  );
+};
+window._scCopyValuesOnly = function(cat) {
+  const f = _scAllValuesField(cat);
+  if (!f) return;
+  const lines = crawlerResults.map(r => (r[f] || '').replace(/\n/g, ' ')).filter(Boolean);
+  navigator.clipboard.writeText(lines.join('\n')).then(
+    () => showToast(`Copied ${lines.length} values.`, 'success'),
+    () => showToast('Clipboard write failed.', 'error')
+  );
+};
+
+// Duplicate values panel — groups of pages sharing an identical
+// title / meta / H1 / body hash. Server-computed in app.py and
+// shipped on the 'complete' event; falls back to client-side
+// grouping for saved crawls missing the reports payload.
+function _scRenderDuplicatesPanel(cat) {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('duplicates-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'duplicates-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  const spec = {
+    '__dup_titles': { key: 'duplicate_titles', field: 'title',            label: 'title' },
+    '__dup_metas':  { key: 'duplicate_metas',  field: 'meta_description', label: 'meta description' },
+    '__dup_h1s':    { key: 'duplicate_h1s',    field: 'h1',               label: 'H1' },
+    '__dup_bodies': { key: 'duplicate_bodies', field: 'body_hash',        label: 'body content (MD5)' },
+  }[cat];
+  if (!spec) return;
+
+  let groups = ((window.crawlerReports || {})[spec.key]) || [];
+  // Fallback: compute from crawlerResults when the server payload is absent
+  // (saved crawls predating the reports field, or in-progress views).
+  if (!groups.length && Array.isArray(crawlerResults) && crawlerResults.length) {
+    const m = new Map();
+    for (const r of crawlerResults) {
+      if (r.is_pagination) continue;
+      const v = (r[spec.field] || '').trim();
+      if (!v) continue;
+      const k = (cat === '__dup_bodies') ? v : v.toLowerCase();
+      const list = m.get(k) || [];
+      list.push(r.url || '');
+      m.set(k, list);
+    }
+    groups = Array.from(m.entries())
+      .filter(([, urls]) => urls.length > 1)
+      .sort((a, b) => b[1].length - a[1].length)
+      .map(([k, urls]) => ({ value: (cat === '__dup_bodies') ? k.slice(0, 8) : k, urls }));
+  }
+
+  const pageCount = groups.reduce((n, g) => n + (g.urls || []).length, 0);
+
+  if (!groups.length) {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">No duplicate ${escapeHtml(spec.label)}s found</div>
+        <div style="font-size:.75rem;color:var(--text-muted);">Every crawled page has a unique ${escapeHtml(spec.label)}.</div>
+      </div>`;
+    main.appendChild(panel);
+    return;
+  }
+
+  const summary = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Duplicate ${escapeHtml(spec.label)}s</div>
+      <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
+        <b>${groups.length}</b> duplicate group${groups.length === 1 ? '' : 's'} covering <b>${pageCount}</b> page${pageCount === 1 ? '' : 's'}.
+        Pages sharing the same ${escapeHtml(spec.label)} compete with each other for the same query — pick one canonical version or rewrite to differentiate.
+      </div>
+    </div>`;
+
+  const body = `
+    <div style="padding:0 16px 16px;">
+      ${groups.map((g, i) => {
+        const head = (cat === '__dup_bodies')
+          ? `<span style="color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;font-size:.7rem;">hash ${escapeHtml(g.value || '')}…</span>`
+          : escapeHtml(g.value || '<empty>');
+        return `
+          <div style="margin-top:12px;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);">
+            <div style="padding:8px 12px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:.78rem;">
+              <b>#${i + 1}</b> · ${head}
+              <span style="color:var(--text-muted);margin-left:8px;">${g.urls.length} pages share this ${escapeHtml(spec.label)}</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;font-size:.76rem;">
+              <tbody>
+                ${g.urls.map(u => {
+                  const safe = escapeHtml(u);
+                  return `<tr data-url="${safe}"><td style="padding:5px 12px;border-top:1px solid var(--border);"><a href="${safe}" target="_blank" style="color:var(--accent);">${safe}</a></td></tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  panel.innerHTML = summary + body;
+  main.appendChild(panel);
+}
+
 // Per-page schema breakdown: every crawled page with its schema-type
 // chips, plus an aggregate "type X appears on Y pages" header. Helps
 // spot missing-but-expected types (no Product on a WC product page,
@@ -2116,6 +2340,36 @@ function updateCounts() {
     counts.__external_links = (crawlerResults || []).reduce(
       (n, r) => n + ((r.external_link_urls || []).filter(e => e && e[0]).length), 0);
   }
+  // Bulk Reports counts. "All *" = pages with a value present (so the
+  // tab badge tells you how many rows the report will have, not page count).
+  // "Dup *" = number of duplicate GROUPS (matches the panel header), preferring
+  // the server-computed reports payload and falling back to client-side
+  // grouping so the sidebar isn't stuck at 0 on older saved crawls.
+  const _pages = (crawlerResults || []).filter(r => !r.is_pagination);
+  if ('__all_titles' in counts)     counts.__all_titles     = _pages.filter(r => r.title).length;
+  if ('__all_metas' in counts)      counts.__all_metas      = _pages.filter(r => r.meta_description).length;
+  if ('__all_h1s' in counts)        counts.__all_h1s        = _pages.filter(r => r.h1).length;
+  if ('__all_canonicals' in counts) counts.__all_canonicals = _pages.filter(r => r.canonical).length;
+  const _reps = window.crawlerReports || {};
+  const _dupCount = (serverKey, field, ci) => {
+    const fromServer = (_reps[serverKey] || []).length;
+    if (fromServer) return fromServer;
+    const m = new Map();
+    for (const r of _pages) {
+      const v = (r[field] || '').trim();
+      if (!v) continue;
+      const k = ci ? v.toLowerCase() : v;
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    let n = 0;
+    for (const v of m.values()) if (v > 1) n++;
+    return n;
+  };
+  if ('__dup_titles' in counts) counts.__dup_titles = _dupCount('duplicate_titles', 'title',            true);
+  if ('__dup_metas'  in counts) counts.__dup_metas  = _dupCount('duplicate_metas',  'meta_description', true);
+  if ('__dup_h1s'    in counts) counts.__dup_h1s    = _dupCount('duplicate_h1s',    'h1',               true);
+  if ('__dup_bodies' in counts) counts.__dup_bodies = _dupCount('duplicate_bodies', 'body_hash',        false);
+
   // __js_diff count: pages with a meaningful diff (severity != 'none').
   // The sidebar entry stays hidden until the crawl actually compared, so
   // a "0" entry doesn't permanently sit in the list.
@@ -3333,6 +3587,7 @@ function loadSavedCrawl(file) {
     if (d.error) { showToast('Load failed: ' + d.error, 'error'); return; }
     crawlerResults = d.results || [];
     crawlerInlinks = d.inlinks || {};
+    window.crawlerReports = d.reports || {};
     const urlField = document.getElementById('crawler-url');
     if (urlField && (d.seed || d.name)) urlField.value = d.seed || d.name;
     setTimeout(() => {
