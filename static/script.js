@@ -1037,7 +1037,7 @@ window.selectCategory = function(cat) {
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang' || cat === '__err' || cat === '__warn' || cat === '__info');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -1051,7 +1051,8 @@ window.selectCategory = function(cat) {
     ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
      'all-images-panel','external-links-panel','js-diff-panel',
      'all-values-panel','duplicates-panel',
-     'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel']
+     'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
+     'severity-panel']
       .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
     if (cat === '__schema_by_page') {
       _renderSchemaByPagePanel();
@@ -1077,6 +1078,8 @@ window.selectCategory = function(cat) {
       _scRenderDeepPagesPanel();
     } else if (cat === '__hreflang') {
       _scRenderHreflangPanel();
+    } else if (cat === '__err' || cat === '__warn' || cat === '__info') {
+      _scRenderSeverityPanel(cat);
     } else {
       _renderSitemapPanel(cat);
     }
@@ -1091,7 +1094,8 @@ window.selectCategory = function(cat) {
   ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
    'all-images-panel','external-links-panel','js-diff-panel',
    'all-values-panel','duplicates-panel',
-   'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel']
+   'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
+   'severity-panel']
     .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
@@ -2169,6 +2173,124 @@ function _scRenderDeepPagesPanel() {
 //   • duplicate or missing x-default
 //   • invalid lang/region codes
 //   • mismatched canonical (alt URL canonicals to itself, not to the cluster)
+// Errors / Warnings / Info severity views: instead of a per-page row
+// table where Issues falls off the right edge, render a grouped list:
+// "Title too long — 7", "Missing meta description — 1". Each row click
+// jumps to the dedicated issue tab so the user can see the URLs.
+function _scRenderSeverityPanel(cat) {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('severity-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'severity-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:13px;';
+
+  const wantedSev = cat === '__err' ? 'error' : cat === '__warn' ? 'warn' : 'info';
+  // Map a raw issue string (e.g. "Title too long (61)") to (a) the
+  // displayable label and (b) the cat slug that selectCategory expects.
+  // Most issue strings collapse cleanly by stripping the " (N)" tail;
+  // a few need explicit mapping because the cat name diverges from the
+  // emitted issue text.
+  const normalize = (issue) => {
+    const stripped = issue.replace(/\s*\(.*$/, '').trim();
+    const map = {
+      'Title too long':                  ['Title too long',           'Title too long'],
+      'Title too short':                 ['Title too short',          'Title too short'],
+      'Meta desc too long':              ['Meta description too long','Meta desc too long'],
+      'Meta desc too short':             ['Meta description too short','Meta desc too short'],
+      'Multiple H1s':                    ['Multiple H1s',             'Multiple H1s'],
+      'H1 same as title':                ['H1 same as title',         'H1 same as title'],
+      'H1 identical to title tag':       ['H1 same as title',         'H1 same as title'],
+      'Missing title':                   ['Missing title',            'Missing title'],
+      'Missing H1':                      ['Missing H1',               'Missing H1'],
+      'Missing meta description':        ['Missing meta description', 'Missing meta description'],
+      'Missing canonical':               ['Missing canonical',        'Missing canonical'],
+      'Missing viewport':                ['Missing viewport',         'Missing viewport'],
+      'Missing Open Graph':              ['Missing Open Graph tags',  'Missing Open Graph'],
+      'Missing og:image':                ['Missing og:image',         'Missing og:image'],
+      'Missing Twitter Card':            ['Missing Twitter Card',     'Missing Twitter Card'],
+      'Mixed content':                   ['Mixed content',            'Mixed content'],
+      'noindex':                         ['Noindex pages',            'noindex'],
+      'Canonicalised':                   ['Canonicalised',            'Canonicalised'],
+      'Thin content':                    ['Thin content',             'Thin content'],
+      'Slow':                            ['Slow response',            'Slow'],
+      'No schema':                       ['No schema markup',         'No schema'],
+      'Redirect':                        ['Redirects',                'Redirect'],
+      'Trailing slash redirect':         ['Redirects',                'Redirect'],
+      'HTTP→HTTPS redirect':        ['Redirects',                'Redirect'],
+      'www normalization':               ['Redirects',                'Redirect'],
+    };
+    if (map[stripped]) return map[stripped];
+    if (/^imgs missing alt|imgs with empty alt/i.test(stripped) ||
+        /^\d+ imgs missing alt|^\d+ imgs with empty alt/i.test(issue)) {
+      return ['Images missing alt', 'imgs missing alt'];
+    }
+    if (/^HTTP \d{3}/i.test(stripped)) return ['HTTP errors (4xx / 5xx)', 'HTTP'];
+    if (/^URL:/i.test(stripped))       return ['URL hygiene', 'URL:'];
+    return [stripped, stripped];  // fall through — best-effort
+  };
+
+  // Group: normalized cat slug -> { label, count }
+  const groups = new Map();
+  for (const r of (crawlerResults || [])) {
+    const seen = new Set();
+    for (const issue of (r.issues || [])) {
+      if (sevOf(issue) !== wantedSev) continue;
+      const [label, slug] = normalize(issue);
+      if (seen.has(slug)) continue;   // one issue type per page in this count
+      seen.add(slug);
+      if (!groups.has(slug)) groups.set(slug, { label, count: 0 });
+      groups.get(slug).count++;
+    }
+  }
+  const rows = Array.from(groups.entries())
+    .map(([slug, v]) => ({ slug, label: v.label, count: v.count }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+
+  const sevLabel = cat === '__err' ? 'Errors' : cat === '__warn' ? 'Warnings' : 'Info';
+  const sevDesc  = cat === '__err'
+    ? 'Must-fix issues found across the crawl. Click any issue to see the affected pages.'
+    : cat === '__warn'
+    ? 'Should-fix issues. Click any issue to see the affected pages.'
+    : 'Informational findings (intentional content states). Click any to drill in.';
+  const sevColor = cat === '__err' ? '#ef4444' : cat === '__warn' ? '#f59e0b' : '#0ea5e9';
+
+  if (!rows.length) {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.95rem;font-weight:600;color:var(--text);margin-bottom:4px;">${sevLabel} — none found</div>
+        <div style="font-size:.75rem;color:var(--text-muted);">Nothing at this severity on the crawled pages.</div>
+      </div>`;
+    main.appendChild(panel);
+    return;
+  }
+
+  panel.innerHTML = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.95rem;font-weight:600;color:var(--text);margin-bottom:4px;">${sevLabel} (${rows.reduce((n, r) => n + r.count, 0)} pages affected)</div>
+      <div style="font-size:.75rem;color:var(--text-muted);">${sevDesc}</div>
+    </div>
+    <div style="max-width:680px;margin:14px auto;padding:0 16px;">
+      ${rows.map(r => `
+        <div onclick="selectCategory('${r.slug.replace(/'/g, "\\'")}')"
+             style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;margin-bottom:6px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer;transition:border-color .12s,background .12s;"
+             onmouseover="this.style.borderColor='${sevColor}';this.style.background='var(--surface2)'"
+             onmouseout="this.style.borderColor='var(--border)';this.style.background='var(--surface)'">
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+            <span style="width:6px;height:6px;border-radius:50%;background:${sevColor};flex-shrink:0;"></span>
+            <span style="font-weight:600;color:var(--text);">${escapeHtml(r.label)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
+            <span style="font-size:18px;font-weight:700;color:${sevColor};font-variant-numeric:tabular-nums;">${r.count}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-muted);"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
+  main.appendChild(panel);
+}
+
 function _scRenderHreflangPanel() {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
   if (!main) return;
