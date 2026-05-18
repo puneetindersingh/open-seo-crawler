@@ -22,6 +22,10 @@
       <span>Open SEO Crawler</span>
     </div>
     <div class="sub">Fast concurrent crawl · CMS-aware · severity-tagged issues</div>
+    <!-- Build version + update-check. JS in head queries GitHub API for
+         master HEAD; if different from local, swap the title to indicate
+         update available + show a 'Pull update' link. -->
+    <span id="build-version" title="Installed build commit. Click to see release on GitHub." style="font-size:11px;color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;cursor:pointer;padding:3px 8px;border-radius:4px;" onclick="window.open('https://github.com/puneetindersingh/open-seo-crawler/commits/master','_blank')">v {{ build_sha }}</span>
     <!-- Global exports — sit in the topbar (not per-view header) because they
          always export the whole crawl, regardless of which tab the user is on.
          Hidden until a crawl has data. -->
@@ -74,6 +78,35 @@
       if (icon && cur === 'light') {
         icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
       }
+      // Update check: compare local short SHA with GitHub master HEAD.
+      // Cached for 1h in localStorage so we don't hit GitHub on every
+      // page load. Silent on failure — never block the UI.
+      (async () => {
+        const badge = document.getElementById('build-version');
+        if (!badge) return;
+        const local = (badge.textContent || '').replace(/^v\s*/, '').trim();
+        if (!local || local === 'dev') return;
+        const ck = 'sc_remote_sha_v1';
+        const cache = JSON.parse(localStorage.getItem(ck) || '{}');
+        let remote = (Date.now() - (cache.t || 0) < 3600 * 1000) ? cache.sha : null;
+        if (!remote) {
+          try {
+            const r = await fetch('https://api.github.com/repos/puneetindersingh/open-seo-crawler/commits/master', { headers: { 'Accept': 'application/vnd.github+json' } });
+            if (r.ok) {
+              const d = await r.json();
+              remote = (d.sha || '').slice(0, 7);
+              if (remote) localStorage.setItem(ck, JSON.stringify({ sha: remote, t: Date.now() }));
+            }
+          } catch {}
+        }
+        if (remote && remote !== local) {
+          badge.style.color = '#f59e0b';
+          badge.style.borderColor = '#f59e0b';
+          badge.style.border = '1px solid #f59e0b';
+          badge.title = `Update available — running ${local}, latest is ${remote}. Click to see what changed.`;
+          badge.innerHTML = `v ${local} <span style="color:#f59e0b;margin-left:4px;">• update available</span>`;
+        }
+      })();
     });
   </script>
 
