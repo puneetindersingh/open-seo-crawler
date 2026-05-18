@@ -22,7 +22,49 @@
       <span>Open SEO Crawler</span>
     </div>
     <div class="sub">Fast concurrent crawl · CMS-aware · severity-tagged issues</div>
+    <button type="button" class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light / dark theme">
+      <svg id="theme-toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="4"/>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+      </svg>
+      <span id="theme-toggle-label">Light</span>
+    </button>
   </header>
+  <script>
+    // Theme toggle — runs before main script.js to avoid a flash of the
+    // wrong theme. Reads localStorage first, falls back to OS preference.
+    (function() {
+      const saved = localStorage.getItem('sc_theme');
+      const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const theme = saved || (sysDark ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+    function toggleTheme() {
+      const cur = document.documentElement.getAttribute('data-theme') || 'light';
+      const next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      localStorage.setItem('sc_theme', next);
+      const lbl = document.getElementById('theme-toggle-label');
+      if (lbl) lbl.textContent = next === 'dark' ? 'Light' : 'Dark';
+      const icon = document.getElementById('theme-toggle-icon');
+      if (icon) {
+        // Sun when in light, moon when in dark
+        icon.innerHTML = next === 'dark'
+          ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>'
+          : '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+      }
+    }
+    // Sync initial label/icon with the theme set above.
+    window.addEventListener('DOMContentLoaded', function() {
+      const cur = document.documentElement.getAttribute('data-theme') || 'light';
+      const lbl = document.getElementById('theme-toggle-label');
+      if (lbl) lbl.textContent = cur === 'dark' ? 'Light' : 'Dark';
+      const icon = document.getElementById('theme-toggle-icon');
+      if (icon && cur === 'light') {
+        icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+      }
+    });
+  </script>
 
   <main class="wrap">
     <aside class="sidebar">
