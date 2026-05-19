@@ -1014,6 +1014,14 @@ function matchesCategory(page, cat) {
 
 window.selectCategory = function(cat) {
   activeCategory = cat;
+  // Cancel any pending Summary live-rerender so a debounced tick can't
+  // resurrect Summary after the user clicks away. Without this, a tick
+  // scheduled while __summary was active fires ~800ms later and reinjects
+  // the summary-panel div under whichever category the user just picked.
+  if (cat !== '__summary' && window._scSummaryRerenderT) {
+    clearTimeout(window._scSummaryRerenderT);
+    window._scSummaryRerenderT = null;
+  }
   document.querySelectorAll('.ci-cat').forEach(el => el.classList.toggle('active', el.dataset.cat === cat));
   document.querySelectorAll('.sev-cell').forEach(el => el.classList.toggle('active', el.dataset.cat === cat));
 
@@ -1118,12 +1126,14 @@ window.selectCategory = function(cat) {
   }
   // Drop any report-style panel content when switching back to a normal
   // table category. Missing IDs here cause the panel to leak below the
-  // new view (e.g. External Links lingering under Redirects).
+  // new view (e.g. External Links lingering under Redirects, or — the
+  // user-reported bug — Summary lingering under Missing Meta Description
+  // because 'summary-panel' wasn't in this list).
   ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
    'all-images-panel','external-links-panel','js-diff-panel',
    'all-values-panel','duplicates-panel',
    'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
-   'severity-panel']
+   'severity-panel','summary-panel']
     .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
   if (_tableWrap) _tableWrap.style.display = '';
   if (_expandHint) _expandHint.style.display = '';
