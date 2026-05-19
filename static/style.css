@@ -728,3 +728,31 @@ tbody:has(tr[data-url]) { user-select: none; }
   text-overflow: clip !important;
   max-width: none !important;
 }
+
+/* Report tables (.crawler-grid) and sitemap-panel anchors render URLs in
+   dark blue (#4f46e5 inline / var(--accent) which is #3b82f6 in dark) on
+   the navy surface — unreadable. Force a brighter sky-blue in dark mode
+   and a darker blue in light. The !important is needed to beat inline
+   `style="color:..."` set by the JS row renderers. */
+.crawler-grid td a,
+#sitemap-panel a {
+  color: #60a5fa !important;
+  text-decoration: underline;
+  text-decoration-color: rgba(96, 165, 250, 0.35);
+  text-underline-offset: 2px;
+}
+.crawler-grid td a:hover,
+#sitemap-panel a:hover {
+  color: #93c5fd !important;
+  text-decoration-color: #93c5fd;
+}
+[data-theme="light"] .crawler-grid td a,
+[data-theme="light"] #sitemap-panel a {
+  color: #1d4ed8 !important;
+  text-decoration-color: rgba(29, 78, 216, 0.35);
+}
+[data-theme="light"] .crawler-grid td a:hover,
+[data-theme="light"] #sitemap-panel a:hover {
+  color: #1e40af !important;
+  text-decoration-color: #1e40af;
+}
