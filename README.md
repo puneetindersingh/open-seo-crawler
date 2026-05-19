@@ -72,11 +72,18 @@ Each installer registers the crawler as a background service that starts on boot
 
 Installs to `~/open-seo-crawler`, registers a `systemd` service so it auto-starts on every boot, and sets up a daily + on-boot auto-updater that pulls the latest from this repo.
 
+Open a terminal and paste:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install.sh -o install.sh
-chmod +x install.sh
-./install.sh --check   # dry-run preflight, no changes
-./install.sh           # full install
+curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install.sh -o install.sh && chmod +x install.sh && ./install.sh
+```
+
+That's it — when it finishes your browser opens to `http://localhost:5002/`.
+
+Optional dry-run preflight first (checks Python, port, disk, internet — makes no changes):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install.sh -o install.sh && chmod +x install.sh && ./install.sh --check
 ```
 
 What the installer does:
@@ -107,11 +114,18 @@ tail -f /var/log/open-seo-crawler.log              # live app logs
 
 Works on Intel + Apple Silicon, macOS 11 Big Sur and newer. Uses Homebrew + `launchd`.
 
+Open Terminal (⌘+Space → "Terminal") and paste:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-macos.sh -o install-macos.sh
-chmod +x install-macos.sh
-./install-macos.sh --check   # dry-run preflight, no changes
-./install-macos.sh           # full install
+curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-macos.sh -o install-macos.sh && chmod +x install-macos.sh && ./install-macos.sh
+```
+
+That's it — when it finishes your browser opens to `http://localhost:5002/`.
+
+Optional dry-run preflight first (checks Python, port, disk, internet — makes no changes):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-macos.sh -o install-macos.sh && chmod +x install-macos.sh && ./install-macos.sh --check
 ```
 
 What the installer does:
@@ -138,12 +152,20 @@ tail -f ~/Library/Logs/OpenSEOCrawler/update.log                                
 
 ### One-line install on Windows 10 / 11
 
-Uses `winget` + Task Scheduler. Run from PowerShell:
+Uses `winget` + Task Scheduler. No admin rights needed.
+
+Open PowerShell (Start menu → type "powershell" → Enter) and paste:
 
 ```powershell
-iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1
-powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check   # dry-run preflight
-powershell -ExecutionPolicy Bypass -File .\install.ps1          # full install
+iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+That's it — when it finishes your browser opens to `http://localhost:5002/`.
+
+Optional dry-run preflight first (checks Python, port, disk, internet — makes no changes):
+
+```powershell
+iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check
 ```
 
 What the installer does:
