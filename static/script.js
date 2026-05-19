@@ -1257,6 +1257,15 @@ window.analyseSitemap = async function(opts) {
       const count = (r0[key] || []).length;
       if (el) el.style.display = '';
       if (cnt) cnt.textContent = String(count);
+      // Critical: the row may carry data-clean="true" from before counts
+      // arrived (when count was 0 and sev=red/amber, _sortIssueSidebar
+      // marks it so the CSS overlays a ✓ on the hidden "0"). Now that we
+      // know the real count, flip the flag — present counts show the
+      // number, zero counts keep the ✓.
+      if (el) {
+        if (count > 0) delete el.dataset.clean;
+        else el.dataset.clean = 'true';
+      }
     };
     setCat('sm-cat-missing',    'missing_from_sitemap');
     setCat('sm-cat-orphan',     'orphan_in_sitemap');
@@ -3207,8 +3216,12 @@ function _sortIssueSidebar() {
       return;
     }
     if (!el.classList || !el.classList.contains('ci-cat')) {
-      if (current) runs.push(current);
-      current = null;
+      // Non-ci-cat helpers (sitemap-status banner, sidebar search input,
+      // etc.) live BETWEEN a section label and its ci-cat rows. Previously
+      // we treated those as run terminators, which left the subsequent
+      // ci-cats with no anchor — the sort then inserted them at the top of
+      // the sidebar, above Summary. Just skip them so the section run keeps
+      // its original `afterIdx` anchor.
       return;
     }
     if (el.style && el.style.display === 'none') return;
