@@ -229,12 +229,15 @@ def update_self():
         return jsonify({'ok': False, 'error': 'Not a git checkout — install via git clone to use auto-update.'}), 400
     before = _local_commit_sha()
     try:
-        # Refuse pull if the working tree is dirty — pulling on top of
-        # local edits is how people lose work. Tell the user instead.
-        st = _sp.run(['git', '-C', repo, 'status', '--porcelain'],
+        # Refuse pull only if a TRACKED file is locally modified —
+        # untracked files (installer artifacts, logs, etc.) don't block
+        # a fast-forward. Pulling on top of real local edits is how
+        # people lose work; pulling on top of stray untracked files is
+        # harmless.
+        st = _sp.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'],
                      capture_output=True, text=True, timeout=5)
         if st.stdout.strip():
-            return jsonify({'ok': False, 'error': 'Working tree has uncommitted changes — commit or stash before updating.'}), 409
+            return jsonify({'ok': False, 'error': 'Working tree has uncommitted changes to tracked files — commit or stash before updating.'}), 409
         # Fast-forward only — never auto-resolve a merge.
         pull = _sp.run(['git', '-C', repo, 'pull', '--ff-only', 'origin', 'master'],
                        capture_output=True, text=True, timeout=30)
@@ -254,16 +257,37 @@ def update_self():
 
 @app.route('/restart', methods=['POST'])
 def restart_self():
-    """Detached restart of the running Flask process. Spawns a shell
-    that waits 1s (so this response can flush), kills the parent PID,
-    then re-execs python3 app.py with nohup. Survives the parent's
-    death because it runs in its own session."""
+    """Detached restart of the running Flask process. Platform split:
+    POSIX uses bash + nohup; Windows uses cmd.exe + start to launch a
+    detached pythonw.exe so the new process survives this one's death."""
     import subprocess as _sp
+    import sys as _sys
     repo = os.path.dirname(os.path.abspath(__file__))
     own_pid = os.getpid()
+
+    if _sys.platform.startswith('win'):
+        # On Windows the autostart shortcut launches pythonw.exe from
+        # the venv. Use that same binary so we don't drop a console
+        # window after restart. Fall back to whatever's running now.
+        pyw = os.path.join(repo, 'venv', 'Scripts', 'pythonw.exe')
+        if not os.path.exists(pyw):
+            pyw = _sys.executable
+        app_py = os.path.join(repo, 'app.py')
+        # cmd /c "ping ... > nul & taskkill /F /PID <pid> & start "" pythonw app.py"
+        # ping is a poor man's sleep — gives the HTTP response time to flush.
+        cmd = (
+            f'ping 127.0.0.1 -n 2 > nul & '
+            f'taskkill /F /PID {own_pid} > nul 2>&1 & '
+            f'start "" /D "{repo}" "" "{pyw}" "{app_py}"'
+        )
+        try:
+            _sp.Popen(['cmd', '/c', cmd], creationflags=0x00000008)  # DETACHED_PROCESS
+        except Exception as e:
+            return jsonify({'ok': False, 'error': str(e)[:300]}), 500
+        return jsonify({'ok': True, 'message': 'Restarting in ~2s'})
+
+    # POSIX
     log_path = os.path.expanduser('~/site-crawler/.restart.log')
-    # Bash backgrounded with start_new_session — survives parent exit.
-    # Logs to ~/site-crawler/.restart.log for post-mortem if it fails.
     cmd = (
         f"sleep 1 && "
         f"kill {own_pid} 2>/dev/null; sleep 1; "

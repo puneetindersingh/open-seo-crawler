@@ -194,15 +194,56 @@ if (-not $pythonBin -or -not (Get-Command git -ErrorAction SilentlyContinue)) {
 }
 OK ("Using " + $pythonBin + " (Python " + $pythonVer + ") for the venv")
 
+# -------- Stop any running app so git can rewrite files --------
+# Windows holds file locks on running .exe / loaded modules; if pythonw
+# from a previous install is still bound to the port, git fetch/pull
+# can fail with "Unlink of file ... failed" on .git/objects/pack/*.
+Write-Host '>>> Stopping any previously-running crawler process...'
+$conns = Get-NetTCPConnection -LocalPort $PORT -State Listen -ErrorAction SilentlyContinue
+if ($conns) {
+    $pidsToKill = $conns | Select-Object -ExpandProperty OwningProcess -Unique
+    foreach ($targetPid in $pidsToKill) {
+        try {
+            Stop-Process -Id $targetPid -Force -ErrorAction Stop
+            OK ('Stopped previous instance (PID ' + [string]$targetPid + ')')
+        } catch {
+            Warn ('Could not stop PID ' + [string]$targetPid + ': ' + $_.Exception.Message)
+        }
+    }
+    Start-Sleep -Seconds 2
+}
+
 # -------- Clone / update repo --------
+# Disable git's interactive unlink prompt and opportunistic gc, both of
+# which trip over Windows file locking and stall the install.
+$env:GIT_OPTIONAL_LOCKS = '0'
+
 if (Test-Path (Join-Path $INSTALL_DIR '.git')) {
     Write-Host (">>> Updating existing repo at " + $INSTALL_DIR)
     Push-Location $INSTALL_DIR
-    git pull --ff-only
+    git -c gc.auto=0 fetch --quiet origin master
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        Fail 'git fetch failed - check network / antivirus.'
+    }
+    # Try a clean fast-forward; if local diverged (forced-push, or a
+    # prior failed pull left the tree mid-state), hard-reset to origin.
+    # Untracked installer artifacts (Run.ps1, autostart.log, etc.) are
+    # ignored via .gitignore so they survive the reset.
+    git -c gc.auto=0 pull --ff-only --quiet origin master 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Warn 'Fast-forward not possible (diverging branches). Hard-resetting to origin/master...'
+        git -c gc.auto=0 reset --hard origin/master
+        if ($LASTEXITCODE -ne 0) {
+            Pop-Location
+            Fail 'git reset failed - manual cleanup needed.'
+        }
+    }
     Pop-Location
 } else {
     Write-Host (">>> Cloning into " + $INSTALL_DIR)
-    git clone $REPO_URL $INSTALL_DIR
+    git -c gc.auto=0 clone $REPO_URL $INSTALL_DIR
+    if ($LASTEXITCODE -ne 0) { Fail 'git clone failed - check network / antivirus.' }
 }
 
 # -------- venv + deps --------
@@ -264,15 +305,40 @@ Set-Content -Path $stopPs1Path -Value $stopPs1 -Encoding UTF8
 $updatePs1 = @'
 # Pull latest code and reinstall deps if requirements.txt changed.
 $ErrorActionPreference = 'Stop'
+$env:GIT_OPTIONAL_LOCKS = '0'
 Set-Location -Path $PSScriptRoot
+
+# Stop the app first so git can rewrite tracked files without lock conflicts.
+$conns = Get-NetTCPConnection -LocalPort 5002 -State Listen -ErrorAction SilentlyContinue
+if ($conns) {
+    Write-Host 'Stopping running app...'
+    $conns | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
+        try { Stop-Process -Id $_ -Force -ErrorAction Stop } catch {}
+    }
+    Start-Sleep -Seconds 2
+}
+
 $reqBefore = if (Test-Path 'requirements.txt') { (Get-FileHash 'requirements.txt' -Algorithm SHA1).Hash } else { '' }
-git pull --ff-only
+git -c gc.auto=0 fetch --quiet origin master
+git -c gc.auto=0 pull --ff-only --quiet origin master 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'Fast-forward not possible - hard-resetting to origin/master.' -ForegroundColor Yellow
+    git -c gc.auto=0 reset --hard origin/master
+}
 $reqAfter  = if (Test-Path 'requirements.txt') { (Get-FileHash 'requirements.txt' -Algorithm SHA1).Hash } else { '' }
 if ($reqBefore -ne $reqAfter) {
     Write-Host 'requirements.txt changed - reinstalling deps'
     & (Join-Path $PSScriptRoot 'venv\Scripts\pip.exe') install --upgrade pip
     & (Join-Path $PSScriptRoot 'venv\Scripts\pip.exe') install -r 'requirements.txt'
 }
+
+# Relaunch the app if it was running before we stopped it.
+if ($conns) {
+    Write-Host 'Restarting app...'
+    $pyw = Join-Path $PSScriptRoot 'venv\Scripts\pythonw.exe'
+    Start-Process -FilePath $pyw -ArgumentList ('"' + (Join-Path $PSScriptRoot 'app.py') + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+}
+
 Write-Host 'Update complete.'
 '@
 Set-Content -Path $updatePs1Path -Value $updatePs1 -Encoding UTF8
@@ -304,9 +370,16 @@ try {
 
     $job = Start-Job -ScriptBlock {
         param($dir)
+        $env:GIT_OPTIONAL_LOCKS = '0'
         Set-Location $dir
-        git fetch --quiet origin 2>&1
-        git pull --ff-only --quiet 2>&1
+        git -c gc.auto=0 fetch --quiet origin master 2>&1
+        $pullOut = git -c gc.auto=0 pull --ff-only --quiet origin master 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            'fast-forward not possible - hard-reset to origin/master'
+            git -c gc.auto=0 reset --hard origin/master 2>&1
+        } else {
+            $pullOut
+        }
     } -ArgumentList $PSScriptRoot
 
     if (Wait-Job $job -Timeout 30) {
