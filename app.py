@@ -773,7 +773,11 @@ def _parse_no_js_subset(html, base_url):
         out['title'] = t.get_text(strip=True) if t else ''
         m = soup.find('meta', attrs={'name': 'description'})
         out['meta_description'] = m.get('content', '') if m else ''
-        h1s = [' '.join(h.get_text(' ', strip=True).split()) for h in soup.find_all('h1')]
+        import re as _re_h
+        def _clean_h(tag):
+            txt = ' '.join(tag.get_text(' ', strip=True).split())
+            return _re_h.sub(r'\s+([,.;:!?\)\]])', r'\1', txt)
+        h1s = [_clean_h(h) for h in soup.find_all('h1')]
         h1s = [h for h in h1s if h]
         out['h1'] = h1s[0] if h1s else ''
         out['h1_count'] = len(h1s)
@@ -1134,11 +1138,16 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # Pass separator=' ' so inline children (spans, <br>, etc.) don't collide
         # into "connectspeople,pay" when the visible H1 reads "connects people, pay".
         # Webflow/Framer split headings across spans for animated reveals.
+        # Also strip the space the separator adds before punctuation tokens.
+        import re as _re
+        def _clean_heading(tag):
+            txt = ' '.join(tag.get_text(' ', strip=True).split())
+            return _re.sub(r'\s+([,.;:!?\)\]])', r'\1', txt)
         h1_tags = soup.find_all('h1')
-        result['h1_list'] = [' '.join(t.get_text(' ', strip=True).split())[:200] for t in h1_tags]
+        result['h1_list'] = [_clean_heading(t)[:200] for t in h1_tags]
         result['h1'] = next((t for t in result['h1_list'] if t), '')
         h2_tags = soup.find_all('h2')
-        result['h2_list'] = [' '.join(t.get_text(' ', strip=True).split())[:200] for t in h2_tags][:20]
+        result['h2_list'] = [_clean_heading(t)[:200] for t in h2_tags][:20]
         result['h2_count'] = len(h2_tags)
 
         # Canonical — classify as self / canonicalised / mismatch
