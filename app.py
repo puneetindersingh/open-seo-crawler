@@ -2451,8 +2451,23 @@ def crawl_site():
             yield f"data: {json.dumps({'type':'info','msg':f'robots.txt unreachable ({str(e)[:80]}) — continuing without'})}\n\n"
 
         session = requests.Session()
+        # Realistic Chrome header set. Default python-requests UA + empty
+        # Accept-Language triggers 403 on Shopify/Cloudflare-fronted stores.
+        # Sec-Fetch-Site=same-origin is correct for crawl traffic (we follow
+        # links from a previously fetched page on the same host).
         session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-AU,en;q=0.9,en-US;q=0.8',
+            'Accept-Encoding': 'gzip, deflate',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Ch-Ua': '"Chromium";v="132", "Not_A Brand";v="24"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
         })
 
         # Launch Playwright browser once per crawl if JS rendering requested
@@ -2526,12 +2541,16 @@ def crawl_site():
         from urllib.parse import urlparse as _up
         host_last_fetch = {}
         host_lock = threading.Lock()
-        host_backoff = {}  # host → multiplier for adaptive slow-down on 429/403
+        host_backoff = {}      # host → multiplier for adaptive slow-down on 429/403/503
+        host_pause_until = {}  # host → epoch-seconds to halt ALL workers for this host
 
         def _wait_host_turn(u):
             # Reads crawl_delay live from ACTIVE_CRAWL_RULES so the slider in
             # the UI can change politeness mid-crawl. Falls back to the local
             # if the rules entry has been cleared (post-stop / cleanup).
+            # Honours BOTH the normal per-host delay AND a hard pause window
+            # set after a 429/403/503. The pause blocks every worker targeting
+            # this host, not just the one that saw the error.
             host = _up(u).netloc
             while True:
                 _live = (ACTIVE_CRAWL_RULES.get(crawl_id) or {}).get('crawl_delay')
@@ -2539,13 +2558,14 @@ def crawl_site():
                 with host_lock:
                     now = time.time()
                     last = host_last_fetch.get(host, 0)
+                    pause_until = host_pause_until.get(host, 0)
                     backoff = host_backoff.get(host, 1.0)
                     effective_delay = live_delay * backoff
-                    wait = (last + effective_delay) - now
+                    wait = max((last + effective_delay) - now, pause_until - now)
                     if wait <= 0:
                         host_last_fetch[host] = now
                         return
-                time.sleep(wait)
+                time.sleep(min(wait, 5))  # wake periodically in case pause is extended
 
         def _adjust_host_backoff(u, page_data):
             host = _up(u).netloc
@@ -2553,8 +2573,23 @@ def crawl_site():
             with host_lock:
                 cur = host_backoff.get(host, 1.0)
                 if status in (429, 503):
-                    host_backoff[host] = min(cur * 2, 20.0)
-                elif status == 403 or status == 0 or page_data.get('error'):
+                    # Hard slow-down on the first hit: jump straight to 10×.
+                    host_backoff[host] = max(cur * 2, 10.0) if cur < 10.0 else min(cur * 2, 40.0)
+                    hint = float(page_data.get('_retry_hint') or 0)
+                    existing = host_pause_until.get(host, 0) - time.time()
+                    pause_secs = max(hint, 30.0, existing)
+                    host_pause_until[host] = time.time() + pause_secs
+                elif status == 403:
+                    # 403 = Cloudflare/Shopify bot block. Treat like 429 — pause
+                    # the host so all workers stop hammering, and escalate backoff
+                    # hard so when we resume we're an order of magnitude slower.
+                    host_backoff[host] = max(cur * 3, 10.0) if cur < 10.0 else min(cur * 2, 30.0)
+                    existing = host_pause_until.get(host, 0) - time.time()
+                    pause_secs = max(60.0, existing)
+                    host_pause_until[host] = time.time() + pause_secs
+                elif status == 0 or page_data.get('error'):
+                    # Transient connection/network error — bump backoff lightly,
+                    # don't pause the host (other URLs may still work fine).
                     host_backoff[host] = min(cur * 1.5, 20.0)
                 else:
                     # Decay back toward 1.0 on successes
