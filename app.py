@@ -981,7 +981,6 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # Track redirects — classify by type so trivial normalizations (trailing slash,
         # www, https) don't pollute the main Redirect bucket
         if resp.history:
-            result['redirect_url'] = resp.url
             from urllib.parse import urlparse as _up
             orig = _up(url)
             final = _up(resp.url)
@@ -992,40 +991,57 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
                 {'url': h.url, 'status': h.status_code} for h in resp.history
             ] + [{'url': resp.url, 'status': resp.status_code}]
 
-            same_host = orig.netloc.lstrip('www.') == final.netloc.lstrip('www.')
-            same_path_stripped = orig.path.rstrip('/') == final.path.rstrip('/')
-            same_qs = orig.query == final.query
+            # No-op loop: the server bounced us through 1+ hops but landed
+            # right back at the requested URL (same scheme + host + path +
+            # query). Common with Wordfence / SiteGround / Cloudflare cookie
+            # handshakes. Not a real redirect from the user/SEO perspective —
+            # don't set redirect_url, don't append an issue, don't classify.
+            # Otherwise the Redirects bucket showed "From: X  To: X" rows
+            # the user couldn't action.
+            is_noop_loop = (
+                orig.scheme == final.scheme
+                and orig.netloc.lower() == final.netloc.lower()
+                and orig.path == final.path
+                and orig.query == final.query
+            )
 
-            redirect_kind = 'other'
-            if same_host and same_path_stripped and same_qs:
-                if orig.scheme != final.scheme and orig.scheme == 'http':
-                    redirect_kind = 'http_to_https'
-                    result['issues'].append(f'HTTP→HTTPS redirect ({hop_lbl})')
-                elif orig.netloc != final.netloc:
-                    redirect_kind = 'www_normalize'
-                    result['issues'].append(f'www normalization redirect ({hop_lbl})')
-                elif orig.path != final.path:
-                    # Pure trailing slash difference
-                    if final.path == orig.path + '/' or orig.path == final.path + '/':
-                        redirect_kind = 'trailing_slash'
-                        result['issues'].append(f'Trailing slash redirect ({hop_lbl})')
+            if not is_noop_loop:
+                result['redirect_url'] = resp.url
+
+                same_host = orig.netloc.lstrip('www.') == final.netloc.lstrip('www.')
+                same_path_stripped = orig.path.rstrip('/') == final.path.rstrip('/')
+                same_qs = orig.query == final.query
+
+                redirect_kind = 'other'
+                if same_host and same_path_stripped and same_qs:
+                    if orig.scheme != final.scheme and orig.scheme == 'http':
+                        redirect_kind = 'http_to_https'
+                        result['issues'].append(f'HTTP→HTTPS redirect ({hop_lbl})')
+                    elif orig.netloc != final.netloc:
+                        redirect_kind = 'www_normalize'
+                        result['issues'].append(f'www normalization redirect ({hop_lbl})')
+                    elif orig.path != final.path:
+                        # Pure trailing slash difference
+                        if final.path == orig.path + '/' or orig.path == final.path + '/':
+                            redirect_kind = 'trailing_slash'
+                            result['issues'].append(f'Trailing slash redirect ({hop_lbl})')
+                        else:
+                            redirect_kind = 'other'
+                            result['issues'].append(f'Redirect ({hop_lbl})')
                     else:
                         redirect_kind = 'other'
                         result['issues'].append(f'Redirect ({hop_lbl})')
                 else:
-                    redirect_kind = 'other'
                     result['issues'].append(f'Redirect ({hop_lbl})')
-            else:
-                result['issues'].append(f'Redirect ({hop_lbl})')
 
-            result['redirect_kind'] = redirect_kind
+                result['redirect_kind'] = redirect_kind
 
-            # Canonicalize: the row should represent the URL that actually
-            # returned 200, not the URL we requested. Without this, the seed
-            # AND the redirect target both end up as separate "page" rows when
-            # the target is later discovered via an internal link.
-            result['url'] = resp.url
-            result['original_url'] = url
+                # Canonicalize: the row should represent the URL that actually
+                # returned 200, not the URL we requested. Without this, the seed
+                # AND the redirect target both end up as separate "page" rows when
+                # the target is later discovered via an internal link.
+                result['url'] = resp.url
+                result['original_url'] = url
 
         # --- URL issues (from the source URL, not redirect target) ---
         from urllib.parse import urlparse as _urlparse2
