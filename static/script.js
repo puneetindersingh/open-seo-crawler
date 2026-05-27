@@ -92,7 +92,7 @@ function sevOf(issue) {
   // noindex / canonicalised are intentional states — surfaced in their
   // own dedicated tabs, not lumped into Errors.
   if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
-  if (/too (long|short)|imgs missing alt|thin content|multiple h1|h1 same as title|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
+  if (/too (long|short)|imgs missing alt|imgs with empty alt|thin content|multiple h1|h1 same as title|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
   return 'info';
 }
 
@@ -993,7 +993,7 @@ function matchesCategory(page, cat) {
   const sev = (i) => {
     const l = i.toLowerCase();
     if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
-    if (/too (long|short)|imgs missing alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
+    if (/too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     return 'info';
   };
   // Severity filters are inclusive: a page with any issue at that severity
@@ -1007,8 +1007,14 @@ function matchesCategory(page, cat) {
   if (cat === 'Redirect') return !!page.redirect_url;
   if (cat === 'noindex') return issues.some(i => i.toLowerCase() === 'noindex' || i.toLowerCase().startsWith('page set to noindex'));
   if (cat === 'Canonicalised') return issues.some(i => i.toLowerCase().startsWith('canonicalised'));
-  // Default: substring match against concatenated issues
+  // "Images missing alt" is the umbrella for two backend strings:
+  // "N imgs missing alt" AND "N imgs with empty alt on content imagery".
+  // Summary panel groups both — the page filter has to match both, or
+  // clicking through opens an empty table.
   const joined = issues.join(' ').toLowerCase();
+  if (cat === 'imgs missing alt') {
+    return joined.includes('imgs missing alt') || joined.includes('imgs with empty alt');
+  }
   return joined.includes(cat.toLowerCase());
 }
 
@@ -3009,7 +3015,7 @@ function updateCounts() {
     // noindex / canonicalised are intentional states, not errors —
     // surfaced in their own tabs instead of polluting the Errors badge.
     if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
-    if (/too (long|short)|imgs missing alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
+    if (/too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     return 'info';
   };
   // Initialise category counts

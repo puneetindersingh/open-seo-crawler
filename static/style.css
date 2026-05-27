@@ -375,6 +375,13 @@ body {
 }
 .ci-cat.active[data-clean="true"] .ci-count { color: #fff; }
 .ci-cat.active[data-clean="true"] .ci-count::before { color: #fff; }
+/* Active state has to override the muted label colour from the clean-row
+   rule above (specificity 0,2,1) — otherwise the highlighted label reads
+   as low-contrast gray on the purple background. */
+.ci-cat.active[data-clean="true"] > span:first-child {
+  color: #fff;
+  font-weight: 500;
+}
 .cat-label {
   font-size: 10px;
   text-transform: uppercase;
