@@ -566,6 +566,14 @@ window.applyCmsRecs = function() {
     const w = document.getElementById('crawler-workers');
     w.value = s.max_workers; document.getElementById('crawler-workers-label').textContent = s.max_workers;
   }
+  if (typeof s.crawl_delay === 'number') {
+    const d = document.getElementById('crawler-speed');
+    if (d) {
+      d.value = String(s.crawl_delay);
+      const lbl = document.getElementById('crawler-speed-label');
+      if (lbl) lbl.textContent = `${s.crawl_delay}s`;
+    }
+  }
   if (s.render_js === true) document.getElementById('crawler-render-js').checked = true;
   document.getElementById('crawler-cms-banner').innerHTML = '';
 };
