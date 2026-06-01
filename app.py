@@ -1572,6 +1572,17 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # every <a href="/services"> in the body — bogus HTTP URLs that don't
         # exist anywhere in the actual HTML.
         link_base = (getattr(resp, 'url', None) or url) if resp is not None else url
+        # Honor <base href> when present. The HTML spec says relative URLs
+        # resolve against <base href>, not the document URL. Sites that use
+        # directory-style URLs (/page/) + relative links without a leading
+        # slash (href="other/") otherwise spawn infinite phantom nested paths
+        # (/page/other/, /page/other/more/, …) whenever the server returns 200
+        # for arbitrary depths — a crawler trap that buries real pages.
+        base_tag = soup.find('base', href=True)
+        if base_tag:
+            base_href = (base_tag.get('href') or '').strip()
+            if base_href:
+                link_base = urljoin(link_base, base_href)
         int_links = {}      # normalized target -> {anchor, placement}
         ext_links_list = [] # external links captured with anchor + placement
         ext_count = 0
