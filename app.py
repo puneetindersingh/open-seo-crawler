@@ -3054,6 +3054,41 @@ _CRAWL_FOLDER = os.path.expanduser('~/.site-crawler-crawls')
 # ownership; this is read-only union.
 _CRAWL_FOLDERS_RO = [os.path.expanduser('~/.seo-tool-crawls')]
 
+# Permanent, append-only title history. Lives inside the crawl folder as a
+# .jsonl (skipped by the .json-only 30-day cleanup), so even after a full crawl
+# JSON is purged, every page's title + meta description on each crawl date
+# survives forever — the searchable "what was this page's title on date X"
+# archive for catching title/meta regressions. One JSON line per page.
+_CRAWL_TITLE_HISTORY_PATH = os.path.join(_CRAWL_FOLDER, 'crawl-titles.jsonl')
+
+
+def _append_crawl_title_history(name, saved_at, results):
+    """Append one line per crawled page capturing its title + meta description.
+    Best-effort: never raises into the caller."""
+    try:
+        os.makedirs(_CRAWL_FOLDER, exist_ok=True)
+        from datetime import datetime as _dt3
+        ts = _dt3.utcfromtimestamp(saved_at).isoformat(timespec='seconds') + 'Z'
+        seed = (results[0].get('url') if results else '') or ''
+        lines = []
+        for p in results:
+            if not isinstance(p, dict) or not p.get('url'):
+                continue
+            lines.append(json.dumps({
+                'ts': ts,
+                'crawl': name,
+                'seed': seed,
+                'url': p.get('url'),
+                'title': p.get('title') or '',
+                'meta_description': p.get('meta_description') or '',
+            }, ensure_ascii=False))
+        if lines:
+            with open(_CRAWL_TITLE_HISTORY_PATH, 'a') as f:
+                f.write('\n'.join(lines) + '\n')
+    except Exception as e:
+        app.logger.warning(f'[crawl-titles] failed to append title history: {e}')
+
+
 @app.route('/crawl/save', methods=['POST'])
 def crawl_save():
     body = request.json or {}
@@ -3080,6 +3115,9 @@ def crawl_save():
             }, f)
     except Exception as e:
         return jsonify({'error': f'Save failed: {str(e)[:200]}'}), 500
+    # Permanent title history — append BEFORE the 30-day cleanup so purged
+    # crawls still leave their titles on record forever.
+    _append_crawl_title_history(name, int(time.time()), results)
     # 30-day cleanup
     try:
         cutoff = int(time.time()) - 30 * 86400
