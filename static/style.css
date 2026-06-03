@@ -763,3 +763,10 @@ tbody:has(tr[data-url]) { user-select: none; }
   color: #1e40af !important;
   text-decoration-color: #1e40af;
 }
+
+/* Schema-by-Page filter chips — active state. Done in CSS (not inline JS) so the
+   accent background and white text always win over the chip's default inline
+   code colour (var(--text)), which left active-chip labels dark-on-purple. */
+.sc-schema-chip.active { background: var(--accent, #6366f1) !important; border-color: var(--accent, #6366f1) !important; }
+.sc-schema-chip.active code,
+.sc-schema-chip.active span { color: #fff !important; }

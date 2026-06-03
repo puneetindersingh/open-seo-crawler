@@ -2705,7 +2705,7 @@ function _renderSchemaByPagePanel() {
   const escapeHtml = _scEscapeHtml;
   // Clickable chips — toggle the type in window._scSchemaPageFilter.types
   const typeChip = (t, n) =>
-    `<button type="button" data-schema-chip="${escapeHtml(t)}" onclick="_scSchemaPageToggleChip('${(t || '').replace(/'/g, "\\'")}')" style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:var(--surface);border:1px solid var(--border);border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;">
+    `<button type="button" class="sc-schema-chip" data-schema-chip="${escapeHtml(t)}" onclick="_scSchemaPageToggleChip('${(t || '').replace(/'/g, "\\'")}')" style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;background:var(--surface);border:1px solid var(--border);border-radius:999px;font-size:11px;cursor:pointer;font-family:inherit;">
        <code style="font-size:10.5px;font-weight:600;color:var(--text);">${escapeHtml(t)}</code>
        <span style="color:var(--text-muted);">×${n}</span>
      </button>`;
@@ -2776,18 +2776,10 @@ window._scSchemaPageToggleChip = function(type) {
   const state = window._scSchemaPageFilter;
   if (state.types.has(type)) state.types.delete(type);
   else state.types.add(type);
+  // Active look driven by the .active class (see style.css) so the white label
+  // text reliably overrides the chip's default inline code colour.
   document.querySelectorAll('[data-schema-chip]').forEach(c => {
-    const active = state.types.has(c.dataset.schemaChip);
-    if (active) {
-      c.style.background = 'var(--accent, #6366f1)';
-      c.style.borderColor = 'var(--accent, #6366f1)';
-      c.querySelectorAll('code, span').forEach(el => el.style.color = '#fff');
-    } else {
-      c.style.background = 'var(--surface)';
-      c.style.borderColor = 'var(--border)';
-      c.querySelectorAll('code').forEach(el => el.style.color = 'var(--text)');
-      c.querySelectorAll('span').forEach(el => el.style.color = 'var(--text-muted)');
-    }
+    c.classList.toggle('active', state.types.has(c.dataset.schemaChip));
   });
   window._scSchemaPageApplyFilter();
 };
@@ -2799,12 +2791,7 @@ window._scSchemaPageSetQuery = function(q) {
 
 window._scSchemaPageClearFilters = function() {
   window._scSchemaPageFilter = { types: new Set(), q: '' };
-  document.querySelectorAll('[data-schema-chip]').forEach(c => {
-    c.style.background = 'var(--surface)';
-    c.style.borderColor = 'var(--border)';
-    c.querySelectorAll('code').forEach(el => el.style.color = 'var(--text)');
-    c.querySelectorAll('span').forEach(el => el.style.color = 'var(--text-muted)');
-  });
+  document.querySelectorAll('[data-schema-chip]').forEach(c => c.classList.remove('active'));
   const inp = document.getElementById('sc-schema-page-url-filter');
   if (inp) inp.value = '';
   window._scSchemaPageApplyFilter();
