@@ -406,7 +406,65 @@ function _scGridTable(key, cols, rowsHtml, extraStyle) {
 }
 function _scWireNestedGrids(container) {
   if (!container) return;
-  container.querySelectorAll('table.crawler-grid[data-resize-key]').forEach(t => _initTableResizers(t));
+  container.querySelectorAll('table.crawler-grid[data-resize-key]').forEach(t => { _initTableResizers(t); _initGridSort(t); });
+}
+
+// Click-to-sort for nested report grids (All Titles / Metas / H1s / Canonicals,
+// Schema-by-Page, etc.) — these only had resize handles, so header clicks did
+// nothing and users couldn't sort by Chars or by the value column. Sorts the
+// tbody rows in place; empty / "— Missing" values always sink to the bottom.
+function _initGridSort(table) {
+  if (!table) return;
+  const thead = table.querySelector('thead');
+  if (!thead || thead.dataset.sortWired === '1') return;
+  thead.dataset.sortWired = '1';
+  thead.querySelectorAll('th').forEach((th, idx) => {
+    const label = th.querySelector('.th-label');
+    if (!label) return;
+    label.style.cursor = 'pointer';
+    label.title = (label.title ? label.title + ' · ' : '') + 'Click to sort';
+    if (!label.dataset.baseLabel) label.dataset.baseLabel = label.textContent;
+    label.addEventListener('click', (e) => {
+      if (e.target.closest('.th-resize')) return;
+      _sortGridByColumn(table, idx);
+    });
+  });
+}
+
+function _sortGridByColumn(table, colIdx) {
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return;
+  const rows = Array.from(tbody.querySelectorAll(':scope > tr'));
+  if (rows.length < 2) return;
+  const dir = (String(colIdx) === table.dataset.sortCol && table.dataset.sortDir === 'asc') ? 'desc' : 'asc';
+  const cellText = (r) => { const c = r.cells[colIdx]; return c ? c.textContent.trim() : ''; };
+  const isBlank = (t) => t === '' || /^—/.test(t);
+  const nonEmpty = rows.map(cellText).filter(t => !isBlank(t));
+  const numeric = nonEmpty.length > 0 && nonEmpty.every(t => /^-?[\d,]+(\.\d+)?$/.test(t));
+  rows.sort((a, b) => {
+    const av = cellText(a), bv = cellText(b);
+    const ae = isBlank(av), be = isBlank(bv);
+    if (ae && be) return 0;
+    if (ae) return 1;
+    if (be) return -1;
+    if (numeric) {
+      const an = parseFloat(av.replace(/[^0-9.\-]/g, '')) || 0;
+      const bn = parseFloat(bv.replace(/[^0-9.\-]/g, '')) || 0;
+      return dir === 'asc' ? an - bn : bn - an;
+    }
+    return dir === 'asc'
+      ? av.toLowerCase().localeCompare(bv.toLowerCase())
+      : bv.toLowerCase().localeCompare(av.toLowerCase());
+  });
+  const frag = document.createDocumentFragment();
+  rows.forEach(r => frag.appendChild(r));
+  tbody.appendChild(frag);
+  table.dataset.sortCol = String(colIdx);
+  table.dataset.sortDir = dir;
+  table.querySelectorAll('thead .th-label').forEach((l, i) => {
+    const base = l.dataset.baseLabel || (l.dataset.baseLabel = l.textContent.replace(/\s*[▲▼]$/, ''));
+    l.textContent = base + (i === colIdx ? (dir === 'asc' ? ' ▲' : ' ▼') : '');
+  });
 }
 
 if (typeof document !== 'undefined') {
@@ -1841,13 +1899,13 @@ function _scRenderAllValuesPanel(cat) {
   const overLimit = spec.limit ? rows.filter(r => r[spec.field] && (r[spec.len] ? r[spec.len] : r[spec.field].length) > spec.limit).length : 0;
 
   const summary = `
-    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);position:sticky;left:0;">
       <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:.78rem;align-items:center;">
         <span><b style="color:var(--text);font-size:1.05rem;font-variant-numeric:tabular-nums;">${total}</b> <span style="color:var(--text-muted);">pages</span></span>
         <span><b style="color:var(--text);font-size:1.05rem;font-variant-numeric:tabular-nums;">${filled}</b> <span style="color:var(--text-muted);">with ${escapeHtml(spec.label.toLowerCase())}</span></span>
         ${empty ? `<span><b style="color:#ef4444;font-size:1.05rem;font-variant-numeric:tabular-nums;">${empty}</b> <span style="color:var(--text-muted);">missing</span></span>` : ''}
         ${spec.limit ? `<span><b style="color:${overLimit ? '#ef4444' : 'var(--text)'};font-size:1.05rem;font-variant-numeric:tabular-nums;">${overLimit}</b> <span style="color:var(--text-muted);">over ${spec.limit} chars</span></span>` : ''}
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="export-btn" type="button" onclick="_scCopyAllValues('${cat}')" title="Copy URL → ${escapeHtml(spec.label)} as TSV (paste into Sheets/Excel)" style="padding:5px 12px;font-size:11.5px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-weight:600;cursor:pointer;">Copy as TSV</button>
           <button class="export-btn" type="button" onclick="_scCopyValuesOnly('${cat}')" title="Copy just the ${escapeHtml(spec.label.toLowerCase())} values, one per line" style="padding:5px 12px;font-size:11.5px;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;color:#0f172a;font-weight:600;cursor:pointer;">Copy values only</button>
         </div>
@@ -1881,7 +1939,7 @@ function _scRenderAllValuesPanel(cat) {
           const safeV = v ? escapeHtml(v) : `<span style="color:#ef4444;font-style:italic;">— ${escapeHtml(spec.emptyClass)}</span>`;
           const cellStyle = over ? 'color:#ef4444;' : (under ? 'color:#f59e0b;' : '');
           return `
-            <tr data-url="${safeU}">
+            <tr data-url="${safeU}" data-value="${escapeHtml((v || '').toLowerCase())}">
               <td title="${safeU}"><a href="${safeU}" target="_blank" style="color:var(--accent);">${safeU}</a></td>
               <td title="${escapeHtml(v)}" style="${cellStyle}">${safeV}</td>
               ${hasChars ? `<td style="text-align:right;${cellStyle}">${v ? n : ''}</td>` : ''}
@@ -3834,7 +3892,10 @@ function scFilterByUrl(q) {
   const term = (q || '').toLowerCase().trim();
   const rows = document.querySelectorAll('#crawler-tbody tr[data-url]');
   rows.forEach(row => {
-    const match = !term || (row.dataset.url || '').toLowerCase().includes(term);
+    // All-values panels tag rows with data-value so the filter box also
+    // searches the title/meta/H1/canonical text, not just the URL.
+    const val = row.dataset.value || '';
+    const match = !term || (row.dataset.url || '').toLowerCase().includes(term) || (val && val.includes(term));
     row.style.display = match ? '' : 'none';
     const next = row.nextElementSibling;
     if (next && !next.dataset.url) next.style.display = match ? '' : 'none';
