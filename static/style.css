@@ -770,3 +770,34 @@ tbody:has(tr[data-url]) { user-select: none; }
 .sc-schema-chip.active { background: var(--accent, #6366f1) !important; border-color: var(--accent, #6366f1) !important; }
 .sc-schema-chip.active code,
 .sc-schema-chip.active span { color: #fff !important; }
+
+/* Crawler empty state — informative, on-brand pre-crawl canvas (ported from
+   SEO Studio's crawler). Headline + description + capability chips. */
+.crawler-empty-rich .ce-title {
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--text, #0f172a);
+  margin: 0;
+}
+.crawler-empty-rich .ce-sub {
+  max-width: 500px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted, #64748b);
+}
+.crawler-empty-rich .ce-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 7px;
+  max-width: 540px;
+}
+.crawler-empty-rich .ce-chips span {
+  font-size: 11.5px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #f8fafc);
+  color: var(--text-muted, #64748b);
+}
