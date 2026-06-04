@@ -25,6 +25,7 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 
 ## What's new (recent additions)
 
+- **robots.txt AI-crawler block detection** — flags, as a red error, when robots.txt blocks AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended, CCBot, Bytespider + 20 more) — meaning the site can't be read or cited by ChatGPT, AI, Perplexity or Google AI Overviews — or when classic search engines (Googlebot/Bingbot) are blocked. Also detects Cloudflare `Content-Signal: ai-train=no` opt-outs. Surfaces on the homepage row in the issues sidebar under **AI Crawlers Blocked** / **Search Engines Blocked**.
 - **Post-crawl Summary dashboard** — auto-opens after a crawl finishes with a one-glance view of issues by severity, total pages, response code mix, and the worst offenders.
 - **Bulk SEO reports** — All Titles, All Metas, All H1s, All Canonicals, plus dedicated Duplicate Title / Duplicate Meta / Duplicate H1 / Duplicate Body / Multiple H1s / Redirect Chains / Response Codes / Deep Pages / Hreflang reports.
 - **Severity-grouped issues view** — pages are bucketed by the worst issue on them (Errors / Warnings / Info) and grouped by issue type so you fix the highest-impact problems first.

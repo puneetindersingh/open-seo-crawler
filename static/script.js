@@ -1058,7 +1058,7 @@ function matchesCategory(page, cat) {
   // a bug, and lumping it into "must fix" buries the real errors.
   const sev = (i) => {
     const l = i.toLowerCase();
-    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
+    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content|^ai crawlers blocked|^search engines blocked/.test(l)) return 'error';
     if (/too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     return 'info';
   };
@@ -3067,7 +3067,7 @@ function updateCounts() {
     const l = i.toLowerCase();
     // noindex / canonicalised are intentional states, not errors —
     // surfaced in their own tabs instead of polluting the Errors badge.
-    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
+    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content|^ai crawlers blocked|^search engines blocked/.test(l)) return 'error';
     if (/too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     return 'info';
   };

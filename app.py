@@ -135,6 +135,125 @@ def _build_robots_checker(robots_text):
     return can_fetch
 
 
+# Well-known AI crawler user-agents (2026). Blocking these removes the site from
+# AI answer engines (ChatGPT, AI, Perplexity, Google AI Overviews) and AI
+# training sets. The search/citation bots (OClaude-SearchBot, Claude-SearchBot,
+# PerplexityBot, ChatGPT-User) are the ones that actually feed live AI answers;
+# the rest are training crawlers. Grouped only for readability — detection is flat.
+_AI_CRAWLER_UAS = [
+    'GPTBot', 'OClaude-SearchBot', 'ChatGPT-User',            # OpenAI
+    'ClaudeBot', 'Claude-Web', 'Claude-SearchBot',         # Anthropic
+    'Claude-User', 'anthropic-ai',
+    'Google-Extended',                                     # Google AI / Gemini
+    'PerplexityBot', 'Perplexity-User',                    # Perplexity
+    'CCBot',                                               # Common Crawl (feeds many models)
+    'Bytespider',                                          # ByteDance
+    'Applebot-Extended',                                   # Apple Intelligence
+    'Amazonbot',                                           # Amazon
+    'Meta-ExternalAgent', 'meta-externalagent',            # Meta AI
+    'cohere-ai', 'Diffbot', 'AI2Bot', 'MistralClaude-User',
+    'DuckAssistBot', 'YouBot', 'Timpibot', 'ImagesiftBot', 'Omgilibot',
+]
+# Classic search-engine crawlers. Blocking these is almost always a mistake and
+# removes the site from normal (blue-link) search results entirely.
+_SEARCH_ENGINE_UAS = ['Googlebot', 'Bingbot', 'Slurp', 'DuckDuckBot', 'Baiduspider', 'YandexBot']
+
+
+def _parse_robots_groups(robots_text):
+    """Parse robots.txt into {lower_user_agent: {'disallow': [...], 'allow': [...]}}.
+
+    Consecutive `User-agent:` lines share the rule block that follows them, per the
+    robots.txt spec. Unlike _build_robots_checker (which only reads the `*` group to
+    drive crawling), this keeps every named group so we can audit per-bot blocking.
+    """
+    groups = {}
+    current = []
+    starting_group = True
+    for raw in (robots_text or '').splitlines():
+        line = raw.split('#', 1)[0].strip()
+        if not line or ':' not in line:
+            continue
+        key, _, value = line.partition(':')
+        key = key.strip().lower()
+        value = value.strip()
+        if key == 'user-agent':
+            if not starting_group:
+                current = []
+                starting_group = True
+            ua = value.lower()
+            current.append(ua)
+            groups.setdefault(ua, {'disallow': [], 'allow': []})
+        elif key in ('disallow', 'allow'):
+            starting_group = False
+            for ua in current:
+                groups[ua][key].append(value)
+        else:
+            starting_group = False
+    return groups
+
+
+def _robots_root_blocked(group):
+    """True if the group disallows the site root ('/') with no Allow: / lifting it."""
+    if not group:
+        return False
+    blocked = any(d.strip() in ('/', '/*') for d in group.get('disallow', []))
+    if blocked and any(a.strip() == '/' for a in group.get('allow', [])):
+        return False
+    return blocked
+
+
+def _analyze_robots_txt(robots_text):
+    """Inspect robots.txt for crawler-blocking that hurts SEO / AI visibility.
+
+    Returns a list of human-readable issue strings. Both blocking AI crawlers and
+    blocking search engines are surfaced as red errors (see the sev() classifier);
+    AI blocking is the bigger commercial problem as AI answer engines grow.
+    """
+    issues = []
+    if not robots_text:
+        return issues
+    groups = _parse_robots_groups(robots_text)
+    star = groups.get('*')
+
+    def is_blocked(ua):
+        g = groups.get(ua.lower())
+        if g is not None:
+            return _robots_root_blocked(g)
+        return _robots_root_blocked(star)  # no own group -> falls back to the * group
+
+    # Cloudflare-style Content-Signal opt-out (e.g. "search=yes,ai-train=no").
+    signal_block = False
+    for raw in robots_text.splitlines():
+        l = raw.split('#', 1)[0].strip().lower().replace(' ', '')
+        if l.startswith('content-signal') and ('ai-train=no' in l or 'ai-input=no' in l):
+            signal_block = True
+
+    # AI crawlers (de-duped, original casing preserved).
+    seen, ai_names = set(), []
+    for ua in _AI_CRAWLER_UAS:
+        if is_blocked(ua) and ua.lower() not in seen:
+            seen.add(ua.lower())
+            ai_names.append(ua)
+    if ai_names or signal_block:
+        if ai_names:
+            shown = ai_names[:10]
+            if len(ai_names) > 10:
+                shown.append(f'+{len(ai_names) - 10} more')
+            tail = ' (+ Content-Signal ai-train=no)' if signal_block else ''
+            issues.append('AI crawlers blocked in robots.txt — ' + ', '.join(shown) + tail)
+        else:
+            issues.append('AI crawlers blocked in robots.txt — Content-Signal set to ai-train/ai-input "no"')
+
+    # Classic search engines.
+    blocked_se = [ua for ua in _SEARCH_ENGINE_UAS if is_blocked(ua)]
+    if blocked_se:
+        issues.append('Search engines blocked in robots.txt — ' + ', '.join(blocked_se))
+    elif _robots_root_blocked(star):
+        issues.append('Search engines blocked in robots.txt — User-agent: * Disallow: /')
+
+    return issues
+
+
 _DUP_NOISE_PARAMS = frozenset({
     'add-to-cart', 'replytocom', 'fbclid', 'gclid', 'gad_source', 'gbraid',
     'wbraid', 'mc_cid', 'mc_eid', '_ga', 'msclkid', 'yclid', 'dclid',
@@ -2500,13 +2619,18 @@ def crawl_site():
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         robots_status = 'fetching'
         robots_rules = 0
+        robots_issues = []        # AI/search-engine blocking flags, attached to the homepage row
+        robots_attached = False   # attach once, to the first (seed) page emitted
         try:
             resp = requests.get(robots_url, timeout=8, headers={'User-Agent': 'SEO-Audit-Bot'})
             if resp.status_code == 200:
                 robots_can_fetch = _build_robots_checker(resp.text)
                 robots_rules = resp.text.count('Disallow')
                 robots_status = 'ignored' if ignore_robots else 'respecting'
+                robots_issues = _analyze_robots_txt(resp.text)
                 yield f"data: {json.dumps({'type':'info','msg':f'Downloaded robots.txt ({robots_rules} Disallow rules) — {robots_status}'})}\n\n"
+                if robots_issues:
+                    yield f"data: {json.dumps({'type':'info','msg':'robots.txt: ' + '; '.join(robots_issues)})}\n\n"
             else:
                 robots_status = 'not found'
                 yield f"data: {json.dumps({'type':'info','msg':f'robots.txt returned HTTP {resp.status_code} — no rules to enforce'})}\n\n"
@@ -2801,6 +2925,13 @@ def crawl_site():
                                 if alt:
                                     visited.add(alt)
                                 queue.append((link, depth + 1))
+
+                        # Site-level robots.txt findings ride on the homepage row
+                        # (first non-error page emitted) so they show up in the
+                        # issues list/sidebar like every other red issue.
+                        if robots_issues and not robots_attached and not page_data.get('error'):
+                            page_data['issues'] = list(robots_issues) + (page_data.get('issues') or [])
+                            robots_attached = True
 
                         from itertools import islice as _islice
                         queue_sample = [u for u, _d in _islice(queue, 100)]
