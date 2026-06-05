@@ -3499,6 +3499,17 @@ function _buildExportForCategory(cat) {
     return { header, rows };
   }
 
+  // Duplicate titles / metas / H1s / bodies — one row per URL, carrying the
+  // shared value and its group so the export reads like the on-screen report.
+  if (cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies') {
+    const key = {'__dup_titles':'duplicate_titles','__dup_metas':'duplicate_metas','__dup_h1s':'duplicate_h1s','__dup_bodies':'duplicate_bodies'}[cat];
+    const valLabel = {'__dup_titles':'Title','__dup_metas':'Meta Description','__dup_h1s':'H1','__dup_bodies':'Body Hash'}[cat];
+    const groups = ((window.crawlerReports || {})[key]) || [];
+    const rows = [];
+    groups.forEach((g, i) => (g.urls || []).forEach(u => rows.push([i + 1, g.value || '', (g.urls || []).length, u])));
+    return { header: ['Group', valLabel, 'Pages in Group', 'URL'], rows };
+  }
+
   // Default: page-level summary using matchesCategory.
   const filtered = (cat === 'all')
     ? crawlerResults.slice()
@@ -3531,6 +3542,10 @@ function _crawlerExportViewLabel(cat, n) {
     '__sm_redirects':  `Export view (${n} redirect${n===1?'':'s'} in sitemap)`,
     '__sm_pagination': `Export view (${n} pagination URL${n===1?'':'s'} in sitemap)`,
     '__nd_content':    `Export view (${n} near-dup pair${n===1?'':'s'})`,
+    '__dup_titles':    `Export view (${n} duplicate-title URL${n===1?'':'s'})`,
+    '__dup_metas':     `Export view (${n} duplicate-meta URL${n===1?'':'s'})`,
+    '__dup_h1s':       `Export view (${n} duplicate-H1 URL${n===1?'':'s'})`,
+    '__dup_bodies':    `Export view (${n} duplicate-body URL${n===1?'':'s'})`,
     '__schema_by_page':`Export view (${n} schema row${n===1?'':'s'})`,
     'HTTP':            `Export view (${n} 4xx/5xx inlink${n===1?'':'s'})`,
     'Redirect':        `Export view (${n} redirect inlink${n===1?'':'s'})`,
