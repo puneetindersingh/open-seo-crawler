@@ -1,12 +1,12 @@
-# Open SEO Crawler — Free, Self-Hosted Screaming Frog Alternative
+# Open SEO Crawler — Free SEO Crawler & Website Audit Tool (Self-Hosted)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Platform: Linux · macOS · Windows](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)](#one-line-install--auto-start--auto-update-linux--macos--windows)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 
-**A free, open-source SEO site crawler you can run locally.** Fast, concurrent, CMS-aware. A drop-in alternative to Screaming Frog, Sitebulb, and Ahrefs Site Audit, with no accounts, no API keys, no cloud, and no per-URL limits.
+**Open SEO Crawler is a free, open-source SEO crawler you run locally** — a self-hosted website SEO crawler and site audit tool that crawls any website for technical SEO issues. Fast, concurrent, and CMS-aware, it's a drop-in alternative to Screaming Frog, Sitebulb, and Ahrefs Site Audit, with no accounts, no API keys, no cloud, and no per-URL limits.
 
-Built for SEO professionals, web developers, and site owners who want a real technical SEO audit that stays on their machine.
+Built for SEO professionals, web developers, and site owners who want a real technical SEO audit that stays on their machine. Use it as a free SEO crawler for a single site or a recurring website crawler across your whole portfolio.
 
 → One-line install on Linux, macOS, or Windows. Auto-starts on boot, auto-updates daily. Browser opens at `http://localhost:5002/` when done.
 
@@ -326,6 +326,23 @@ MIT. See [LICENSE](./LICENSE).
 
 PRs welcome. The whole crawler is one readable Flask file (`app.py`) plus a minimal frontend, easy to extend.
 
+## FAQ
+
+**Is there a free SEO crawler?**
+Yes. Open SEO Crawler is a free, MIT-licensed SEO crawler with no page limit. Clone it, run `python3 app.py`, and crawl any website locally — no account, no API key, no credit card.
+
+**What is the best free Screaming Frog alternative?**
+Open SEO Crawler covers the core technical-SEO crawl most people use Screaming Frog for — titles, meta descriptions, H1s, canonicals, redirects, broken links, hreflang, duplicate content, sitemaps, and structured data — with unlimited URLs in the free tier and one-click XLSX export. The free Screaming Frog tier caps at 500 URLs; this has no cap.
+
+**Can this SEO crawler handle large websites?**
+Yes. It crawls concurrently (1-20 workers) with per-host rate limiting. A 1,500-page site finishes in under three minutes on default settings; set the page cap to Unlimited for bigger sites.
+
+**Does the website crawler work on Shopify, WordPress, and Webflow?**
+Yes. It auto-detects 10 CMS platforms (Shopify, WordPress + Yoast / Rank Math, Webflow, Wix, Squarespace, Kajabi, Ghost, Drupal, HubSpot, Joomla) and applies sensible crawl presets for each.
+
+**Is it really free and open source?**
+Yes — MIT licensed and self-hosted, running entirely on your machine. No telemetry, no phone-home, no per-URL billing.
+
 ## Related search terms
 
-free SEO crawler, open source SEO spider, free Screaming Frog alternative, self-hosted SEO audit tool, technical SEO crawler, website crawler for SEO, free site audit tool, SEO site crawler open source, Shopify SEO crawler, WordPress SEO audit tool, Webflow SEO audit, free duplicate content checker, free duplicate title checker, free duplicate meta description checker, free duplicate H1 checker, free broken link checker, free redirect chain finder, free hreflang validator, free XML sitemap analyzer, GDPR-safe SEO crawler, no signup SEO tool, no API key SEO crawler, CMS-aware crawler, concurrent web crawler, local SEO spider, MIT licensed SEO tool, Python SEO crawler, Flask SEO crawler, SEO audit XLSX export, severity-grouped SEO issues, post-crawl SEO summary dashboard, auto-update SEO tool
+SEO crawler, free SEO crawler, website SEO crawler, free SEO crawler tool, open source SEO crawler, free SEO spider, online SEO crawler self-hosted, open source SEO spider, free Screaming Frog alternative, self-hosted SEO audit tool, technical SEO crawler, website crawler for SEO, free site audit tool, SEO site crawler open source, Shopify SEO crawler, WordPress SEO audit tool, Webflow SEO audit, free duplicate content checker, free duplicate title checker, free duplicate meta description checker, free duplicate H1 checker, free broken link checker, free redirect chain finder, free hreflang validator, free XML sitemap analyzer, GDPR-safe SEO crawler, no signup SEO tool, no API key SEO crawler, CMS-aware crawler, concurrent web crawler, local SEO spider, MIT licensed SEO tool, Python SEO crawler, Flask SEO crawler, SEO audit XLSX export, severity-grouped SEO issues, post-crawl SEO summary dashboard, auto-update SEO tool
