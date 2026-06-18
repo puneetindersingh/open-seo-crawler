@@ -1,0 +1,21 @@
+# Normalise line endings. Without this, Git for Windows checks the tree out
+# with CRLF, then reports every tracked file as "modified" — which makes the
+# in-app one-click update (and `git pull`) refuse with "uncommitted changes"
+# and leaves trees dirty. Forcing LF everywhere keeps Windows checkouts clean
+# so updates fast-forward (or hard-reset) without lock/dirty-tree conflicts.
+* text=auto eol=lf
+
+# Binary assets — never touch line endings.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.zip   binary
+*.xlsx  binary
+*.pdf   binary
