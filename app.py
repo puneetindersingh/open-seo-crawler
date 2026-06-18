@@ -338,37 +338,60 @@ def version():
 
 @app.route('/update', methods=['POST'])
 def update_self():
-    """git pull origin master in the app's checkout, return result.
-    Restart is NOT automatic — that needs whatever process supervisor
-    the user has (systemd / pm2 / nohup loop). The UI nudges them to
-    restart manually after a successful pull."""
+    """Reconcile the local checkout to origin/master and report the result.
+    Restart is handled separately (POST /restart) so the UI can fire it
+    immediately after.
+
+    Windows-safe by design — this is the path that was bricking installs:
+      * Every git call runs with `-c gc.auto=0` so git never repacks
+        objects mid-update (the usual cause of "Unlink of file failed:
+        .git/objects/..." when the app process is still running), plus
+        GIT_OPTIONAL_LOCKS=0 to stop background index refreshes grabbing
+        locks the running process holds.
+      * It no longer refuses when tracked files look "modified" — on
+        Windows a CRLF checkout makes git report every file as changed,
+        which used to abort the update outright.
+      * When a clean fast-forward isn't possible (CRLF-dirtied tree, a
+        prior half-applied pull, or diverging history) it hard-resets to
+        origin/master. That's the same self-healing behaviour the
+        installer's Autostart.ps1 / Update.ps1 / recover-windows.ps1 use,
+        so a broken checkout repairs itself on the next update or reboot.
+    Untracked files (crawl data, logs, the venv) survive the reset."""
     import subprocess as _sp
     repo = os.path.dirname(os.path.abspath(__file__))
     if not os.path.isdir(os.path.join(repo, '.git')):
         return jsonify({'ok': False, 'error': 'Not a git checkout — install via git clone to use auto-update.'}), 400
+
+    _env = {**os.environ, 'GIT_OPTIONAL_LOCKS': '0'}
+    def _git(*args, timeout=60):
+        return _sp.run(['git', '-C', repo, '-c', 'gc.auto=0', *args],
+                       capture_output=True, text=True, timeout=timeout, env=_env)
+
     before = _local_commit_sha()
     try:
-        # Refuse pull only if a TRACKED file is locally modified —
-        # untracked files (installer artifacts, logs, etc.) don't block
-        # a fast-forward. Pulling on top of real local edits is how
-        # people lose work; pulling on top of stray untracked files is
-        # harmless.
-        st = _sp.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'],
-                     capture_output=True, text=True, timeout=5)
-        if st.stdout.strip():
-            return jsonify({'ok': False, 'error': 'Working tree has uncommitted changes to tracked files — commit or stash before updating.'}), 409
-        # Fast-forward only — never auto-resolve a merge.
-        pull = _sp.run(['git', '-C', repo, 'pull', '--ff-only', 'origin', 'master'],
-                       capture_output=True, text=True, timeout=30)
-        if pull.returncode != 0:
-            return jsonify({'ok': False, 'error': (pull.stderr or pull.stdout)[:400]}), 500
+        fetch = _git('fetch', '--quiet', 'origin', 'master')
+        if fetch.returncode != 0:
+            return jsonify({'ok': False, 'error': ('git fetch failed: ' + (fetch.stderr or fetch.stdout).strip())[:400]}), 500
+
+        # Prefer a clean fast-forward so untouched installs aren't reset; fall
+        # back to a hard reset only when that's impossible (the broken-Windows
+        # case). Either way the tree ends up exactly on origin/master.
+        ff = _git('merge', '--ff-only', 'origin/master')
+        if ff.returncode != 0:
+            reset = _git('reset', '--hard', 'origin/master')
+            if reset.returncode != 0:
+                return jsonify({'ok': False, 'error': ('git reset failed: ' + (reset.stderr or reset.stdout).strip())[:400]}), 500
+            msg = 'Hard-reset to origin/master (fast-forward was not possible).'
+        else:
+            msg = (ff.stdout.strip() or 'Fast-forwarded to origin/master.')
+
         after = _local_commit_sha()
         return jsonify({
             'ok': True,
             'before': before,
             'after': after,
             'changed': before != after,
-            'message': pull.stdout.strip()[:400],
+            'message': msg[:400],
         })
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)[:300]}), 500
@@ -394,10 +417,15 @@ def restart_self():
         app_py = os.path.join(repo, 'app.py')
         # cmd /c "ping ... > nul & taskkill /F /PID <pid> & start "" pythonw app.py"
         # ping is a poor man's sleep — gives the HTTP response time to flush.
+        # `start "<title>" /D "<dir>" "<program>" "<args>"`. The title MUST be
+        # the first quoted token (else `start` treats the program path as the
+        # title and never launches it). Only one empty-title token — a second
+        # stray "" would be parsed as an empty program name and the relaunch
+        # would silently no-op, leaving nothing listening on the port.
         cmd = (
             f'ping 127.0.0.1 -n 2 > nul & '
             f'taskkill /F /PID {own_pid} > nul 2>&1 & '
-            f'start "" /D "{repo}" "" "{pyw}" "{app_py}"'
+            f'start "" /D "{repo}" "{pyw}" "{app_py}"'
         )
         try:
             _sp.Popen(['cmd', '/c', cmd], creationflags=0x00000008)  # DETACHED_PROCESS
