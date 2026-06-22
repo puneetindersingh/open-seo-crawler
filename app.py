@@ -435,36 +435,39 @@ def restart_self():
     own_pid = os.getpid()
 
     if _sys.platform.startswith('win'):
-        # Hand the restart to restart-helper.ps1, which waits for the port to
-        # free, then starts pythonw and VERIFIES it answers (retrying). The old
-        # one-shot "taskkill then start" could silently leave nothing running
-        # when the new process failed to rebind the port still in TIME_WAIT —
-        # that's the bug that bricked installs on Update.
-        helper = os.path.join(repo, 'restart-helper.ps1')
-        if os.path.exists(helper):
-            cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                   '-WindowStyle', 'Hidden', '-File', helper,
-                   '-OldPid', str(own_pid), '-Port', '5002']
-            try:
-                _sp.Popen(cmd, creationflags=0x00000008)  # DETACHED_PROCESS
-            except Exception as e:
-                return jsonify({'ok': False, 'error': str(e)[:300]}), 500
-            return jsonify({'ok': True, 'message': 'Restarting in ~3s'})
-
-        # Fallback (helper missing, e.g. pre-update checkout): legacy inline
-        # restart. `start "<title>"` needs the empty-title token first, else it
-        # treats the program path as the title and never launches.
+        # Spawn a detached PowerShell with CREATE_NO_WINDOW + null handles.
+        # This is the ONLY launch method that reliably starts from the
+        # no-console pythonw process: DETACHED_PROCESS and every cmd.exe/`start`
+        # variant silently no-op here (and `start` in a console-less context is
+        # what threw the "Windows cannot find '\\'" shell error). The child
+        # survives us being killed — Windows doesn't cascade-kill children.
+        CREATE_NO_WINDOW = 0x08000000
         pyw = os.path.join(repo, 'venv', 'Scripts', 'pythonw.exe')
         if not os.path.exists(pyw):
             pyw = _sys.executable
         app_py = os.path.join(repo, 'app.py')
-        cmd = (
-            f'ping 127.0.0.1 -n 3 > nul & '
-            f'taskkill /F /PID {own_pid} > nul 2>&1 & '
-            f'start "" /D "{repo}" "{pyw}" "{app_py}"'
-        )
+        helper = os.path.join(repo, 'restart-helper.ps1')
+
+        if os.path.exists(helper):
+            # restart-helper.ps1 kills us, waits for the port to free, then
+            # starts + VERIFIES the app, retrying instead of bricking.
+            cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                   '-WindowStyle', 'Hidden', '-File', helper,
+                   '-OldPid', str(own_pid), '-Port', '5002']
+        else:
+            # Fallback (pre-helper checkout): inline PowerShell, still no `start`.
+            ps = (
+                "Start-Sleep -Seconds 1; "
+                "try {{ Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue }} catch {{}}; "
+                "Start-Sleep -Seconds 2; "
+                "Start-Process -FilePath '{pyw}' -ArgumentList '\"{app}\"' "
+                "-WorkingDirectory '{repo}' -WindowStyle Hidden"
+            ).format(pid=own_pid, pyw=pyw, app=app_py, repo=repo)
+            cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                   '-WindowStyle', 'Hidden', '-Command', ps]
         try:
-            _sp.Popen(['cmd', '/c', cmd], creationflags=0x00000008)  # DETACHED_PROCESS
+            _sp.Popen(cmd, creationflags=CREATE_NO_WINDOW,
+                      stdin=_sp.DEVNULL, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
         except Exception as e:
             return jsonify({'ok': False, 'error': str(e)[:300]}), 500
         return jsonify({'ok': True, 'message': 'Restarting in ~3s'})
