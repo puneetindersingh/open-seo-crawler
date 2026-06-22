@@ -119,13 +119,48 @@ function Test-PythonOK {
     return $null
 }
 
+# Locate a REAL python.exe, bypassing the Microsoft Store alias stubs in
+# %LOCALAPPDATA%\Microsoft\WindowsApps (which Get-Command happily returns, but
+# which only pop open the Store and report "Python was not found"). Checks the
+# PEP-514 registry keys first, then the standard winget / python.org dirs.
+function Find-RealPython {
+    $cands = @()
+    foreach ($root in 'HKCU:\Software\Python\PythonCore', 'HKLM:\Software\Python\PythonCore') {
+        if (Test-Path $root) {
+            Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+                $exe = (Get-ItemProperty -Path (Join-Path $_.PSPath 'InstallPath') -ErrorAction SilentlyContinue).ExecutablePath
+                if ($exe) { $cands += $exe }
+            }
+        }
+    }
+    $globs = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python3*\python.exe'),
+        (Join-Path $env:PROGRAMFILES 'Python3*\python.exe')
+    )
+    if (${env:ProgramFiles(x86)}) { $globs += (Join-Path ${env:ProgramFiles(x86)} 'Python3*\python.exe') }
+    foreach ($g in $globs) {
+        Get-ChildItem $g -ErrorAction SilentlyContinue | ForEach-Object { $cands += $_.FullName }
+    }
+    foreach ($exe in ($cands | Select-Object -Unique)) {
+        if ($exe -and ($exe -notmatch 'WindowsApps') -and (Test-Path $exe)) {
+            if (Test-PythonOK $exe) { return $exe }
+        }
+    }
+    return $null
+}
+
 $pythonBin = $null
 $pythonVer = $null
 foreach ($cand in @('python', 'python3', 'py')) {
-    if (Get-Command $cand -ErrorAction SilentlyContinue) {
+    $g = Get-Command $cand -ErrorAction SilentlyContinue
+    if ($g -and ($g.Source -notmatch 'WindowsApps')) {
         $v = Test-PythonOK $cand
-        if ($v) { $pythonBin = $cand; $pythonVer = $v; break }
+        if ($v) { $pythonBin = $g.Source; $pythonVer = $v; break }
     }
+}
+if (-not $pythonBin) {
+    $real = Find-RealPython
+    if ($real) { $pythonBin = $real; $pythonVer = Test-PythonOK $real }
 }
 
 if ($pythonBin) {
@@ -177,17 +212,30 @@ if (-not $pythonBin -or -not (Get-Command git -ErrorAction SilentlyContinue)) {
         Fail 'winget not available. Install Python 3.12 from https://python.org/downloads and Git from https://git-scm.com manually, then re-run.'
     }
     Write-Host '>>> Installing missing packages via winget (user scope, no admin)...'
+    # --source winget is REQUIRED. Without it, winget also queries the msstore
+    # source, which on many machines fails with a certificate error
+    # (0x8a15005e "server certificate did not match") and aborts the whole
+    # install with "specify one of them using the --source option".
     if (-not $pythonBin) {
-        winget install -e --id Python.Python.3.12 --silent --accept-source-agreements --accept-package-agreements --scope user
+        winget install -e --id Python.Python.3.12 --source winget --scope user --silent --accept-source-agreements --accept-package-agreements
     }
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        winget install -e --id Git.Git --silent --accept-source-agreements --accept-package-agreements --scope user
+        winget install -e --id Git.Git --source winget --scope user --silent --accept-source-agreements --accept-package-agreements
     }
     $env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
-    foreach ($cand in @('python', 'python3', 'py')) {
-        if (Get-Command $cand -ErrorAction SilentlyContinue) {
-            $v = Test-PythonOK $cand
-            if ($v) { $pythonBin = $cand; $pythonVer = $v; break }
+    if (-not $pythonBin) {
+        foreach ($cand in @('python', 'python3', 'py')) {
+            $g = Get-Command $cand -ErrorAction SilentlyContinue
+            if ($g -and ($g.Source -notmatch 'WindowsApps')) {
+                $v = Test-PythonOK $cand
+                if ($v) { $pythonBin = $g.Source; $pythonVer = $v; break }
+            }
+        }
+        # PATH often isn't refreshed in-session after a winget install, and the
+        # Store alias stub can shadow the real python - resolve it by abs path.
+        if (-not $pythonBin) {
+            $real = Find-RealPython
+            if ($real) { $pythonBin = $real; $pythonVer = Test-PythonOK $real }
         }
     }
     if (-not $pythonBin) { Fail 'Python install via winget did not land. Install manually from python.org.' }
