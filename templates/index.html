@@ -153,7 +153,7 @@
         try { await Promise.race([fetch('/restart', { method: 'POST' }), new Promise(r => setTimeout(r, 1500))]); } catch {}
         // Poll /version until the new SHA appears (server is back up).
         const start = Date.now();
-        while (Date.now() - start < 30000) {
+        while (Date.now() - start < 45000) {
           await new Promise(r => setTimeout(r, 1000));
           try {
             const vr = await fetch('/version', { cache: 'no-store' });
@@ -169,7 +169,7 @@
             }
           } catch {}
         }
-        alert('Restart timed out. Check the app manually.');
+        alert('The update was pulled, but the app did not come back automatically.\n\nReload this page in a few seconds — it usually finishes restarting. If it stays down, run Run.ps1 in the install folder (or check restart.log).');
         setBadge('Update now', '#f59e0b');
       } catch (e) {
         alert('Update request failed: ' + e.message);
