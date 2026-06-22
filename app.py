@@ -49,6 +49,46 @@ SUSPENDED_CRAWLS = {}
 SUSPENDED_CRAWL_TTL = 30 * 60  # 30 minutes
 
 
+def _http_get(url, **kwargs):
+    """requests.get that transparently retries with verify=False on an SSL
+    cert-chain failure (incomplete chain / untrusted or self-signed cert).
+    Lots of sites load fine in browsers but serve a broken chain; without this,
+    robots.txt and sitemap discovery silently fail and the user sees
+    "no sitemap found". The returned Response carries .ssl_bypassed."""
+    try:
+        r = requests.get(url, **kwargs)
+        r.ssl_bypassed = False
+        return r
+    except requests.exceptions.SSLError:
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        kwargs['verify'] = False
+        r = requests.get(url, **kwargs)
+        r.ssl_bypassed = True
+        return r
+
+
+def _http_head(url, **kwargs):
+    """HEAD counterpart to _http_get with the same SSL-fallback behaviour."""
+    try:
+        r = requests.head(url, **kwargs)
+        r.ssl_bypassed = False
+        return r
+    except requests.exceptions.SSLError:
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+        kwargs['verify'] = False
+        r = requests.head(url, **kwargs)
+        r.ssl_bypassed = True
+        return r
+
+
 def _robots_pattern_match(pattern, url):
     """robots.txt-style path pattern matcher (Google's spec).
 
@@ -731,7 +771,7 @@ def detect_cms_route():
     if not url.startswith('http'):
         url = 'https://' + url
     try:
-        resp = requests.get(url, timeout=10, headers={
+        resp = _http_get(url, timeout=10, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/132.0.0.0 Safari/537.36'
         })
         result = detect_cms(url, resp.text, dict(resp.headers))
@@ -2082,7 +2122,7 @@ def _discover_sitemaps(domain):
     analysed_host = (urlparse(domain).netloc or '').lower()
 
     try:
-        r = requests.get(f"{domain.rstrip('/')}/robots.txt", timeout=10,
+        r = _http_get(f"{domain.rstrip('/')}/robots.txt", timeout=10,
                          headers={'User-Agent': 'Mozilla/5.0'})
         if r.ok and r.text:
             for line in r.text.splitlines():
@@ -2107,10 +2147,10 @@ def _discover_sitemaps(domain):
         for path in _SITEMAP_DEFAULT_PATHS:
             url = f"{domain.rstrip('/')}{path}"
             try:
-                resp = requests.head(url, timeout=8, allow_redirects=True,
+                resp = _http_head(url, timeout=8, allow_redirects=True,
                                      headers={'User-Agent': 'Mozilla/5.0'})
                 if resp.status_code == 405:
-                    resp = requests.get(url, timeout=10, allow_redirects=True,
+                    resp = _http_get(url, timeout=10, allow_redirects=True,
                                         headers={'User-Agent': 'Mozilla/5.0'},
                                         stream=True)
                     resp.close()
@@ -2140,7 +2180,7 @@ def _fetch_sitemap_recursive(seed_urls, max_depth=5):
             return
         visited.add(sm_url)
         try:
-            r = requests.get(sm_url, timeout=20,
+            r = _http_get(sm_url, timeout=20,
                              headers={'User-Agent': 'Mozilla/5.0',
                                       'Accept': 'application/xml,text/xml,*/*'})
             if not r.ok:
@@ -2260,7 +2300,7 @@ def fetch_robots_txt():
         if not parsed.netloc:
             return jsonify({'error': 'invalid URL'}), 400
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-        resp = requests.get(robots_url, timeout=10,
+        resp = _http_get(robots_url, timeout=10,
                             headers={'User-Agent': 'Mozilla/5.0 (compatible; OpenSEOCrawler-RobotsPreview)'},
                             allow_redirects=True)
         body = (resp.text or '')[:20000]
@@ -2733,7 +2773,7 @@ def crawl_site():
         robots_issues = []        # AI/search-engine blocking flags, attached to the homepage row
         robots_attached = False   # attach once, to the first (seed) page emitted
         try:
-            resp = requests.get(robots_url, timeout=8, headers={'User-Agent': 'SEO-Audit-Bot'})
+            resp = _http_get(robots_url, timeout=8, headers={'User-Agent': 'SEO-Audit-Bot'})
             if resp.status_code == 200:
                 robots_can_fetch = _build_robots_checker(resp.text)
                 robots_rules = resp.text.count('Disallow')
@@ -3230,7 +3270,7 @@ def crawl_site():
                 return
             seen.add(sm_url)
             try:
-                r = requests.get(sm_url, timeout=10, headers={'User-Agent': 'SEO-Audit-Bot'})
+                r = _http_get(sm_url, timeout=10, headers={'User-Agent': 'SEO-Audit-Bot'})
                 if r.status_code != 200:
                     return
                 root = _ET.fromstring(r.content)
