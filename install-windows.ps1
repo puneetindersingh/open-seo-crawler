@@ -380,14 +380,23 @@ if ($reqBefore -ne $reqAfter) {
     & (Join-Path $PSScriptRoot 'venv\Scripts\pip.exe') install -r 'requirements.txt'
 }
 
-# Relaunch the app if it was running before we stopped it.
-if ($conns) {
-    Write-Host 'Restarting app...'
+# Always relaunch + verify via the robust helper. The old code only restarted
+# "if it was running before", so an update run while the app was already down
+# left nothing listening - the bricked-localhost symptom.
+Write-Host 'Restarting app...'
+$helper = Join-Path $PSScriptRoot 'restart-helper.ps1'
+if (Test-Path $helper) {
+    & $helper -OldPid 0 -Port 5002
+} else {
     $pyw = Join-Path $PSScriptRoot 'venv\Scripts\pythonw.exe'
     Start-Process -FilePath $pyw -ArgumentList ('"' + (Join-Path $PSScriptRoot 'app.py') + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
 }
 
-Write-Host 'Update complete.'
+if (Get-NetTCPConnection -LocalPort 5002 -State Listen -ErrorAction SilentlyContinue) {
+    Write-Host 'Update complete - app is live at http://localhost:5002/' -ForegroundColor Green
+} else {
+    Write-Host 'Update done but the app did not come back up. Run .\Run.ps1 to see the error, or check restart.log.' -ForegroundColor Yellow
+}
 '@
 Set-Content -Path $updatePs1Path -Value $updatePs1 -Encoding UTF8
 
@@ -464,11 +473,18 @@ try {
     Log ('update step failed: ' + $_.Exception.Message)
 }
 
-# Launch the app (pythonw, no console)
-$pyw = Join-Path $PSScriptRoot 'venv\Scripts\pythonw.exe'
-$app = Join-Path $PSScriptRoot 'app.py'
-Log ('launching ' + $pyw + ' ' + $app)
-Start-Process -FilePath $pyw -ArgumentList ('"' + $app + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+# Launch + verify via the robust helper (pythonw, no console). Falls back to a
+# bare launch if the helper file isn't present.
+$helper = Join-Path $PSScriptRoot 'restart-helper.ps1'
+if (Test-Path $helper) {
+    Log 'launching via restart-helper'
+    & $helper -OldPid 0 -Port 5002 2>&1 | Out-Null
+} else {
+    $pyw = Join-Path $PSScriptRoot 'venv\Scripts\pythonw.exe'
+    $app = Join-Path $PSScriptRoot 'app.py'
+    Log ('launching ' + $pyw + ' ' + $app)
+    Start-Process -FilePath $pyw -ArgumentList ('"' + $app + '"') -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+}
 Log 'autostart end'
 '@
 Set-Content -Path $autostartPs1Path -Value $autostartPs1 -Encoding UTF8

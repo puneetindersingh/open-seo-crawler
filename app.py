@@ -367,7 +367,19 @@ def update_self():
         return _sp.run(['git', '-C', repo, '-c', 'gc.auto=0', *args],
                        capture_output=True, text=True, timeout=timeout, env=_env)
 
+    def _req_hash():
+        """SHA1 of requirements.txt so we can tell if deps changed and need a
+        reinstall after the pull — an update that adds a dependency would
+        otherwise crash the app on restart and look like a brick."""
+        try:
+            import hashlib
+            with open(os.path.join(repo, 'requirements.txt'), 'rb') as f:
+                return hashlib.sha1(f.read()).hexdigest()
+        except Exception:
+            return ''
+
     before = _local_commit_sha()
+    before_req = _req_hash()
     try:
         fetch = _git('fetch', '--quiet', 'origin', 'master')
         if fetch.returncode != 0:
@@ -384,6 +396,21 @@ def update_self():
             msg = 'Hard-reset to origin/master (fast-forward was not possible).'
         else:
             msg = (ff.stdout.strip() or 'Fast-forwarded to origin/master.')
+
+        # Reinstall deps if requirements.txt changed, using this venv's pip,
+        # before the restart picks up the new code.
+        if _req_hash() != before_req:
+            if os.name == 'nt':
+                pip = os.path.join(repo, 'venv', 'Scripts', 'pip.exe')
+            else:
+                pip = os.path.join(repo, 'venv', 'bin', 'pip')
+            if os.path.exists(pip):
+                dep = _sp.run([pip, 'install', '-r', os.path.join(repo, 'requirements.txt')],
+                              capture_output=True, text=True, timeout=300)
+                msg += ' Dependencies updated.' if dep.returncode == 0 \
+                    else ' WARNING: dependency reinstall failed — restart may fail.'
+            else:
+                msg += ' (requirements changed but venv pip not found — reinstall manually.)'
 
         after = _local_commit_sha()
         return jsonify({
@@ -408,22 +435,31 @@ def restart_self():
     own_pid = os.getpid()
 
     if _sys.platform.startswith('win'):
-        # On Windows the autostart shortcut launches pythonw.exe from
-        # the venv. Use that same binary so we don't drop a console
-        # window after restart. Fall back to whatever's running now.
+        # Hand the restart to restart-helper.ps1, which waits for the port to
+        # free, then starts pythonw and VERIFIES it answers (retrying). The old
+        # one-shot "taskkill then start" could silently leave nothing running
+        # when the new process failed to rebind the port still in TIME_WAIT —
+        # that's the bug that bricked installs on Update.
+        helper = os.path.join(repo, 'restart-helper.ps1')
+        if os.path.exists(helper):
+            cmd = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                   '-WindowStyle', 'Hidden', '-File', helper,
+                   '-OldPid', str(own_pid), '-Port', '5002']
+            try:
+                _sp.Popen(cmd, creationflags=0x00000008)  # DETACHED_PROCESS
+            except Exception as e:
+                return jsonify({'ok': False, 'error': str(e)[:300]}), 500
+            return jsonify({'ok': True, 'message': 'Restarting in ~3s'})
+
+        # Fallback (helper missing, e.g. pre-update checkout): legacy inline
+        # restart. `start "<title>"` needs the empty-title token first, else it
+        # treats the program path as the title and never launches.
         pyw = os.path.join(repo, 'venv', 'Scripts', 'pythonw.exe')
         if not os.path.exists(pyw):
             pyw = _sys.executable
         app_py = os.path.join(repo, 'app.py')
-        # cmd /c "ping ... > nul & taskkill /F /PID <pid> & start "" pythonw app.py"
-        # ping is a poor man's sleep — gives the HTTP response time to flush.
-        # `start "<title>" /D "<dir>" "<program>" "<args>"`. The title MUST be
-        # the first quoted token (else `start` treats the program path as the
-        # title and never launches it). Only one empty-title token — a second
-        # stray "" would be parsed as an empty program name and the relaunch
-        # would silently no-op, leaving nothing listening on the port.
         cmd = (
-            f'ping 127.0.0.1 -n 2 > nul & '
+            f'ping 127.0.0.1 -n 3 > nul & '
             f'taskkill /F /PID {own_pid} > nul 2>&1 & '
             f'start "" /D "{repo}" "{pyw}" "{app_py}"'
         )
@@ -431,7 +467,7 @@ def restart_self():
             _sp.Popen(['cmd', '/c', cmd], creationflags=0x00000008)  # DETACHED_PROCESS
         except Exception as e:
             return jsonify({'ok': False, 'error': str(e)[:300]}), 500
-        return jsonify({'ok': True, 'message': 'Restarting in ~2s'})
+        return jsonify({'ok': True, 'message': 'Restarting in ~3s'})
 
     # POSIX
     log_path = os.path.expanduser('~/site-crawler/.restart.log')
