@@ -204,41 +204,47 @@ tail -f ~/Library/Logs/OpenSEOCrawler/update.log                                
 
 ### One-line install on Windows 10 / 11
 
-Uses `winget` + Task Scheduler. No admin rights needed.
+Uses `winget` + a Startup-folder shortcut. No admin rights needed.
 
 Open PowerShell (Start menu → type "powershell" → Enter) and paste:
 
 ```powershell
-iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File .\install.ps1
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 Dry-run preflight:
 
 ```powershell
-iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iwr https://raw.githubusercontent.com/puneetindersingh/open-seo-crawler/master/install-windows.ps1 -OutFile install.ps1; powershell -ExecutionPolicy Bypass -File .\install.ps1 -Check
 ```
+
+> The `Tls12` prefix forces a modern TLS handshake — without it, Windows PowerShell 5.1 on some machines defaults to TLS 1.0/1.1 and the GitHub download fails with *"Could not create SSL/TLS secure channel."*
 
 What the installer does:
 
 - Verifies prerequisites (Windows, Python 3.10+, disk space, free port 5002, internet)
-- Installs Python 3.12 + Git via `winget` if missing
+- Installs Python 3.12 + Git via `winget` (pinned to `--source winget` so it never trips over the msstore source's certificate error) if missing
+- Resolves the real `python.exe` directly (registry + standard install dirs), so the Microsoft Store `python` alias stub can't shadow a freshly-installed Python
 - Clones the repo to `%USERPROFILE%\open-seo-crawler`, creates a virtualenv, installs Python deps
-- Registers a `OpenSeoCrawler` Task Scheduler task (starts at logon, runs in the background via `pythonw.exe`, no console window)
-- Registers a `OpenSeoCrawler-Update` Task Scheduler task (runs 2 min after boot + daily at 03:30 with auto-rollback)
-- Opens `http://localhost:5002/` in your default browser
+- Writes helper scripts (`Run.ps1`, `Stop.ps1`, `Update.ps1`, `Autostart.ps1`) into the install folder
+- Adds Start Menu + Desktop shortcuts, and (unless `-NoAutostart`) a Startup-folder shortcut that pulls the latest code on each logon then launches the app in the background via `pythonw.exe` (no console window)
+- Starts the crawler and opens `http://localhost:5002/` in your default browser
+
+Flags: `-Check` (preflight only), `-UpdateNow` (pull + reinstall deps), `-NoAutostart` (skip the logon Startup shortcut).
 
 Useful commands after install (PowerShell):
 
 ```powershell
-Get-ScheduledTask -TaskName OpenSeoCrawler                                          # is it registered?
-Stop-ScheduledTask -TaskName OpenSeoCrawler; Start-ScheduledTask -TaskName OpenSeoCrawler  # restart
-Stop-ScheduledTask -TaskName OpenSeoCrawler                                         # stop
-Unregister-ScheduledTask -TaskName OpenSeoCrawler -Confirm:$false                   # remove
-.\install-windows.ps1 -UpdateNow                                                    # force update
-Get-Content "$env:USERPROFILE\open-seo-crawler\update.log" -Tail 50 -Wait           # tail update log
+& "$env:USERPROFILE\open-seo-crawler\Run.ps1"        # run in this window
+& "$env:USERPROFILE\open-seo-crawler\Stop.ps1"       # stop whatever is on port 5002
+& "$env:USERPROFILE\open-seo-crawler\Update.ps1"     # pull latest + reinstall deps if changed
+Get-Content "$env:USERPROFILE\open-seo-crawler\autostart.log" -Tail 50 -Wait   # tail autostart/update log
 ```
 
-> If PowerShell's execution policy blocks the script, the `-ExecutionPolicy Bypass` prefix shown above handles it. No admin rights are needed; `winget --scope user` and user-level scheduled tasks both work without UAC.
+To disable auto-start on logon, delete the `Open SEO Crawler (Autostart)` shortcut from
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`.
+
+> If PowerShell's execution policy blocks the script, the `-ExecutionPolicy Bypass` prefix shown above handles it. No admin rights are needed; `winget --scope user` and the user-level Startup shortcut both work without UAC.
 
 ### Optional: JS rendering (for SPAs)
 
