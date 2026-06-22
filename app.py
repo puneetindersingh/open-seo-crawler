@@ -1131,10 +1131,32 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         resp = None
         retries_done = 0
         last_exc = None
+        ssl_bypassed = False
         for attempt in range(3):  # 1 primary + 2 retries
             try:
                 resp = session.get(url, timeout=15, allow_redirects=True)
                 last_exc = None
+            except requests.exceptions.SSLError as e:
+                # Broken/incomplete certificate chain (most often a missing
+                # intermediate cert). The site IS reachable — browsers fetch the
+                # missing intermediate via AIA automatically, requests does not.
+                # Retry with verification OFF so the crawl can proceed, flag it
+                # loudly, and disable verify for the rest of this session so we
+                # don't pay a failed handshake on every subsequent page.
+                last_exc = e
+                try:
+                    import urllib3
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                except Exception:
+                    pass
+                try:
+                    resp = session.get(url, timeout=15, allow_redirects=True, verify=False)
+                    last_exc = None
+                    ssl_bypassed = True
+                    session.verify = False
+                except requests.exceptions.RequestException as e2:
+                    last_exc = e2
+                    resp = None
             except requests.exceptions.RequestException as e:
                 last_exc = e
                 resp = None
@@ -1196,6 +1218,9 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
             # All retries exhausted
             raise last_exc if last_exc else requests.exceptions.RequestException('Connection failed after retries')
         result['retries'] = retries_done
+        if ssl_bypassed:
+            result['ssl_verify_failed'] = True
+            result['issues'].append('SSL certificate verification failed (incomplete chain / untrusted cert) — crawled with verification disabled; fix the cert chain')
         result['status_code'] = resp.status_code
         result['response_time'] = round(resp.elapsed.total_seconds(), 2)
         result['content_type'] = resp.headers.get('Content-Type', '')[:50]
@@ -1986,9 +2011,28 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
     except requests.exceptions.Timeout:
         result['error'] = 'Timeout'
         result['issues'].append('Timeout')
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.SSLError as e:
+        # Reached only when even verify=False failed (rare). Still tell the
+        # user it's a certificate problem, not a vague "connection error".
+        result['error'] = 'SSL certificate error'
+        _m = str(e)
+        if 'CERTIFICATE_VERIFY_FAILED' in _m or 'unable to get local issuer' in _m or 'self signed' in _m.lower():
+            result['issues'].append('SSL certificate verification failed (incomplete chain or untrusted/self-signed cert) — loads in browsers but blocks crawlers')
+        else:
+            result['issues'].append('SSL error: ' + str(e)[:90])
+    except requests.exceptions.ConnectionError as e:
+        # Distinguish a true connection failure (DNS/refused/reset) from the
+        # generic bucket so the user can act on it.
         result['error'] = 'Connection error'
-        result['issues'].append('Connection error')
+        _m = str(e).lower()
+        if 'name or service not known' in _m or 'failed to resolve' in _m or 'nodename nor servname' in _m:
+            result['issues'].append('Connection error — DNS lookup failed (domain not resolving)')
+        elif 'refused' in _m:
+            result['issues'].append('Connection error — connection refused (server not accepting connections)')
+        elif 'reset' in _m:
+            result['issues'].append('Connection error — connection reset (often bot/WAF blocking non-browser clients)')
+        else:
+            result['issues'].append('Connection error')
     except Exception as e:
         result['error'] = str(e)[:100]
         result['issues'].append(f'Error: {str(e)[:60]}')
@@ -3232,8 +3276,30 @@ def crawl_site():
             'depth_distribution': dict(depth_dist),
         }
 
-        app.logger.info(f"[crawler] Crawl complete: {len(results)} pages, {errors} errors, {avg_time}s avg, {len(dup_titles)} dup titles, {len(orphans)} orphans")
-        yield f"data: {json.dumps({'type': 'complete', 'total': len(results), 'summary': summary, 'inlinks': inlinks_payload, 'reports': reports})}\n\n"
+        # If the crawl ended with just the start page (or nothing), tell the
+        # user WHY instead of silently stopping. Most reports of "it only
+        # crawled the homepage then stopped" are a failed seed fetch (SSL/
+        # connection), a JS-rendered nav with no static links, or every link
+        # filtered out by robots / URL rules.
+        stop_reason = None
+        if len(results) <= 1:
+            seed_row = results[0] if results else None
+            if not seed_row:
+                stop_reason = 'No pages could be crawled — the start URL could not be fetched.'
+            elif seed_row.get('error'):
+                extra = '; '.join((seed_row.get('issues') or [])[:2])
+                stop_reason = (f"Crawl stopped at the start page — it returned an error "
+                               f"({seed_row.get('error')}). {extra}").strip()
+            elif not (seed_row.get('internal_link_urls') or []):
+                stop_reason = ("Crawl stopped at the start page — it loaded but no internal links were found. "
+                               "If the site builds its navigation with JavaScript, turn on 'Render JS' and retry.")
+            else:
+                stop_reason = ("Crawl stopped at the start page — links were found but none were crawlable "
+                               "(blocked by robots.txt, removed by your URL include/exclude filters, or pointing "
+                               "to other domains). Adjust the filters or enable 'Ignore robots.txt' and retry.")
+
+        app.logger.info(f"[crawler] Crawl complete: {len(results)} pages, {errors} errors, {avg_time}s avg, {len(dup_titles)} dup titles, {len(orphans)} orphans" + (f" | stop_reason: {stop_reason}" if stop_reason else ""))
+        yield f"data: {json.dumps({'type': 'complete', 'total': len(results), 'summary': summary, 'inlinks': inlinks_payload, 'reports': reports, 'stop_reason': stop_reason})}\n\n"
         yield "data: [DONE]\n\n"
         ACTIVE_CRAWL_RULES.pop(crawl_id, None)
         ACTIVE_CRAWL_LIMITS.pop(crawl_id, None)

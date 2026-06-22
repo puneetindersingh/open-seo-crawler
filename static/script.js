@@ -810,6 +810,11 @@ function startCrawl(opts) {
               if (p.reports && typeof p.reports === 'object') {
                 window.crawlerReports = p.reports;
               }
+              // Crawl ended with nothing useful — surface a clear reason +
+              // Retry instead of silently landing on an empty summary.
+              if (p.stop_reason) {
+                crawlerShowErrorBanner(p.stop_reason, url);
+              }
               // Post-crawl landing: switch to Summary so users immediately
               // see what needs fixing instead of staring at the raw row
               // table. Wrapped in setTimeout so the last batch of row
