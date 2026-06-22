@@ -1584,10 +1584,27 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
                     el.decompose()
         except Exception:
             pass
+        # Pick the first <article> that ISN'T a post-grid / related-posts card.
+        # Elementor and many blog themes render recent/related posts as
+        # <article class="elementor-post elementor-grid-item ...">; grabbing the
+        # first of those captures the same boilerplate snippet on every page, so
+        # every post looks like an exact body duplicate. Skip those cards.
+        def _real_article(sb):
+            for art in sb.find_all('article'):
+                cls = ' '.join(art.get('class') or [])
+                if _re.search(r'elementor-post|elementor-grid-item|elementor-posts|post-grid|related|recent[-_]?post|widget', cls, _re.I):
+                    continue
+                return art
+            return None
+
         main_container = (
             soup_body.find('main')
             or soup_body.find(attrs={'role': 'main'})
-            or soup_body.find('article')
+            # Elementor Theme Builder renders the real post body in this widget
+            # and ships no <main>/<article> wrapper, so it must come before the
+            # generic <article> fallback (which would otherwise hit a grid card).
+            or soup_body.find(attrs={'class': _re.compile(r'elementor-widget-theme-post-content', _re.I)})
+            or _real_article(soup_body)
             or soup_body.find(id=_re.compile(r'^(main|content|primary|page-content)$', _re.I))
             or soup_body.find(attrs={'class': _re.compile(r'(^|\s)(main-content|page-content|entry-content|post-content|article-content|site-main)(\s|$)', _re.I)})
         )
