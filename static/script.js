@@ -1155,6 +1155,30 @@ window.selectCategory = function(cat) {
   // Also hide the "double-click to expand" hint — doesn't apply.
   const _tableWrap = document.querySelector('.table-wrap');
   const _expandHint = document.querySelector('.cs-expand-hint');
+  // Images Missing Alt — render IMAGE-centric (one row per unique image with the
+  // pages/inlinks that use it), not page-centric. A site-wide logo missing alt
+  // used to repeat once per page; Screaming Frog shows the image once and lists
+  // the pages. Intercept before the normal table path.
+  if (cat === 'imgs missing alt') {
+    renderIssueInfo(cat);
+    const tbody = document.getElementById('crawler-tbody');
+    if (tbody) tbody.innerHTML = '';
+    if (typeof _scApplyMultiH1Columns === 'function') _scApplyMultiH1Columns(0);
+    if (_tableWrap) _tableWrap.style.display = 'none';
+    if (_expandHint) _expandHint.style.display = 'none';
+    ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
+     'all-images-panel','imgs-missing-alt-panel','external-links-panel','js-diff-panel',
+     'all-values-panel','duplicates-panel',
+     'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
+     'severity-panel','summary-panel']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+    _scRenderImagesMissingAltPanel();
+    const bulkBtn = document.getElementById('crawler-bulk-recrawl-btn');
+    if (bulkBtn) bulkBtn.style.display = 'none';
+    if (typeof _refreshCrawlerExportViewBtn === 'function') _refreshCrawlerExportViewBtn();
+    return;
+  }
+
   const _isReportPanel = (typeof cat === 'string') &&
     (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang' || cat === '__err' || cat === '__warn' || cat === '__info' || cat === '__summary');
   if (_isReportPanel) {
@@ -1215,7 +1239,7 @@ window.selectCategory = function(cat) {
   // user-reported bug — Summary lingering under Missing Meta Description
   // because 'summary-panel' wasn't in this list).
   ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
-   'all-images-panel','external-links-panel','js-diff-panel',
+   'all-images-panel','imgs-missing-alt-panel','external-links-panel','js-diff-panel',
    'all-values-panel','duplicates-panel',
    'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
    'severity-panel','summary-panel']
@@ -1514,6 +1538,96 @@ function _scRenderJsDiffPanel() {
   window._scJsDiffFilter = 'all';
 }
 window._scRenderJsDiffPanel = _scRenderJsDiffPanel;
+
+// Image-centric "Images Missing Alt" panel — one row per unique image that
+// needs alt, click to expand the pages (inlinks) that use it + the alt on each.
+// Mirrors Screaming Frog's Images → Inlinks view (and seo-tool's panel), minus
+// any Claude/Bulk-Alt hand-off (this crawler stays Claude-free).
+function _scRenderImagesMissingAltPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('imgs-missing-alt-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'imgs-missing-alt-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  const NEEDS = new Set(['missing', 'empty in link', 'empty (likely content)']);
+  const bySrc = new Map();
+  for (const r of (crawlerResults || [])) {
+    if (!r) continue;
+    const data = (Array.isArray(r.images_all_data) && r.images_all_data.length)
+      ? r.images_all_data
+      : (Array.isArray(r.images_no_alt_data) ? r.images_no_alt_data : []);
+    for (const img of data) {
+      if (!img || !img.src) continue;
+      if (typeof _isThirdPartyWidgetImage === 'function' && _isThirdPartyWidgetImage(img.src)) continue;
+      const cls = img.classification || (img.alt == null ? 'missing' : '');
+      if (!NEEDS.has(cls)) continue;
+      const key = img.src.split('#')[0];
+      let e = bySrc.get(key);
+      if (!e) { e = { src: img.src, classification: cls, pages: [] }; bySrc.set(key, e); }
+      e.pages.push({ url: r.url || '', alt: img.alt === undefined ? null : img.alt });
+    }
+  }
+  const groups = Array.from(bySrc.values()).sort((a, b) => b.pages.length - a.pages.length);
+
+  if (!groups.length) {
+    panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No images missing alt text in this crawl. 🎉 (Older crawls predate image capture — re-crawl to populate.)</div>';
+    main.appendChild(panel);
+    return;
+  }
+  const totalRefs = groups.reduce((n, g) => n + g.pages.length, 0);
+  const pathOf = (u) => { try { return new URL(u).pathname || u; } catch { return u; } };
+  const badge = (cls) => {
+    const p = ({
+      'missing':                { bg:'#fee2e2', fg:'#991b1b', label:'no alt attribute' },
+      'empty in link':          { bg:'#fee2e2', fg:'#991b1b', label:'empty alt in link' },
+      'empty (likely content)': { bg:'#fef3c7', fg:'#92400e', label:'empty alt (content image)' },
+    })[cls] || { bg:'#fef3c7', fg:'#92400e', label: cls || 'no alt' };
+    return `<span style="display:inline-block;padding:1px 7px;border-radius:8px;background:${p.bg};color:${p.fg};font-size:10px;font-weight:600;">${p.label}</span>`;
+  };
+  const altCell = (alt) => (alt === undefined || alt === null)
+    ? `<span style="color:#ef4444;font-style:italic;">(no alt attribute)</span>`
+    : (alt === '' ? `<span style="color:#f59e0b;font-style:italic;">(empty alt)</span>`
+                  : `<span style="color:var(--text);">${escapeHtml(alt)}</span>`);
+
+  const rows = groups.map(rec => {
+    const safeSrc = (rec.src || '').replace(/"/g, '&quot;');
+    const fname = (rec.src || '').split('/').pop().split('?')[0] || rec.src;
+    const inlinks = rec.pages.map(pg =>
+      `<div style="display:flex;gap:8px;padding:2px 0;font-size:.72rem;">
+        <a href="${(pg.url || '').replace(/"/g, '&quot;')}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;word-break:break-all;flex:0 0 auto;max-width:50%;" title="${(pg.url || '').replace(/"/g, '&quot;')}">${escapeHtml(pathOf(pg.url) || '/')}</a>
+        <span style="color:var(--text-muted);flex:1;min-width:0;">alt: ${altCell(pg.alt)}</span>
+      </div>`).join('');
+    return `
+      <div style="display:flex;gap:10px;padding:10px 6px;border-bottom:1px solid var(--border);align-items:flex-start;">
+        <a href="${safeSrc}" target="_blank" rel="noopener" title="Open image" style="flex:0 0 auto;">
+          <img src="${safeSrc}" alt="" loading="lazy" onerror="this.style.opacity=.25;this.style.background='var(--surface2)';" style="width:46px;height:46px;object-fit:cover;border-radius:4px;border:1px solid var(--border);background:var(--surface2);"/>
+        </a>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <a href="${safeSrc}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-family:monospace;font-size:.74rem;word-break:break-all;" title="${safeSrc}">${escapeHtml(fname)}</a>
+            ${badge(rec.classification)}
+          </div>
+          <details style="margin-top:5px;font-size:.72rem;" ontoggle="event.stopPropagation();">
+            <summary style="cursor:pointer;color:var(--text-muted);font-weight:600;list-style:revert;">Used on ${rec.pages.length} page${rec.pages.length === 1 ? '' : 's'} (inlinks)</summary>
+            <div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--border);max-height:240px;overflow:auto;">${inlinks}</div>
+          </details>
+        </div>
+      </div>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+      <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Images missing alt text</div>
+      <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
+        <b>${groups.length}</b> unique image${groups.length === 1 ? '' : 's'} missing alt, used <b>${totalRefs}</b> time${totalRefs === 1 ? '' : 's'} across the site (a logo on every page is one image used many times). Click a row to see which pages use it.
+      </div>
+    </div>
+    <div style="padding:0 10px;">${rows}</div>`;
+  main.appendChild(panel);
+}
 
 function _scRenderAllImagesPanel() {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
@@ -3391,6 +3505,35 @@ function _buildExportForCategory(cat) {
       }
     }
     return { header: ['Page URL', 'Image Src', 'Alt', 'Classification', 'Page Title', 'Page H1'], rows };
+  }
+
+  // Images missing alt — IMAGE-centric: one row per (image, inlink page) so the
+  // export mirrors the panel (which page uses the image + the alt there).
+  if (cat === 'imgs missing alt') {
+    const NEEDS = new Set(['missing', 'empty in link', 'empty (likely content)']);
+    const bySrc = new Map();
+    for (const r of crawlerResults) {
+      const data = (Array.isArray(r.images_all_data) && r.images_all_data.length)
+        ? r.images_all_data
+        : (Array.isArray(r.images_no_alt_data) ? r.images_no_alt_data : []);
+      for (const img of data) {
+        if (!img || !img.src) continue;
+        if (typeof _isThirdPartyWidgetImage === 'function' && _isThirdPartyWidgetImage(img.src)) continue;
+        const cls = img.classification || (img.alt == null ? 'missing' : '');
+        if (!NEEDS.has(cls)) continue;
+        const key = img.src.split('#')[0];
+        let e = bySrc.get(key);
+        if (!e) { e = { src: img.src, classification: cls, pages: [] }; bySrc.set(key, e); }
+        e.pages.push({ url: r.url || '', alt: img.alt === undefined ? null : img.alt });
+      }
+    }
+    const groups = Array.from(bySrc.values()).sort((a, b) => b.pages.length - a.pages.length);
+    const rows = [];
+    groups.forEach(g => g.pages.forEach(pg => {
+      rows.push([g.src, g.classification, g.pages.length, pg.url || '',
+                 (pg.alt === undefined || pg.alt === null) ? '' : pg.alt]);
+    }));
+    return { header: ['Image Src', 'Issue', 'Used On (pages)', 'Page URL (inlink)', 'Alt On Page'], rows };
   }
 
   // External Links — every off-domain link with rel + target.
