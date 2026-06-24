@@ -1158,7 +1158,7 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         'internal_link_urls': [], 'images_total': 0, 'images_no_alt': 0,
         'schema_types': [], 'indexable': True, 'is_pagination': False, 'issues': [], 'error': None,
         'depth': 0, 'redirect_url': None, 'redirect_kind': None,
-        'redirect_hops': 0, 'redirect_chain': [],
+        'redirect_status': None, 'redirect_hops': 0, 'redirect_chain': [],
         'body_hash': '', 'security': {}, 'mixed_content': [],
         'url_issues': [], 'hreflang': [], 'x_robots_tag': '',
         'og_tags': {}, 'twitter_tags': {}, 'analytics': [],
@@ -1295,6 +1295,12 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
 
             if not is_noop_loop:
                 result['redirect_url'] = resp.url
+                # The first hop carries the real 3xx code (301/302/307/308).
+                # status_code on the row is the FINAL 200 because we follow
+                # redirects, so capture the originating status separately —
+                # otherwise the Redirects view can't tell permanent from
+                # temporary.
+                result['redirect_status'] = resp.history[0].status_code
 
                 same_host = orig.netloc.lstrip('www.') == final.netloc.lstrip('www.')
                 same_path_stripped = orig.path.rstrip('/') == final.path.rstrip('/')
@@ -2332,6 +2338,50 @@ def fetch_robots_txt():
 
 
 @app.route('/sitemap-analyse', methods=['POST'])
+def _bare_host(url):
+    """Normalise a URL/domain to a bare host for matching: strip scheme,
+    www., path and trailing slash."""
+    h = (url or '').lower().strip()
+    h = h.replace('https://', '').replace('http://', '').rstrip('/')
+    h = h[4:] if h.startswith('www.') else h
+    return h.split('/')[0]
+
+
+def _same_host_sitemap_urls(sm_urls, domain):
+    """Keep only sitemap entries on the same host as the analysed domain.
+
+    robots.txt on multisite setups frequently points at a *sibling* subdomain's
+    sitemap (e.g. electricmotors.teco.com.au → appliances.teco.com.au). Those
+    URLs belong to a different site and must NOT be diffed against this crawl —
+    otherwise every uncrawled foreign URL floods the "in sitemap, not crawled"
+    orphan report. Returns (kept_entries, foreign_host_counts) so the caller can
+    tell the user exactly what was excluded instead of silently dropping it.
+    """
+    base = _bare_host(domain)
+    if not base:
+        return list(sm_urls), {}
+    kept, foreign = [], {}
+    for entry in sm_urls:
+        h = _bare_host(entry.get('url') or '')
+        if h and h != base:
+            foreign[h] = foreign.get(h, 0) + 1
+        else:
+            kept.append(entry)
+    return kept, foreign
+
+
+def _foreign_host_warning(foreign_hosts, domain):
+    """Human-readable note about sitemap URLs excluded from the diff because
+    they live on a different host than the analysed site."""
+    if not foreign_hosts:
+        return None
+    total = sum(foreign_hosts.values())
+    detail = ', '.join(f"{h} ({n})" for h, n in sorted(foreign_hosts.items(), key=lambda x: -x[1]))
+    return (f"Excluded {total} sitemap URL(s) on a different host — {detail} — from the "
+            f"orphan / coverage diff. They belong to another site, not {_bare_host(domain)}, "
+            f"so they are not orphans of this crawl.")
+
+
 def sitemap_analyse():
     """Discover the site's sitemap(s) and diff against a crawl.
 
@@ -2365,6 +2415,14 @@ def sitemap_analyse():
 
     seed = [d['url'] for d in discovered]
     sm_urls, sitemaps_meta, sm_errors = _fetch_sitemap_recursive(seed)
+
+    # Drop URLs on a different host than the analysed site (multisite robots.txt
+    # pointing at a sibling subdomain). They're a different site, not orphans
+    # of this crawl.
+    sm_urls, _foreign_hosts = _same_host_sitemap_urls(sm_urls, domain)
+    _fh_warning = _foreign_host_warning(_foreign_hosts, domain)
+    if _fh_warning:
+        discovery_warnings = list(discovery_warnings) + [_fh_warning]
 
     crawl_by_norm = {}
     for r in results:
@@ -3214,10 +3272,19 @@ def crawl_site():
             u = r.get('url')
             if not u:
                 continue
-            # Look up by exact URL and normalized variants
-            sources = inlinks_map.get(u) or inlinks_map.get(u.rstrip('/')) or inlinks_map.get(u + '/') or []
-            if sources:
-                inlinks_payload[u] = sources[:20]
+            # A redirected row's url is the FINAL destination, but inbound links
+            # were recorded against the originally-linked (redirecting) URL.
+            # Emit under both keys so the Redirects view can show "pages linking
+            # to the redirecting URL — update these" instead of an empty list.
+            keys = [u]
+            ou = r.get('original_url')
+            if ou and ou != u:
+                keys.append(ou)
+            for k in keys:
+                # Look up by exact URL and normalized variants
+                sources = inlinks_map.get(k) or inlinks_map.get(k.rstrip('/')) or inlinks_map.get(k + '/') or []
+                if sources:
+                    inlinks_payload[k] = sources[:20]
 
         # ---------- Post-crawl aggregated reports ----------
         from collections import defaultdict as _dd

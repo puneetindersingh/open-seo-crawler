@@ -501,7 +501,10 @@ window.dockSwitchTab = function(tab) {
 function renderDock() {
   if (!dockUrl) return;
   const page = crawlerResults.find(r => r.url === dockUrl) || {};
-  const inlinks = _scLookupInlinks(dockUrl);
+  // For a redirect row, inbound links are recorded against the redirecting
+  // original_url, not the destination the row was rewritten to.
+  const inlinkUrl = (page.original_url && page.original_url !== page.url) ? page.original_url : dockUrl;
+  const inlinks = _scLookupInlinks(inlinkUrl);
   const outs = page.internal_link_urls || [];
   const urlEl = document.getElementById('dock-url');
   const inCount = document.getElementById('dock-in-count');
@@ -527,7 +530,12 @@ function renderDock() {
       <dt>Response time</dt><dd>${page.response_time || 0}s</dd>
       <dt>Depth</dt><dd>${page.depth || 0}</dd>
       <dt>Indexable</dt><dd>${page.indexable ? '<span class="badge info">yes</span>' : '<span class="badge error">no</span>'}</dd>
-      ${page.redirect_url ? `<dt>Redirects to</dt><dd>${escapeHtml(page.redirect_url)} <span style="color:var(--text-muted)">(${page.redirect_hops || 1} hop${(page.redirect_hops||1)>1?'s':''})</span></dd>` : ''}
+      ${page.redirect_url ? (() => {
+          const _rs = _scRedirectStatus(page);
+          const _m = _scRedirectStatusMeta(_rs);
+          const _pill = _rs ? `<span style="background:${_m.color};color:#fff;padding:0 6px;border-radius:8px;font-size:10.5px;font-weight:700;margin-right:5px;" title="${_m.name}">${_rs}</span>` : '';
+          return `<dt>Redirects to</dt><dd>${_pill}${escapeHtml(page.redirect_url)} <span style="color:var(--text-muted)">(${page.redirect_hops || 1} hop${(page.redirect_hops||1)>1?'s':''})</span></dd>`;
+        })() : ''}
       ${(page.redirect_chain && page.redirect_chain.length) ? `<dt>Redirect chain</dt><dd>
         <ol style="margin:0;padding-left:18px;list-style:decimal;">
           ${page.redirect_chain.map((h, i) => {
@@ -3485,19 +3493,26 @@ function _buildExportForCategory(cat) {
     const header = ['Source URL', 'Anchor Text', 'Target URL', 'Target Status', 'Target Title', 'Issue'];
     const rows = [];
     filtered.forEach(d => {
+      // For redirects, the linked (target) URL is the redirecting original_url,
+      // and its inbound links are keyed there too — not the destination. The
+      // meaningful status is the 3xx code, not the followed 200.
+      const isRedirect = cat === 'Redirect';
+      const targetUrl = (isRedirect && d.original_url && d.original_url !== d.url) ? d.original_url : d.url;
+      const rs = isRedirect ? _scRedirectStatus(d) : null;
+      const targetStatus = isRedirect ? (rs || d.status_code || '') : (d.status_code || '');
       const inlinks = (typeof getInlinksFor === 'function')
-        ? getInlinksFor(d.url)
-        : ((crawlerInlinks && (crawlerInlinks[d.url] || crawlerInlinks[d.url.replace(/\/$/, '')] || crawlerInlinks[d.url + '/'])) || []);
+        ? getInlinksFor(targetUrl)
+        : ((crawlerInlinks && (crawlerInlinks[targetUrl] || crawlerInlinks[targetUrl.replace(/\/$/, '')] || crawlerInlinks[targetUrl + '/'])) || []);
       const issueLabel = cat === 'HTTP'
         ? `Broken (${d.status_code || ''})`
-        : (d.redirect_kind || 'Redirect');
+        : `${rs || '3xx'} ${d.redirect_kind || 'redirect'} → ${d.redirect_url || ''}`;
       if (!inlinks.length) {
-        rows.push(['', '', d.url, d.status_code || '', d.title || '', issueLabel]);
+        rows.push(['', '', targetUrl, targetStatus, d.title || '', issueLabel]);
       } else {
         inlinks.forEach(e => {
           const src    = (typeof e === 'string') ? e : (e.source || '');
           const anchor = (typeof e === 'string') ? '' : (e.anchor || '');
-          rows.push([src, anchor, d.url, d.status_code || '', d.title || '', issueLabel]);
+          rows.push([src, anchor, targetUrl, targetStatus, d.title || '', issueLabel]);
         });
       }
     });
@@ -4070,20 +4085,52 @@ function _scApplyMultiH1Columns(n) {
   }
   if (typeof _scSyncTableWidth === 'function') _scSyncTableWidth();
 }
-// Redirect destination cell. Shows the full target URL of a 3xx redirect.
-// Default-hidden for most categories; shown in the Redirect view.
+// The real 3xx status code (301/302/307/308) for a redirected row. The row's
+// own status_code is the FINAL 200 because the crawler follows redirects, so
+// pull the first hop. Falls back to redirect_chain[0] for crawls saved before
+// the redirect_status field existed.
+function _scRedirectStatus(d) {
+  if (d && d.redirect_status) return d.redirect_status;
+  if (d && Array.isArray(d.redirect_chain) && d.redirect_chain[0] && d.redirect_chain[0].status) {
+    const s = d.redirect_chain[0].status;
+    return (s >= 300 && s < 400) ? s : null;
+  }
+  return null;
+}
+// Returns {code, name, color} for a 3xx status. Permanent (301/308) reads
+// neutral-blue; temporary (302/307/303) reads amber because a temp redirect
+// where a permanent one belongs is a common SEO leak.
+function _scRedirectStatusMeta(code) {
+  const names = {
+    301: 'Moved Permanently', 302: 'Found (Temporary)', 303: 'See Other',
+    307: 'Temporary Redirect', 308: 'Permanent Redirect',
+  };
+  const permanent = code === 301 || code === 308;
+  return {
+    code,
+    name: names[code] || `${code} Redirect`,
+    color: code ? (permanent ? '#2563eb' : '#f59e0b') : '#94a3b8',
+  };
+}
+// Redirect destination cell. Shows the real 3xx code (301/302) plus the full
+// target URL. Default-hidden for most categories; shown in the Redirect view.
 function _scRedirToCell(d) {
   const to = d.redirect_url || '';
   const hops = d.redirect_hops || 0;
   if (!to) return '<td data-col="redirto"><em style="color:#94a3b8">—</em></td>';
   const safe = escapeHtml(to);
+  const rs = _scRedirectStatus(d);
+  const m = _scRedirectStatusMeta(rs);
+  const pill = rs ? `<span style="background:${m.color};color:#fff;padding:0 6px;border-radius:8px;font-size:10.5px;font-weight:700;margin-right:5px;" title="${m.name}">${rs}</span>` : '';
   const hopBadge = hops > 1 ? ` <span style="color:var(--text-muted);font-size:.7rem">(${hops} hops)</span>` : '';
-  return `<td data-col="redirto" title="${safe}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${safe}${hopBadge}</td>`;
+  return `<td data-col="redirto" title="${rs ? rs + ' ' + m.name + ' → ' : ''}${safe}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${pill}${safe}${hopBadge}</td>`;
 }
-// Inlinks count cell — number of internal pages linking to this URL.
-// Useful in Redirect view to show which redirects still have inbound link debt.
+// Inlinks count cell — number of internal pages linking to this URL. For
+// redirected rows, inbound links live under the redirecting original_url, not
+// the destination the row was rewritten to.
 function _scInlinksCell(d) {
-  const n = (typeof _scLookupInlinks === 'function') ? _scLookupInlinks(d.url).length : 0;
+  const lookupUrl = (d.original_url && d.original_url !== d.url) ? d.original_url : d.url;
+  const n = (typeof _scLookupInlinks === 'function') ? _scLookupInlinks(lookupUrl).length : 0;
   if (!n) return '<td data-col="inlinks" style="text-align:center;color:#94a3b8">0</td>';
   return `<td data-col="inlinks" style="text-align:center;font-weight:600">${n}</td>`;
 }
