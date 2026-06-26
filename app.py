@@ -2798,11 +2798,30 @@ def crawl_site():
         if _is_non_html_url(u):
             return False
         try:
-            path_lower = (urlparse(u).path or '').lower()
+            _pu = urlparse(u)
+            path_lower = (_pu.path or '').lower()
+            query_lower = (_pu.query or '').lower()
         except Exception:
             path_lower = ''
+            query_lower = ''
         if any(frag in path_lower for frag in _NON_PAGE_PATH_FRAGMENTS):
             return False
+        # Page-builder AJAX pagination/filter traps. Elementor Pro's Posts/Loop
+        # widget paginates via ?e-page-<widgetid>=N (and filters via
+        # ?e-filter-<id>=...), so a single listing page exposes hundreds of
+        # query-string variants — /commentary/ on a real site linked
+        # ?e-page-...=854 — each a rel=canonical duplicate of the base page.
+        # A link-following crawler chases every one, AND each variant re-exposes
+        # the next, so the queue explodes combinatorially toward infinity (the
+        # classic "26k queued on a 9k-page site" blow-up). These are never
+        # content you want indexed, so we skip them by default — matched on the
+        # query-param KEY so it's widget-id- and page-number-agnostic. Jetpack
+        # Infinite Scroll (?infinity) gets the same treatment.
+        if query_lower:
+            for _part in query_lower.split('&'):
+                _qk = _part.split('=', 1)[0].strip()
+                if _qk.startswith('e-page-') or _qk.startswith('e-filter-') or _qk == 'infinity':
+                    return False
         # Repeating-segment guard: refuses URLs where the same path slug
         # appears more than once (e.g. /our-team/our-team/ or
         # /case-studies/our-team/case-studies/). This is the classic
