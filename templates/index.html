@@ -22,6 +22,10 @@
       <span>Open SEO Crawler</span>
     </div>
     <div class="sub">Fast concurrent crawl · CMS-aware · severity-tagged issues</div>
+    <nav class="sc-views">
+      <button id="sc-view-crawler-btn" class="sc-view-btn active" type="button" onclick="scShowView('crawler')">Crawler</button>
+      <button id="sc-view-budget-btn" class="sc-view-btn" type="button" onclick="scShowView('budget')" title="Find URL patterns wasting crawl budget">Crawl Budget</button>
+    </nav>
     <!-- Build version + update-check. JS in head queries GitHub API for
          master HEAD; if different from local, swap the title to indicate
          update available + show a 'Pull update' link. -->
@@ -513,6 +517,41 @@
       </div>
     </section>
   </main>
+
+  <!-- Crawl Budget view (hidden until selected from the topbar) -->
+  <section id="cb-view" class="cb-view" style="display:none;">
+    <div class="cb-inner">
+      <h1 class="cb-title">Crawl Budget</h1>
+      <p class="cb-subtitle">Find URL patterns wasting Googlebot's crawl budget — and get the robots.txt rules to stop them.</p>
+
+      <div class="cb-input-row">
+        <input type="text" id="cb-url" placeholder="example.com" />
+        <button id="cb-analyze-btn" type="button" class="cb-btn-primary">Analyze</button>
+      </div>
+      <div id="cb-status" class="cb-status"></div>
+
+      <div id="cb-results" style="display:none;">
+        <div id="cb-summary" class="cb-summary"></div>
+        <div id="cb-params"></div>
+        <div id="cb-robots" style="margin-top:18px;"></div>
+      </div>
+
+      <div class="cb-explainers">
+        <div class="cb-card">
+          <h3>🔍 What is this?</h3>
+          <p>Many sites generate huge numbers of URLs from <strong>query parameters</strong> — pagination widgets (<code>?e-page-…</code>), faceted filters (<code>?color=red&amp;size=lg</code>), sorting (<code>?orderby=price</code>) and tracking tags (<code>?utm_source=…</code>). These create thousands of near-duplicate or thin pages that aren't real content. This page scans your site, finds those patterns, and shows how many phantom URLs each one spawns.</p>
+        </div>
+        <div class="cb-card">
+          <h3>🤖 Why add to robots.txt?</h3>
+          <p>A <code>Disallow:</code> rule tells Googlebot <em>not to crawl</em> those parameter URLs at all — so it never wastes a request on them. It's the right tool for parameter traps because it stops the fetch at the source. <strong>Note:</strong> robots.txt blocks crawling, not indexing — if junk URLs are already indexed, also add a <code>canonical</code> or <code>noindex</code> until they drop out.</p>
+        </div>
+        <div class="cb-card">
+          <h3>⚡ Why it helps crawl budget</h3>
+          <p>Googlebot fetches only a finite number of URLs per site in a given period — your <strong>crawl budget</strong>. Every phantom parameter URL it crawls is budget <em>not</em> spent on real pages. A site with 9,500 real pages but 30,000+ parameter URLs can have Google crawling junk while your actual content gets indexed late. Blocking traps concentrates the budget where it matters.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <!-- Near-duplicate content side-by-side diff modal -->
   <div id="nd-diff-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;align-items:center;justify-content:center;padding:24px;" onclick="if(event.target===this)closeNdDiff()">
