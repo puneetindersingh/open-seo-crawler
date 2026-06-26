@@ -5797,3 +5797,124 @@ function _scRenderAnchorTextCloud() {
       Top ${items.length} anchor text${items.length===1?'':'s'} used in internal links · size = frequency. Red border / ⚠ = generic anchor (rewrite recommended).
     </div>`;
 }
+
+// ── Crawl Budget view ──────────────────────────────────────────────────────
+// On-demand scan that finds URL-parameter traps wasting crawl budget and emits
+// ready-to-paste robots.txt Disallow rules. Backend: POST /crawl-budget/analyze
+function scShowView(view) {
+  const main = document.querySelector('main.wrap');
+  const cb = document.getElementById('cb-view');
+  const crawlerBtn = document.getElementById('sc-view-crawler-btn');
+  const budgetBtn = document.getElementById('sc-view-budget-btn');
+  const onBudget = view === 'budget';
+  if (main) main.style.display = onBudget ? 'none' : '';
+  if (cb) cb.style.display = onBudget ? 'block' : 'none';
+  if (crawlerBtn) crawlerBtn.classList.toggle('active', !onBudget);
+  if (budgetBtn) budgetBtn.classList.toggle('active', onBudget);
+}
+
+(function () {
+  const TYPE_COLORS = {
+    pagination: '#7c3aed', faceting: '#2563eb', sort: '#d97706',
+    tracking: '#dc2626', session: '#dc2626', search: '#64748b', parameter: '#64748b',
+  };
+  const esc = (s) => (typeof escapeHtml === 'function')
+    ? escapeHtml(String(s == null ? '' : s))
+    : String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  function stat(label, value, accent) {
+    return `<div class="cb-stat"><div class="v" style="color:${accent || 'var(--text)'};">${esc(String(value))}</div><div class="l">${esc(label)}</div></div>`;
+  }
+
+  function render(res) {
+    document.getElementById('cb-results').style.display = 'block';
+    document.getElementById('cb-summary').innerHTML =
+      stat('Real pages (sitemap)', res.real_count ? res.real_count.toLocaleString() : '—') +
+      stat('Pages scanned', res.pages_scanned) +
+      stat('Trap parameters', res.trap_count, res.trap_count ? '#dc2626' : '#059669') +
+      stat('Params found', res.params.length);
+
+    const paramsEl = document.getElementById('cb-params');
+    const robotsEl = document.getElementById('cb-robots');
+    if (!res.params.length) {
+      paramsEl.innerHTML = `<div class="cb-card" style="text-align:center;color:#059669;font-weight:600;">✓ No URL-parameter traps found — your pages map cleanly to ${res.real_count ? res.real_count.toLocaleString() : 'the'} sitemap URLs.</div>`;
+      robotsEl.innerHTML = '';
+      return;
+    }
+    const rows = res.params.map(p => {
+      const color = TYPE_COLORS[p.type] || '#64748b';
+      const depth = p.max_num >= 2 ? `up to page ${p.max_num.toLocaleString()}` : '—';
+      const ex = (p.examples[0] || '').replace(/^https?:\/\/[^/]+/, '');
+      return `<tr>
+        <td style="font-family:monospace;font-size:12px;font-weight:600;">?${esc(p.key)}</td>
+        <td><span class="cb-badge" style="background:${color}22;color:${color};">${esc(p.type)}</span></td>
+        <td style="text-align:right;font-size:12px;">${p.count.toLocaleString()}</td>
+        <td style="font-size:11px;color:var(--text-muted);white-space:nowrap;">${esc(depth)}</td>
+        <td style="font-size:11px;color:var(--text-muted);font-family:monospace;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(p.why)}">${esc(ex)}</td>
+        <td style="text-align:center;">${p.trap
+          ? '<span style="color:#dc2626;font-weight:700;font-size:11px;">Disallow</span>'
+          : '<span style="color:var(--text-muted);font-size:11px;">keep</span>'}</td>
+      </tr>`;
+    }).join('');
+    paramsEl.innerHTML = `
+      <table class="cb-table">
+        <thead><tr>
+          <th>Parameter</th><th>Type</th><th style="text-align:right;">URLs seen</th>
+          <th>Depth</th><th>Example</th><th style="text-align:center;">Action</th>
+        </tr></thead><tbody>${rows}</tbody>
+      </table>
+      <div class="cb-note">"URLs seen" is from a ${res.pages_scanned}-page sample — the live count across the whole site is typically far higher. "Depth" shows the highest page number a single listing links to.</div>`;
+
+    if (res.robots_block) {
+      robotsEl.innerHTML = `
+        <div class="cb-robots-head"><h3>robots.txt — add these rules</h3>
+          <button id="cb-copy-btn" type="button" class="cb-copy-btn">Copy</button></div>
+        <pre class="cb-pre">${esc(res.robots_block)}</pre>
+        <div class="cb-note">Add these to your site's <code>/robots.txt</code> (merge into the existing <code>User-agent: *</code> block if you have one). Re-crawl after — the queue should track your real page count instead of exploding.</div>`;
+      const cp = document.getElementById('cb-copy-btn');
+      if (cp) cp.addEventListener('click', () => {
+        navigator.clipboard.writeText(res.robots_block).then(
+          () => { cp.textContent = 'Copied ✓'; setTimeout(() => cp.textContent = 'Copy', 1500); },
+          () => { if (typeof showToast === 'function') showToast('Copy failed', 'error'); });
+      });
+    } else {
+      robotsEl.innerHTML = '';
+    }
+  }
+
+  async function analyze() {
+    const input = document.getElementById('cb-url');
+    const btn = document.getElementById('cb-analyze-btn');
+    const status = document.getElementById('cb-status');
+    const url = (input.value || '').trim();
+    if (!url) { status.textContent = 'Enter a URL first.'; return; }
+    btn.disabled = true;
+    status.textContent = 'Scanning homepage and section pages… (10–20s)';
+    document.getElementById('cb-results').style.display = 'none';
+    try {
+      const r = await fetch('/crawl-budget/analyze', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.error) throw new Error(data.error || ('HTTP ' + r.status));
+      status.textContent = `Scanned ${data.pages_scanned} pages of ${data.url}.`;
+      render(data);
+    } catch (e) {
+      status.textContent = 'Scan failed: ' + e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function wire() {
+    const btn = document.getElementById('cb-analyze-btn');
+    const input = document.getElementById('cb-url');
+    if (!btn || btn._cbWired) return;
+    btn._cbWired = true;
+    btn.addEventListener('click', analyze);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') analyze(); });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+  else wire();
+})();
