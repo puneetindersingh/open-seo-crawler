@@ -2900,6 +2900,56 @@ def recrawl_url():
         return jsonify({'error': str(e)}), 500
 
 
+def _probe_url_traps(base, results, session):
+    """Post-crawl soft-404 / infinite-URL-trap probe (max 2 extra requests).
+
+    Probe A (root): GET /<random-token>/ — a 200 means the server never 404s,
+    so every mistyped or bot-invented URL becomes an indexable duplicate.
+    Probe B (nested): GET <real crawled page>/<random-token>/ — a 200 here is
+    worse: the served page's relative links resolve one level deeper, minting
+    an INFINITE URL space. Scrapers/bots walk it forever, which bloats the
+    index, wastes crawl budget, and can burn unlimited bandwidth on a
+    transfer-capped host (509 Bandwidth Limit Exceeded).
+    Redirects and 4xx/5xx on the probes = healthy. Never raises.
+    """
+    import uuid as _uuid
+    token = f"url-trap-probe-{_uuid.uuid4().hex[:10]}"
+    out = {'checked': True, 'soft_404': False, 'nested_trap': False, 'probes': []}
+    # Nested-probe parent: prefer a single-segment page (cleanest signal),
+    # else any non-homepage 200 page — the trap behaviour is the same.
+    parent = fallback = None
+    from urllib.parse import urlparse as _up
+    for r in results:
+        u = r.get('url') or ''
+        if r.get('status_code') == 200 and not r.get('redirect_url') and u:
+            segs = [s for s in _up(u).path.split('/') if s]
+            if len(segs) == 1:
+                parent = r
+                break
+            if segs and fallback is None:
+                fallback = r
+    parent = parent or fallback
+    probes = [('root', f"{base.rstrip('/')}/{token}/", None)]
+    if parent:
+        probes.append(('nested', f"{parent['url'].rstrip('/')}/{token}/", parent))
+    for kind, purl, par in probes:
+        try:
+            resp = session.get(purl, timeout=12, allow_redirects=False)
+            entry = {'kind': kind, 'url': purl, 'status': resp.status_code}
+            if resp.status_code == 200:
+                out['soft_404' if kind == 'root' else 'nested_trap'] = True
+                m = re.search(r'<title[^>]*>(.*?)</title>', resp.text[:30000], re.I | re.S)
+                title = (m.group(1).strip() if m else '')[:200]
+                if title:
+                    entry['title'] = title
+                if par and title and title == (par.get('title') or '').strip():
+                    entry['serves'] = 'same content as ' + par['url']
+            out['probes'].append(entry)
+        except Exception as e:
+            out['probes'].append({'kind': kind, 'url': purl, 'error': str(e)[:120]})
+    return out
+
+
 @app.route('/crawl', methods=['POST'])
 def crawl_site():
     """BFS site crawl with SSE streaming of per-page results."""
@@ -3616,7 +3666,11 @@ def crawl_site():
         for r in results:
             depth_dist[r.get('depth', 0)] += 1
 
+        # Soft-404 / infinite-URL-trap probe (2 requests, reuses crawl session)
+        url_traps = _probe_url_traps(f"{parsed.scheme}://{parsed.netloc}", results, session)
+
         reports = {
+            'url_traps': url_traps,
             'response_codes': rc_buckets,
             'duplicate_titles': [{'value': k, 'urls': v} for k, v in sorted(dup_titles.items(), key=lambda x: -len(x[1]))][:100],
             'duplicate_metas': [{'value': k, 'urls': v} for k, v in sorted(dup_metas.items(), key=lambda x: -len(x[1]))][:100],

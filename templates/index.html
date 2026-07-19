@@ -336,6 +336,7 @@
       <div class="cat-label">Redirects & Status</div>
       <div class="ci-cat" data-cat="Redirect" onclick="selectCategory('Redirect')"><span>Redirects</span><span class="ci-count warn" data-count="Redirect">0</span></div>
       <div class="ci-cat" data-cat="__redir_chains" onclick="selectCategory('__redir_chains')"><span title="Pages reached via 2+ redirect hops — every hop wastes crawl budget and link equity">Redirect Chains</span><span class="ci-count warn" data-count="__redir_chains">0</span></div>
+      <div class="ci-cat" data-cat="__traps" onclick="selectCategory('__traps')"><span title="Two post-crawl probe requests check whether the server returns 200 for URLs that cannot exist (soft 404s / infinite URL trap)">Soft 404 / URL Trap</span><span class="ci-count err" data-count="__traps">0</span></div>
       <div class="ci-cat" data-cat="HTTP" onclick="selectCategory('HTTP')"><span>HTTP Errors (4xx/5xx)</span><span class="ci-count err" data-count="HTTP">0</span></div>
       <div class="ci-cat" data-cat="__response_codes" onclick="selectCategory('__response_codes')"><span title="Status code distribution across the crawl (2xx / 3xx / 4xx / 5xx breakdown)">Response Codes</span><span class="ci-count" data-count="__response_codes">0</span></div>
       <div class="ci-cat" data-cat="noindex" onclick="selectCategory('noindex')"><span>Noindex Pages</span><span class="ci-count warn" data-count="noindex">0</span></div>

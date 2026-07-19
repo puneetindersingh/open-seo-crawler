@@ -85,6 +85,7 @@ const ISSUE_META = {
   '__response_codes': { sev: 'info', why: 'Crawl-wide HTTP status code distribution. A healthy site is mostly 2xx with a small tail of 3xx redirects; spikes in 4xx/5xx mean indexable URLs are bleeding link equity to error pages.', sources: [['Ahrefs — HTTP Status Codes', 'https://ahrefs.com/blog/http-status-codes/']] },
   '__deep':           { sev: 'warn', why: 'Pages 4+ clicks from the homepage get crawled less often and receive less PageRank. Surface them via category pages, related-content modules, or footer hub links to flatten depth.', sources: [['Ahrefs — Internal Links', 'https://ahrefs.com/blog/internal-links-for-seo/']] },
   '__hreflang':       { sev: 'info', why: 'Hreflang tells Google which language/region a page targets. Common mistakes that silently break it: invalid lang codes, duplicate x-default, and missing return tags (page A links to B but B doesn\'t link back to A — Google ignores both).', sources: [['Ahrefs — Hreflang Guide', 'https://ahrefs.com/blog/hreflang/'], ['Google — hreflang docs', 'https://developers.google.com/search/docs/specialty/international/localized-versions']] },
+  '__traps':          { sev: 'error', why: 'The server returns 200 OK for URLs that cannot exist. A soft 404 at the root makes every mistyped URL an indexable duplicate. A 200 on a nested path under a real page is worse: the served page\'s relative links resolve one level deeper, creating an INFINITE URL space — search engines waste crawl budget on phantom pages and scrapers can crawl forever, burning unlimited bandwidth on transfer-capped hosting. Fix: return 404 (or 301 to the real page) for any path that doesn\'t map to real content.', sources: [['Google — Soft 404 errors', 'https://developers.google.com/search/docs/crawling-indexing/http-network-errors#soft-404-errors'], ['Google — Infinite spaces', 'https://developers.google.com/search/blog/2008/08/to-infinity-and-beyond-no']] },
 };
 
 function sevOf(issue) {
@@ -1142,6 +1143,7 @@ window.selectCategory = function(cat) {
     '__dup_h1s':       'Duplicate H1s — groups of pages sharing an H1',
     '__dup_bodies':    'Duplicate Body Content — groups of pages with identical body hash',
     '__redir_chains':  'Redirect Chains (2+ hops)',
+    '__traps':         'Soft 404s / Infinite URL Trap (server answers 200 for non-existent URLs)',
     '__response_codes':'Response Code Distribution',
     '__deep':          'Deep Pages (4+ clicks from home)',
     '__hreflang':      'Hreflang Implementation',
@@ -1180,7 +1182,7 @@ window.selectCategory = function(cat) {
   }
 
   const _isReportPanel = (typeof cat === 'string') &&
-    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang' || cat === '__err' || cat === '__warn' || cat === '__info' || cat === '__summary');
+    (cat.startsWith('__sm_') || cat === '__schema_by_page' || cat === '__nd_content' || cat === '__sitemap_viz' || cat === '__all_images' || cat === '__external_links' || cat === '__js_diff' || cat === '__all_titles' || cat === '__all_metas' || cat === '__all_h1s' || cat === '__all_canonicals' || cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies' || cat === '__redir_chains' || cat === '__traps' || cat === '__response_codes' || cat === '__deep' || cat === '__hreflang' || cat === '__err' || cat === '__warn' || cat === '__info' || cat === '__summary');
   if (_isReportPanel) {
     renderIssueInfo(cat);
     const tbody = document.getElementById('crawler-tbody');
@@ -1215,6 +1217,8 @@ window.selectCategory = function(cat) {
       _scRenderDuplicatesPanel(cat);
     } else if (cat === '__redir_chains') {
       _scRenderRedirChainsPanel();
+    } else if (cat === '__traps') {
+      _scRenderTrapsPanel();
     } else if (cat === '__response_codes') {
       _scRenderResponseCodesPanel();
     } else if (cat === '__deep') {
@@ -1241,7 +1245,7 @@ window.selectCategory = function(cat) {
   ['sitemap-panel','schema-by-page-panel','near-dup-panel','sitestructure-panel',
    'all-images-panel','imgs-missing-alt-panel','external-links-panel','js-diff-panel',
    'all-values-panel','duplicates-panel',
-   'redir-chains-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
+   'redir-chains-panel','traps-panel','response-codes-panel','deep-pages-panel','hreflang-panel',
    'severity-panel','summary-panel']
     .forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
   if (_tableWrap) _tableWrap.style.display = '';
@@ -2291,6 +2295,63 @@ function _scRenderRedirChainsPanel() {
   main.appendChild(panel);
 }
 
+// Soft 404 / URL Trap — post-crawl probe results from reports.url_traps.
+// Two probes: /<token>/ at root (soft-404) and <real page>/<token>/ (nested,
+// the infinite-URL-space case). A 200 on either is a server bug worth a red
+// flag: crawl-budget waste, index bloat, and unbounded bot bandwidth.
+function _scRenderTrapsPanel() {
+  const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
+  if (!main) return;
+  const old = document.getElementById('traps-panel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'traps-panel';
+  panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
+
+  const tc = ((window.crawlerReports || {}).url_traps) || {};
+  const probeCard = (p) => `
+    <div style="margin-top:12px;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);">
+      <div style="padding:8px 12px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:.78rem;">
+        <b>${p.kind === 'root' ? 'Root probe (soft-404 check)' : 'Nested-path probe (infinite URL space check)'}</b>
+        ${p.status === 200
+          ? '<span style="color:#ef4444;font-weight:700;margin-left:8px;">FAILED — returned 200</span>'
+          : `<span style="color:#22c55e;font-weight:700;margin-left:8px;">OK — ${p.status ?? escapeHtml(p.error || '')}</span>`}
+      </div>
+      <div style="padding:8px 14px;font-family:'SF Mono','Menlo',monospace;font-size:.72rem;word-break:break-all;">
+        GET ${escapeHtml(p.url || '')}<br>→ ${p.status ?? escapeHtml(p.error || '')}
+        ${p.title ? `<br>→ &lt;title&gt; ${escapeHtml(p.title)}` : ''}
+        ${p.serves ? `<br>→ ${escapeHtml(p.serves)}` : ''}
+      </div>
+    </div>`;
+
+  if (!tc.checked) {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Not checked on this crawl</div>
+        <div style="font-size:.75rem;color:var(--text-muted);">Re-crawl to run the soft-404 / URL-trap probe — crawls saved before this feature don't carry it.</div>
+      </div>`;
+  } else if (!tc.soft_404 && !tc.nested_trap) {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">✓ Healthy — no soft 404s, no URL trap</div>
+        <div style="font-size:.75rem;color:var(--text-muted);">Both probe URLs were refused (non-200): the server does not serve content for URLs that don't exist.</div>
+      </div>
+      <div style="padding:0 16px 16px;">${(tc.probes || []).map(probeCard).join('')}</div>`;
+  } else {
+    panel.innerHTML = `
+      <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
+        <div style="font-size:.9rem;font-weight:600;color:#ef4444;margin-bottom:4px;">${tc.nested_trap ? 'Infinite URL trap detected' : 'Soft 404s detected'}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
+          This server answers <b>200 OK</b> for URLs that don't exist${tc.nested_trap ? ', including nested paths under real pages. Relative links on the served page resolve one level deeper, so the crawlable URL space is <b>infinite</b>' : ''}.
+          Search engines waste crawl budget on phantom duplicates, and bots/scrapers can crawl forever — on bandwidth-capped hosting this can take the site offline (509 Bandwidth Limit Exceeded).
+          Fix on the server: return <b>404</b> (or 301 to the real page) for any path that doesn't map to real content.
+        </div>
+      </div>
+      <div style="padding:0 16px 16px;">${(tc.probes || []).map(probeCard).join('')}</div>`;
+  }
+  main.appendChild(panel);
+}
+
 // Response Codes — distribution across the crawl. Click a bucket to see
 // the matching URLs (deferred for now: opens a filtered table view).
 function _scRenderResponseCodesPanel() {
@@ -3316,6 +3377,7 @@ function updateCounts() {
   // come straight from the server reports payload; Deep Pages and Hreflang
   // are derived per-page client-side so they work without server reports.
   if ('__redir_chains'   in counts) counts.__redir_chains   = (_reps.redirect_chains || (_pages.filter(r => (r.redirect_hops || 0) >= 2))).length;
+  if ('__traps'          in counts) counts.__traps          = ((_reps.url_traps || {}).soft_404 ? 1 : 0) + ((_reps.url_traps || {}).nested_trap ? 1 : 0);
   if ('__response_codes' in counts) counts.__response_codes = (_pages.filter(r => r.status_code)).length;
   if ('__deep'           in counts) counts.__deep           = _pages.filter(r => (r.depth || 0) >= 4).length;
   if ('__hreflang' in counts) {
