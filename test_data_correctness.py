@@ -9,9 +9,13 @@ import sys, time
 from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 
-TEST_SITES = [
-    "https://example.com",   # known trailing-slash redirect in sitemap
-    "https://example.com",                         # multi-regional, many near-dups
+# Pass site URLs as CLI args, or fall back to the defaults below. Any real
+# site works — every check asserts internal consistency of the detectors,
+# not site-specific values. Best coverage comes from sites with sitemaps,
+# redirects, and near-duplicate templated pages.
+TEST_SITES = sys.argv[1:] or [
+    "https://quotes.toscrape.com",
+    "https://books.toscrape.com",
 ]
 MAX_PAGES = 50
 

@@ -718,9 +718,8 @@ tbody:has(tr[data-url]) { user-select: none; }
   font-weight: 700;
 }
 
-/* Double-click any cell to expand and read the full value (mirrors the
-   private internal-tool's behaviour). Inline styles set max-width + ellipsis
-   on most TDs, so we override with !important. */
+/* Double-click any cell to expand and read the full value. Inline styles
+   set max-width + ellipsis on most TDs, so we override with !important. */
 #crawler-tbody td.cs-cell-expanded {
   white-space: normal !important;
   overflow: visible !important;

@@ -100,7 +100,7 @@ function sevOf(issue) {
 // Client-side mirror of app.py's _is_third_party_widget_image — used to
 // scrub already-cached crawl results so reCAPTCHA / analytics / chat-widget
 // images stop polluting any image-related view without forcing a re-crawl.
-// Mirrored from internal-tool/static/script.js — keep in sync.
+// Keep in sync with the matching list in app.py.
 const _THIRD_PARTY_IMG_HOSTS_RE = /(?:^|\.)(gstatic\.com|googletagmanager\.com|google-analytics\.com|googleadservices\.com|doubleclick\.net|hotjar\.com|intercomcdn\.com|intercom\.io|crisp\.chat|cloudflareinsights\.com|tiktok\.com|connect\.facebook\.net|pinimg\.com|pinterest\.com|hs-analytics\.net|hs-scripts\.com)$/i;
 const _THIRD_PARTY_IMG_FILE_RE = /(?:\/recaptcha[\/_\-]|recaptcha[_\-](?:black|white|logo)|\/g\.gif$|\/pixel\.gif$|\/spacer\.gif$|\/tracking[_\-]pixel|fbq[_\-]pixel|\/fb-pixel|\/ga-pixel)/i;
 function _isThirdPartyWidgetImage(absSrc) {
@@ -304,7 +304,6 @@ function _scInitResizers() {
 // Generic resizer wiring — works on any <table> with a <colgroup>, .th-resize
 // spans in <thead>, and optionally data-resize-key for localStorage. Lets
 // every report panel opt in by emitting class="crawler-grid" + the markup.
-// Mirrors internal-tool's helper. Kept identical so future fixes apply to both.
 function _initTableResizers(table) {
   if (!table) return;
   const thead = table.querySelector('thead');
@@ -1396,12 +1395,11 @@ window.analyseSitemap = async function(opts) {
 // All Images panel — every meaningful <img> seen during the crawl, grouped
 // by canonical src so a logo used on every page is one row with a "N pages"
 // expander. Filter chips (All / Missing alt / Empty alt in link / Decorative
-// / Has alt) toggle row visibility. Pure crawler data — no AI — so it lives
-// in the public site-crawler. Mirrors internal-tool's _renderAllImagesPanel but
-// without the "Generate in Bulk Image Alt" button (AI-only feature).
+// / Has alt) toggle row visibility. Pure crawler data — no AI, no external
+// services.
 // =============================================================================
 // JS vs non-JS Diff panel — for crawls run with `Compare with non-JS HTML`.
-// Mirrors internal-tool/_renderJsDiffPanel; pure parsing, no AI/AI.
+// Pure parsing, no AI.
 // Severity ladder: critical (title/meta/schema), high (h1/word_count),
 // medium (links/images), none (page is server-rendered correctly).
 // =============================================================================
@@ -1545,8 +1543,7 @@ window._scRenderJsDiffPanel = _scRenderJsDiffPanel;
 
 // Image-centric "Images Missing Alt" panel — one row per unique image that
 // needs alt, click to expand the pages (inlinks) that use it + the alt on each.
-// Mirrors Screaming Frog's Images → Inlinks view (and internal-tool's panel), minus
-// any AI/Bulk-Alt hand-off (this crawler stays AI-free).
+// Mirrors Screaming Frog's Images → Inlinks view.
 function _scRenderImagesMissingAltPanel() {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
   if (!main) return;
@@ -2935,8 +2932,7 @@ function _renderSchemaByPagePanel() {
 }
 
 // Schema-by-Page filter handlers — chips OR-filter by type, URL input
-// substring-filters; both AND together. Mirrors internal-tool exactly so the
-// behaviour is consistent across both crawlers.
+// substring-filters; both AND together.
 window._scSchemaPageFilter = window._scSchemaPageFilter || { types: new Set(), q: '' };
 
 window._scSchemaPageApplyFilter = function() {
@@ -2986,7 +2982,7 @@ window._scSchemaPageClearFilters = function() {
 };
 
 // =============================================================================
-// Near-duplicate content detection (mirrors internal-tool, no AI/AI).
+// Near-duplicate content detection (Shingle Jaccard 5-gram + df=1 filter).
 // =============================================================================
 function _scToggleNearDupCfg(checked) {
   const cfg = document.getElementById('crawler-neardup-cfg');
@@ -2995,7 +2991,6 @@ function _scToggleNearDupCfg(checked) {
 window._scToggleNearDupCfg = _scToggleNearDupCfg;
 
 // Show "Compare with non-JS HTML" sub-checkbox only when Render JS is on.
-// Mirrors the internal-tool helper.
 function _scToggleCompareNoJs(checked) {
   const row = document.getElementById('crawler-compare-no-js-row');
   if (row) row.style.display = checked ? '' : 'none';
@@ -3527,7 +3522,7 @@ function stopCrawl() {
 // =============================================================================
 // Per-tab Export view + multi-sheet .xlsx workbook export.
 // =============================================================================
-// Mirrors internal-tool's _buildExportForCategory dispatcher: every supported
+// Per-category export dispatcher: every supported
 // crawler tab gets a CSV that's shaped for that tab. Categories absent from
 // site-crawler's UI (no __inlinks/__anchors/__all_titles/__all_metas/
 // __all_h1s/__all_canonicals/__redir_chains/__orphans/__response_codes) are
@@ -3833,8 +3828,7 @@ async function exportCrawlerXlsx() {
   const lbl = btn ? btn.querySelector('span') : null;
   if (btn) { btn.disabled = true; if (lbl) lbl.textContent = 'Exporting…'; }
   try {
-    // Build extra sheets for every supported tab. Mirrors internal-tool's
-    // exportCrawlerXlsx but only with categories site-crawler exposes.
+    // Build extra sheets for every supported tab, one per exposed category.
     const extraSheets = [];
     const cats = [
       ['__all_images',    'All Images'],
@@ -4371,7 +4365,7 @@ function _scSetColumns(cat) {
   if (cat === 'Slow') return show(['url','status','speed','issues']);
   if (cat === 'Redirect') return show(['url','status','redirto','inlinks','issues']);
   // Image alt is image-level, not page-level — page Title is just noise on
-  // this view. Mirrors internal-tool's treatment.
+  // this view.
   if (cat === 'imgs missing alt') return show(['url','status','issues']);
   // Severity views (Errors / Warnings / Info) — without an explicit show()
   // every column renders, pushing Issues off the right edge and forcing a
@@ -4556,7 +4550,7 @@ function _scSetColumns(cat) {
 })();
 
 // =============================================================================
-// Save / Load / Compare crawl sessions  (port of internal-tool's save+compare)
+// Save / Load / Compare crawl sessions
 // Crawls are persisted to ~/.site-crawler-crawls/ on the host — never committed.
 // =============================================================================
 if (typeof window.showToast !== 'function') {
@@ -4645,7 +4639,7 @@ function openCrawlLoader(opts) {
           <div style="color:#64748b;font-variant-numeric:tabular-nums;font-family:'SF Mono','Menlo',monospace;">${timeStr}</div>
           <div style="min-width:0;">
             <div style="font-weight:600;color:#0f172a;word-break:break-all;">${seed || c.name}
-              ${c.source === 'internal-tool' ? '<span title="Saved in internal-tool" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#ede9fe;color:#5b21b6;border-radius:3px;font-size:9.5px;font-weight:600;vertical-align:middle;">internal-tool</span>' : ''}
+              ${c.source && c.source !== 'site-crawler' ? '<span title="Saved by another local tool" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#ede9fe;color:#5b21b6;border-radius:3px;font-size:9.5px;font-weight:600;vertical-align:middle;">' + c.source + '</span>' : ''}
               ${c.source === 'site-crawler' ? '<span title="Saved in site-crawler" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#dbeafe;color:#1e40af;border-radius:3px;font-size:9.5px;font-weight:600;vertical-align:middle;">site-crawler</span>' : ''}
             </div>
             <div style="font-size:10px;color:#64748b;word-break:break-all;">${c.name}</div>
@@ -5155,7 +5149,6 @@ window._compareToggleIssueDrill = function(idx) {
 // =============================================================================
 // Site Structure visualisation — sunburst (radial directory hierarchy),
 // hierarchy text tree, and anchor-text cloud. Pure SVG, no external libs.
-// Mirrors the implementation in internal-tool/static/script.js.
 // =============================================================================
 
 window._svView = window._svView || 'sunburst';

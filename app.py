@@ -1091,7 +1091,6 @@ def _detect_js_platform(html):
 # beacons. Flagging them as "missing alt" pollutes every page that loads a
 # contact form. Match by hostname OR filename — both routes needed because
 # self-hosted recaptcha-black.svg in a WP theme bypasses the host check.
-# Mirrored from internal-tool/app.py — keep both lists in sync.
 _THIRD_PARTY_IMG_HOSTS = (
     'gstatic.com',
     'googletagmanager.com',
@@ -1194,8 +1193,8 @@ def _parse_no_js_subset(html, base_url):
     """Parse a subset of SEO-critical fields from raw HTML — used for the
     JS-vs-non-JS comparison so we can show what content is missing when JS
     isn't executed. Same parsers/idioms as the main pass in `_crawl_page`,
-    just trimmed to the fields we diff against. Kept self-contained so the
-    internal-tool port stays a copy-paste.
+    just trimmed to the fields we diff against. Kept self-contained on
+    purpose — no shared state with the main crawl pass.
     """
     from urllib.parse import urlparse, urljoin
     out = {
@@ -1272,7 +1271,7 @@ def _parse_no_js_subset(html, base_url):
 
 def _compute_js_diff(js, nojs):
     """Compare rendered (post-JS) fields against pre-JS subset and classify
-    severity. See internal-tool/app.py:_compute_js_diff for the full rationale.
+    severity.
     Severity ladder: critical (title/meta/schema), high (h1/word_count),
     medium (links/images), none (page is server-rendered correctly).
     """
@@ -2560,7 +2559,7 @@ def _same_host_sitemap_urls(sm_urls, domain):
     """Keep only sitemap entries on the same host as the analysed domain.
 
     robots.txt on multisite setups frequently points at a *sibling* subdomain's
-    sitemap (e.g. example.com → example.com). Those
+    sitemap (e.g. shop.example.com → blog.example.com). Those
     URLs belong to a different site and must NOT be diffed against this crawl —
     otherwise every uncrawled foreign URL floods the "in sitemap, not crawled"
     orphan report. Returns (kept_entries, foreign_host_counts) so the caller can
@@ -2756,7 +2755,7 @@ def sitemap_analyse():
 
 # =============================================================================
 # Near-duplicate content detection (Shingle Jaccard 5-gram + df=1 filter).
-# Mirrors the algorithm and API surface in internal-tool. Pure stdlib, no LLM.
+# Pure stdlib, no external services.
 # =============================================================================
 
 _ND_STOP = {
@@ -3729,11 +3728,13 @@ def crawl_site():
 # =============================================================================
 
 _CRAWL_FOLDER = os.path.expanduser('~/.site-crawler-crawls')
-# Sibling tool's save dir — listed/loadable here too so a crawl saved
-# in internal-tool shows up in site-crawler's Load saved list (and vice
-# versa). Writes still go to _CRAWL_FOLDER so we don't fight over
-# ownership; this is read-only union.
-_CRAWL_FOLDERS_RO = [os.path.expanduser('~/.internal-tool-crawls')]
+# Optional extra crawl dirs (colon-separated env var) — crawls saved there
+# by other local tools appear in the Load saved list too. Writes still go
+# to _CRAWL_FOLDER so we don't fight over ownership; this is a read-only
+# union.
+_CRAWL_FOLDERS_RO = [os.path.expanduser(p) for p in
+                     os.environ.get('SITE_CRAWLER_EXTRA_CRAWL_DIRS', '').split(':')
+                     if p.strip()]
 
 # Permanent, append-only title history. Lives inside the crawl folder as a
 # .jsonl (skipped by the .json-only 30-day cleanup), so even after a full crawl
@@ -3826,10 +3827,13 @@ def _all_crawl_folders():
 
 
 def _ip_name_map():
-    """Shared IP → friendly name map (lives in internal-tool's home file).
+    """Optional IP → friendly name map (JSON dict) so a shared office
+    instance can label saved crawls with people's names instead of IPs.
     Falls back to empty dict if the file is missing/unreadable."""
     try:
-        with open(os.path.expanduser('~/.internal-tool-users.json')) as f:
+        path = os.environ.get('SITE_CRAWLER_USER_MAP',
+                              os.path.expanduser('~/.site-crawler-users.json'))
+        with open(path) as f:
             m = json.load(f)
             return m if isinstance(m, dict) else {}
     except Exception:
@@ -3839,7 +3843,7 @@ def _ip_name_map():
 @app.route('/crawl/list', methods=['GET'])
 def crawl_list():
     """List ALL saved crawls from the last 30 days, unioning across this
-    tool's dir + the sibling tool's dir (read-only) so users see the
+    tool's dir + any configured extra dirs (read-only) so users see the
     same list whichever app they open."""
     cutoff = int(time.time()) - 30 * 86400
     name_map = _ip_name_map()
@@ -3847,7 +3851,7 @@ def crawl_list():
     seen_files = set()
     for folder in _all_crawl_folders():
         if not os.path.isdir(folder): continue
-        source = 'internal-tool' if 'internal-tool-crawls' in folder else 'site-crawler'
+        source = 'site-crawler' if folder == _CRAWL_FOLDER else 'external'
         for fn in sorted(os.listdir(folder), reverse=True):
             if not fn.endswith('.json') or fn in seen_files: continue
             seen_files.add(fn)
@@ -3856,10 +3860,10 @@ def crawl_list():
                 with open(path) as f: d = json.load(f)
                 if (d.get('saved_at') or 0) < cutoff: continue
                 # Cross-tool field reconciliation: site-crawler stores the
-                # IP in 'saved_by'; internal-tool stores it in 'user_ip'. Read
-                # both, then translate via the shared name map so the
-                # column shows "Puneet" / "Yvonne" / etc instead of raw
-                # 192.168.x.x (per the internal-tool-user-map convention).
+                # IP in 'saved_by'; some external tools store it in
+                # 'user_ip'. Read both, then translate via the optional
+                # name map so the column shows a person's name instead of
+                # a raw IP.
                 raw_ip = d.get('user_ip') or d.get('saved_by') or ''
                 saved_by = name_map.get(raw_ip, '') or raw_ip or 'unknown'
                 out.append({
@@ -4209,8 +4213,7 @@ def export_crawl_xlsx():
     Sheet 2 = Issues Summary (issue text → page count → sample URLs).
     Sheet 3+ = whatever the client supplied in `extra_sheets` (built by
     `_buildExportForCategory` on the frontend so each tab gets the shape it
-    actually shows). Mirrors internal-tool's export-crawl-xlsx route but without
-    the AI-specific bits.
+    actually shows).
     """
     import io as _io
     import openpyxl
