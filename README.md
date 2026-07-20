@@ -25,6 +25,9 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 
 ## What's new (recent additions)
 
+- **Crawl Budget page** — scans the homepage + section pages, buckets every discovered URL by query parameter, classifies crawl-budget traps (Elementor `?e-page-` AJAX pagination, faceted filters, sort / tracking / session params) and generates ready-to-paste robots.txt `Disallow` rules. Shows the sitemap's real page count next to the phantom parameter URLs so the wasted crawl budget is obvious.
+- **Soft-404 / infinite-URL-trap detection** — after every crawl, two probe requests check whether the server returns 200 for URLs that cannot exist (`/<token>/` at the root, and nested under a real page). A 200 means the server soft-404s and mints an infinite crawlable URL space; flagged red in the issues sidebar with fix guidance.
+- **Images Missing Alt report** — image-centric bulk report: one row per image missing alt text, with every page that embeds it.
 - **robots.txt AI-crawler block detection** — flags, as a red error, when robots.txt blocks AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended, CCBot, Bytespider + 20 more) — meaning the site can't be read or cited by ChatGPT, AI, Perplexity or Google AI Overviews — or when classic search engines (Googlebot/Bingbot) are blocked. Also detects Cloudflare `Content-Signal: ai-train=no` opt-outs. Surfaces on the homepage row in the issues sidebar under **AI Crawlers Blocked** / **Search Engines Blocked**.
 - **Post-crawl Summary dashboard** — auto-opens after a crawl finishes with a one-glance view of issues by severity, total pages, response code mix, and the worst offenders.
 - **Bulk SEO reports** — All Titles, All Metas, All H1s, All Canonicals, plus dedicated Duplicate Title / Duplicate Meta / Duplicate H1 / Duplicate Body / Multiple H1s / Redirect Chains / Response Codes / Deep Pages / Hreflang reports.
@@ -69,6 +72,7 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 - **Images** — count of images missing `alt` attributes (decorative `alt=""` not penalised)
 - **Security headers** — HTTPS, HSTS, CSP, X-Frame-Options, X-Content-Type-Options
 - **Deep pages** — URLs more than N clicks from the homepage (configurable)
+- **Soft 404s / URL traps** — post-crawl probes detect servers that return 200 for non-existent URLs (root and nested), creating an infinite crawlable URL space; redirects and 4xx/5xx probe responses are treated as healthy
 
 ### Bulk reports (sidebar)
 
@@ -80,8 +84,16 @@ Every report exports to XLSX so you can hand it to a content team or dev:
 - **Redirect Chains** — pages reached via 2+ hops, with the full chain
 - **Response Codes** — breakdown by status code
 - **Deep Pages** — URLs N+ clicks from homepage
+- **Images Missing Alt** — one row per image missing alt text, with every page that embeds it
 - **Hreflang** — extracted, validated, cross-page consistency checked
 - **Severity views** — All Errors / All Warnings / All Info, with irrelevant columns hidden per view
+
+### Crawl budget analysis
+
+- **On-demand Crawl Budget page** (topbar) — no full crawl needed: scans the homepage and section pages, buckets every discovered URL by query parameter, and classifies which parameters are crawl-budget traps — Elementor `?e-page-` AJAX pagination, faceted filters, sort orders, tracking and session IDs.
+- **Ready-to-paste robots.txt rules** — generates the exact `Disallow` lines to block each trap, and explains what each trap is and why robots.txt is the right fix.
+- **Waste made visible** — shows the sitemap's real page count next to the phantom parameter URLs, so you can see how much crawl budget is spent on URLs that shouldn't exist.
+- **Soft-404 / infinite-URL-trap probe** — runs automatically after every crawl; results land in a red **URL Traps** category in the issues sidebar with a detail panel and fix guidance.
 
 ### Auto-update + version badge
 
