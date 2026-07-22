@@ -1016,6 +1016,10 @@ _CRAWL_NOISE_PARAMS = frozenset({
 # email lands in the crawl as a fake URL like /contact/sales@example.com.
 _MAILTO_NO_SCHEME_RE = _re.compile(r'^[^/\s:?#]+@[^/\s:?#]+\.[A-Za-z]{2,}$')
 
+# Match an href that carries a URL scheme (https:, mailto:, tel:, …).
+# Used to tell intentional URLs apart from plain text pasted into href.
+_HREF_SCHEME_RE = _re.compile(r'^[A-Za-z][A-Za-z0-9+.\-]*:')
+
 
 def _normalize_crawl_url(url):
     """Normalize URL for deduplication: strip fragments, utm/tracking/action
@@ -2089,6 +2093,21 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
             # https://example.com/path/sales@example.com — the email lands
             # in the crawl as a fake URL.
             if '@' in href and _MAILTO_NO_SCHEME_RE.match(href):
+                continue
+            # Plain text pasted into an href — e.g. a street address or a
+            # Google Maps Plus Code (<a href="7FG4+8Q Springfield, Example
+            # State">). A raw space can't appear in a real URL, and
+            # with no scheme urljoin resolves the text relative to the
+            # CURRENT page, so a site-wide footer link like this
+            # manufactures a phantom child 404 under every page crawled
+            # (300-page site → ~300 fake 404s). Skip it as a link but
+            # record a page issue so the broken href itself still gets
+            # reported once per page instead of as hundreds of 404 URLs.
+            if ' ' in href and not href.startswith('//') and not _HREF_SCHEME_RE.match(href):
+                _bad_href = href if len(href) <= 80 else href[:77] + '…'
+                _bad_issue = f'Malformed link href (text, not a URL): "{_bad_href}"'
+                if _bad_issue not in result['issues']:
+                    result['issues'].append(_bad_issue)
                 continue
             resolved = urljoin(link_base, href)
             resolved_path_tail = urlparse(resolved).path.rstrip('/').rsplit('/', 1)[-1]
