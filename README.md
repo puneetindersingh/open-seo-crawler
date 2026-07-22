@@ -25,6 +25,9 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 
 ## What's new (recent additions)
 
+- **Malformed link href detection** — a scheme-less `href` containing a raw space (a street address or Google Maps Plus Code pasted straight into a link, e.g. `<a href="7FG4+8Q Springfield">Directions</a>`) used to resolve relative to every page carrying it and flood the crawl with phantom 404s — one broken footer link on a 300-page site meant ~300 fake 404 rows. Now it's skipped as a link and reported once per page as a **Malformed link href** issue naming the offending text.
+- **JS vs no-JS compare mode** — with Render JS on, tick *Compare with non-JS HTML* to crawl every page in BOTH modes (Playwright-rendered and raw HTML). The per-page diff shows exactly which content is invisible to AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended), which mostly don't execute JavaScript.
+- **Shared-instance support** — point the saved-crawls list at extra folders (`SITE_CRAWLER_EXTRA_CRAWL_DIRS`) so one office instance shows crawls from multiple tools, and label who ran each crawl by IP (`SITE_CRAWLER_USER_MAP`).
 - **Crawl Budget page** — scans the homepage + section pages, buckets every discovered URL by query parameter, classifies crawl-budget traps (Elementor `?e-page-` AJAX pagination, faceted filters, sort / tracking / session params) and generates ready-to-paste robots.txt `Disallow` rules. Shows the sitemap's real page count next to the phantom parameter URLs so the wasted crawl budget is obvious.
 - **Soft-404 / infinite-URL-trap detection** — after every crawl, two probe requests check whether the server returns 200 for URLs that cannot exist (`/<token>/` at the root, and nested under a real page). A 200 means the server soft-404s and mints an infinite crawlable URL space; flagged red in the issues sidebar with fix guidance.
 - **Images Missing Alt report** — image-centric bulk report: one row per image missing alt text, with every page that embeds it.
@@ -48,7 +51,14 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 - **Near-duplicate content** — shingle-based Jaccard similarity flags pairs of pages that are 90%+ similar (tweakable 80 / 85 / 90 or custom).
 - **Robots.txt aware** (or ignore it, your choice).
 - **Glob include / exclude patterns** — `*?variant=*`, `*/cart/*`, etc.
-- **Optional JS rendering via Playwright** — install separately for SPA sites (React, Vue, Wix).
+- **Optional JS rendering via Playwright** — install separately for SPA sites (React, Vue, Wix). With **Compare with non-JS HTML** ticked, every page is crawled in both modes and the diff flags content invisible to non-JS crawlers.
+- **Built-in crawler-trap protection** — bad links and infinite URL spaces are filtered before they poison your reports, no config needed:
+  - Non-page paths skipped (`/feed/`, `/wp-json/`, `/wp-admin/`, `/cdn-cgi/`, sitemap XML, cart/checkout AJAX endpoints)
+  - Repeating-segment guard — refuses `/our-team/our-team/`-style URLs minted by path-relative nav hrefs
+  - Page-builder pagination/filter params (`?e-page-*`, `?e-filter-*` Elementor AJAX, `?infinity` Jetpack) never enqueued — the classic "26k queued on a 9k-page site" blow-up
+  - Bare emails written without `mailto:` (`<a href="sales@example.com">`) dropped instead of becoming fake `/contact/sales@example.com` URLs
+  - Plain text pasted into `href` (addresses, Google Maps Plus Codes) reported as a **Malformed link href** issue instead of spawning a phantom 404 under every page
+  - Post-crawl soft-404 probes detect servers that return 200 for URLs that cannot exist
 
 ### What gets checked per page
 
@@ -69,6 +79,7 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 - **Mobile-friendliness** — viewport meta tag presence
 - **Mixed content** — HTTPS pages loading HTTP resources
 - **URL hygiene** — uppercase, underscores, spaces, >115 chars, tracking parameters
+- **Malformed link hrefs** — plain text pasted into an `href` (addresses, Plus Codes) flagged per page instead of crawled as phantom URLs
 - **Images** — count of images missing `alt` attributes (decorative `alt=""` not penalised)
 - **Security headers** — HTTPS, HSTS, CSP, X-Frame-Options, X-Content-Type-Options
 - **Deep pages** — URLs more than N clicks from the homepage (configurable)
@@ -301,11 +312,19 @@ The **Summary** tab auto-opens during the crawl and live-refreshes as pages come
 | Per-host delay | 0.4 s | Min gap between two requests to the same host. A warning is shown if set below 0.4 s |
 | Max depth | 10 | Clicks from seed URL |
 | Render JS | off | Enable for SPAs (requires Playwright) |
+| Compare with non-JS HTML | off | With Render JS on: crawl each page in both modes, diff flags JS-only content invisible to non-JS crawlers |
 | Ignore robots.txt | off | Default: respect Disallow rules |
 | Ignore noindex | off | Default: noindex pages excluded from duplicate / orphan reports |
 | Sitemap analysis | **on** | Post-crawl: flags missing from sitemap, orphans, sitemap-only, non-200, redirects in sitemap |
 | Near-duplicate content | **on** at 90% | Shingle Jaccard on body content; flag pairs ≥ 90% similar (tweak to 80 / 85 / 90 or custom) |
 | Include / exclude patterns | empty | Glob wildcards, e.g. `*?variant=*`, `*/cart/*` |
+
+Optional environment variables (for shared / multi-tool setups):
+
+| Variable | Purpose |
+|---|---|
+| `SITE_CRAWLER_EXTRA_CRAWL_DIRS` | Colon-separated extra folders to union (read-only) into the saved-crawls list, so one instance shows crawls saved by other tools |
+| `SITE_CRAWLER_USER_MAP` | Path to a JSON dict mapping IP → friendly name (default `~/.site-crawler-users.json`), so saved crawls show who ran them instead of an IP |
 
 ## Performance
 
