@@ -1577,7 +1577,9 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # --- Pagination detection ---
         import re as _re_pag
         _pag_path = _re_pag.search(r'/page/\d+/?$', _parsed_url.path)
-        _pag_query = _re_pag.search(r'\b(page|paged|pg)\s*=\s*[2-9]\d*', _parsed_url.query)
+        # Leading _? catches builder-prefixed params like ?_page=2 —
+        # \b alone never fires between '_' and 'page' (both word chars).
+        _pag_query = _re_pag.search(r'(?:^|[?&;])\s*_?(page|paged|pg)\s*=\s*[2-9]\d*', _parsed_url.query)
         result['is_pagination'] = bool(_pag_path or _pag_query)
 
         # --- Security headers (applies to every response, HTML or not) ---
