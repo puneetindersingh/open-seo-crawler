@@ -1724,6 +1724,13 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
                             _push_type(item['@type'])
             except Exception:
                 pass
+        # Microdata (itemtype="https://schema.org/Product") — older themes
+        # mark up with microdata instead of JSON-LD; without this they read
+        # as "no structured data" when they plainly have some.
+        for el in soup.find_all(attrs={'itemtype': True})[:25]:
+            it = (el.get('itemtype') or '').rstrip('/').rsplit('/', 1)[-1].strip()
+            if it and it not in result['schema_types']:
+                result['schema_types'].append(it)
 
         # Open Graph and Twitter Card tags
         for m in soup.find_all('meta'):
