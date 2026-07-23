@@ -66,7 +66,7 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 - **Meta descriptions** — missing, too long (>160 chars), too short, duplicate across pages
 - **H1 tags** — missing, multiple H1s, identical to title, duplicate across pages
 - **Canonical tags** — missing, points elsewhere (canonicalised), self-referencing
-- **Schema.org structured data** — presence + types detected
+- **Schema.org structured data** — presence + types detected from both JSON-LD and microdata (`itemtype`) markup
 - **Open Graph + Twitter Card** — missing `og:title`, `og:image`, `twitter:card`
 - **Content** — thin content (<200 words), near-duplicate bodies (Jaccard similarity)
 - **Performance** — slow response time (>3 s)
@@ -75,7 +75,7 @@ Built for SEO professionals, web developers, and site owners who want a real tec
 - **HTTP errors** — 4xx / 5xx with retry counts
 - **Indexability** — `noindex` in meta robots or X-Robots-Tag
 - **Hreflang** — extracted, validated, missing return-tags flagged
-- **Pagination** — `/page/N/` and `?page=N` archive URLs crawled but skipped for SEO issue checks (no false positives for missing meta on paginated archives)
+- **Pagination** — `/page/N/`, `?page=N`, `?paged=N` and builder-prefixed variants like `?_page=N` crawled but skipped for SEO issue checks (no false positives for missing meta on paginated archives)
 - **Mobile-friendliness** — viewport meta tag presence
 - **Mixed content** — HTTPS pages loading HTTP resources
 - **URL hygiene** — uppercase, underscores, spaces, >115 chars, tracking parameters
