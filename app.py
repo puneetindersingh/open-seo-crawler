@@ -3490,6 +3490,27 @@ def crawl_site():
                                     visited.add(alt)
                                 queue.append((link, depth + 1))
 
+                        # Hreflang discovery — region/language alternates are often
+                        # NOT hyperlinked anywhere (JS-only country switchers), so
+                        # without this whole region subtrees never get crawled and
+                        # flood the sitemap "not crawled" report. Mirror Screaming
+                        # Frog: enqueue same-host alternates as discovery-only URLs
+                        # — deliberately NOT recorded in inlinks_map, so orphan
+                        # reports still show pages that have no real inbound
+                        # hyperlinks.
+                        for _hl in page_data.get('hreflang') or []:
+                            _href = (_hl.get('href') or '').split('#')[0]
+                            if not _href.startswith(('http://', 'https://')):
+                                continue
+                            if _up(_href).netloc.lower().replace('www.', '') != domain:
+                                continue
+                            _halt = _crawl_slash_alt(_href)
+                            if _href not in visited and (not _halt or _halt not in visited) and _url_allowed(_href):
+                                visited.add(_href)
+                                if _halt:
+                                    visited.add(_halt)
+                                queue.append((_href, depth + 1))
+
                         # Site-level robots.txt findings ride on the homepage row
                         # (first non-error page emitted) so they show up in the
                         # issues list/sidebar like every other red issue.
