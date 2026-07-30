@@ -46,6 +46,9 @@ let activeCategory = 'all';
 // Per-category metadata: severity, explanation, cited sources.
 // Shown in the info box above the table when a category is clicked.
 const ISSUE_META = {
+  'AI crawlers blocked': { sev: 'error', why: 'robots.txt is blocking AI answer-engine crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended and similar). These bots feed ChatGPT, Claude, Perplexity and Google AI Overviews — when they\'re blocked the site cannot be read, cited, or summarised in any AI answer. Often a CDN "Block AI bots" default rather than a deliberate decision — confirm intent, then unblock the search/citation bots (OAI-SearchBot, Claude-SearchBot, PerplexityBot, ChatGPT-User) if AI visibility is wanted.', sources: [['Cloudflare — Manage AI crawlers', 'https://developers.cloudflare.com/bots/concepts/bot/ai-bots/'], ['OpenAI — GPTBot', 'https://platform.openai.com/docs/bots'], ['Google — Google-Extended', 'https://developers.google.com/search/docs/crawling-indexing/overview-google-crawlers']] },
+  'AI training bots blocked': { sev: 'info', why: 'robots.txt blocks training/data-collection-only crawlers (CCBot, Bytespider, Applebot-Extended and similar). These bots harvest content for model training or resale — they do not feed live AI answers, so blocking them does not affect visibility in ChatGPT, Claude, Perplexity or Google AI Overviews. Usually a deliberate content-protection choice; no action needed unless inclusion in training corpora is wanted.', sources: [['Cloudflare — Manage AI crawlers', 'https://developers.cloudflare.com/bots/concepts/bot/ai-bots/'], ['Common Crawl — CCBot', 'https://commoncrawl.org/ccbot']] },
+  'Search engines blocked': { sev: 'error', why: 'robots.txt is disallowing a classic search crawler (Googlebot / Bingbot) or applies Disallow: / to all bots. This removes the site from normal search results entirely. Almost always a mistake — most often a staging Disallow: / rule left in place after launch. Fix immediately.', sources: [['Google — robots.txt intro', 'https://developers.google.com/search/docs/crawling-indexing/robots/intro']] },
   'Missing meta description': { sev: 'error', why: 'Google falls back to scraping body copy for the SERP snippet — almost always worse CTR than a hand-written description.', sources: [['Ahrefs — Meta Description', 'https://ahrefs.com/blog/meta-description/'], ['Moz — Meta Description', 'https://moz.com/learn/seo/meta-description']] },
   'Meta desc too long': { sev: 'warn', why: 'Google truncates around 155–160 characters on desktop, shorter on mobile. Past that gets ellipsised.', sources: [['Moz — Meta Description', 'https://moz.com/learn/seo/meta-description'], ['Ahrefs — Meta Description', 'https://ahrefs.com/blog/meta-description/']] },
   'Meta desc too short': { sev: 'warn', why: 'Under ~120 characters wastes SERP real estate and gives Google less to match against queries.', sources: [['Ahrefs — Meta Description', 'https://ahrefs.com/blog/meta-description/'], ['Moz — Meta Description', 'https://moz.com/learn/seo/meta-description']] },
@@ -1526,7 +1529,7 @@ function _scRenderJsDiffPanel() {
     <div style="padding:14px 16px;border-bottom:1px solid var(--border,#e5e7eb);background:var(--surface2,#f8fafc);">
       <div style="font-size:.85rem;font-weight:600;color:var(--text);margin-bottom:4px;">JS vs non-JS HTML diff</div>
       <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;line-height:1.55;">
-        Compared <b>${total}</b> pages in both modes. <b style="color:#991b1b;">${withDiff.length}</b> have content invisible to AI crawlers (ChatGPT, AI, Perplexity, Google-Extended) which mostly don't execute JS. <b style="color:#166534;">${clean}</b> render the same in both modes.
+        Compared <b>${total}</b> pages in both modes. <b style="color:#991b1b;">${withDiff.length}</b> have content invisible to AI crawlers (ChatGPT, Claude, Perplexity, Google-Extended) which mostly don't execute JS. <b style="color:#166534;">${clean}</b> render the same in both modes.
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         <button type="button" class="jsdiff-chip" data-sev="all" onclick="_scJsDiffSetFilter('all')" style="padding:4px 12px;border-radius:14px;border:1px solid var(--text);background:var(--text);color:var(--surface,#fff);font-size:11.5px;cursor:pointer;font-weight:600;">All ${withDiff.length}</button>
@@ -2536,6 +2539,9 @@ function _scRenderSummaryPanel() {
         /^\d+ imgs missing alt|^\d+ imgs with empty alt/i.test(issue)) return ['Images missing alt','imgs missing alt'];
     if (/^HTTP \d{3}/i.test(stripped)) return ['HTTP errors (4xx / 5xx)','HTTP'];
     if (/^URL:/i.test(stripped))       return ['URL hygiene','URL:'];
+    if (/^AI crawlers blocked/i.test(stripped))      return ['AI crawlers blocked in robots.txt','AI crawlers blocked'];
+    if (/^AI training bots blocked/i.test(stripped)) return ['AI training bots blocked in robots.txt','AI training bots blocked'];
+    if (/^Search engines blocked/i.test(stripped))   return ['Search engines blocked in robots.txt','Search engines blocked'];
     return [stripped, stripped];
   };
   const groupsBySev = { error: new Map(), warn: new Map(), info: new Map() };
@@ -2674,6 +2680,9 @@ function _scRenderSeverityPanel(cat) {
     }
     if (/^HTTP \d{3}/i.test(stripped)) return ['HTTP errors (4xx / 5xx)', 'HTTP'];
     if (/^URL:/i.test(stripped))       return ['URL hygiene', 'URL:'];
+    if (/^AI crawlers blocked/i.test(stripped))      return ['AI crawlers blocked in robots.txt', 'AI crawlers blocked'];
+    if (/^AI training bots blocked/i.test(stripped)) return ['AI training bots blocked in robots.txt', 'AI training bots blocked'];
+    if (/^Search engines blocked/i.test(stripped))   return ['Search engines blocked in robots.txt', 'Search engines blocked'];
     return [stripped, stripped];  // fall through — best-effort
   };
 

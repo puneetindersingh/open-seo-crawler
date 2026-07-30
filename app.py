@@ -175,24 +175,34 @@ def _build_robots_checker(robots_text):
     return can_fetch
 
 
-# Well-known AI crawler user-agents (2026). Blocking these removes the site from
-# AI answer engines (ChatGPT, AI, Perplexity, Google AI Overviews) and AI
-# training sets. The search/citation bots (OClaude-SearchBot, Claude-SearchBot,
-# PerplexityBot, ChatGPT-User) are the ones that actually feed live AI answers;
-# the rest are training crawlers. Grouped only for readability — detection is flat.
+# Well-known AI crawler user-agents (2026), split by what blocking them costs.
+#
+# _AI_CRAWLER_UAS — answer/citation/assistant bots. These feed live AI answers
+# (ChatGPT, Claude, Perplexity, Google AI Overviews, Alexa, DuckAssist):
+# blocking them removes the site from AI answer surfaces, so it's a red error.
+#
+# _AI_TRAINING_UAS — training/data-collection-only crawlers (Common Crawl,
+# Bytespider, Diffbot etc.). They don't feed any live answer product, and
+# blocking them is a common, deliberate content-protection choice — flagging
+# that as an error is a false positive (a site can allow every answer bot and
+# still block these). Surfaced as an info-level note instead.
 _AI_CRAWLER_UAS = [
-    'GPTBot', 'OClaude-SearchBot', 'ChatGPT-User',            # OpenAI
+    'GPTBot', 'OAI-SearchBot', 'ChatGPT-User',            # OpenAI
     'ClaudeBot', 'Claude-Web', 'Claude-SearchBot',         # Anthropic
     'Claude-User', 'anthropic-ai',
     'Google-Extended',                                     # Google AI / Gemini
     'PerplexityBot', 'Perplexity-User',                    # Perplexity
-    'CCBot',                                               # Common Crawl (feeds many models)
-    'Bytespider',                                          # ByteDance
-    'Applebot-Extended',                                   # Apple Intelligence
-    'Amazonbot',                                           # Amazon
+    'Amazonbot',                                           # Amazon / Alexa
     'Meta-ExternalAgent', 'meta-externalagent',            # Meta AI
-    'cohere-ai', 'Diffbot', 'AI2Bot', 'MistralClaude-User',
-    'DuckAssistBot', 'YouBot', 'Timpibot', 'ImagesiftBot', 'Omgilibot',
+    'MistralAI-User',                                      # Mistral / Le Chat
+    'DuckAssistBot', 'YouBot',                             # DuckDuckGo / You.com
+]
+_AI_TRAINING_UAS = [
+    'CCBot',                                               # Common Crawl (training corpora)
+    'Bytespider',                                          # ByteDance scraper
+    'Applebot-Extended',                                   # Apple training opt-out token
+    'cohere-ai', 'Diffbot', 'AI2Bot',
+    'Timpibot', 'ImagesiftBot', 'Omgilibot',
 ]
 # Classic search-engine crawlers. Blocking these is almost always a mistake and
 # removes the site from normal (blue-link) search results entirely.
@@ -245,9 +255,11 @@ def _robots_root_blocked(group):
 def _analyze_robots_txt(robots_text):
     """Inspect robots.txt for crawler-blocking that hurts SEO / AI visibility.
 
-    Returns a list of human-readable issue strings. Both blocking AI crawlers and
-    blocking search engines are surfaced as red errors (see the sev() classifier);
-    AI blocking is the bigger commercial problem as AI answer engines grow.
+    Returns a list of human-readable issue strings. Blocking answer-engine AI
+    bots or search engines is a red error (see the sev() classifier); blocking
+    training-only crawlers (CCBot, Bytespider etc.) is a deliberate policy
+    choice and is reported as a separate, info-level issue string so it never
+    trips the error badge.
     """
     issues = []
     if not robots_text:
@@ -262,27 +274,48 @@ def _analyze_robots_txt(robots_text):
         return _robots_root_blocked(star)  # no own group -> falls back to the * group
 
     # Cloudflare-style Content-Signal opt-out (e.g. "search=yes,ai-train=no").
-    signal_block = False
+    # ai-input=no cuts the site out of live AI answers (RAG/grounding) — answer
+    # tier. ai-train=no only opts out of model training — training tier.
+    input_signal = train_signal = False
     for raw in robots_text.splitlines():
         l = raw.split('#', 1)[0].strip().lower().replace(' ', '')
-        if l.startswith('content-signal') and ('ai-train=no' in l or 'ai-input=no' in l):
-            signal_block = True
+        if l.startswith('content-signal'):
+            if 'ai-input=no' in l:
+                input_signal = True
+            if 'ai-train=no' in l:
+                train_signal = True
 
-    # AI crawlers (de-duped, original casing preserved).
-    seen, ai_names = set(), []
-    for ua in _AI_CRAWLER_UAS:
-        if is_blocked(ua) and ua.lower() not in seen:
-            seen.add(ua.lower())
-            ai_names.append(ua)
-    if ai_names or signal_block:
+    def blocked_names(ua_list):
+        seen, names = set(), []
+        for ua in ua_list:
+            if is_blocked(ua) and ua.lower() not in seen:
+                seen.add(ua.lower())
+                names.append(ua)
+        return names
+
+    # Answer/citation AI bots — blocking these removes the site from AI answers.
+    ai_names = blocked_names(_AI_CRAWLER_UAS)
+    if ai_names or input_signal:
         if ai_names:
             shown = ai_names[:10]
             if len(ai_names) > 10:
                 shown.append(f'+{len(ai_names) - 10} more')
-            tail = ' (+ Content-Signal ai-train=no)' if signal_block else ''
+            tail = ' (+ Content-Signal ai-input=no)' if input_signal else ''
             issues.append('AI crawlers blocked in robots.txt — ' + ', '.join(shown) + tail)
         else:
-            issues.append('AI crawlers blocked in robots.txt — Content-Signal set to ai-train/ai-input "no"')
+            issues.append('AI crawlers blocked in robots.txt — Content-Signal set to ai-input "no"')
+
+    # Training-only crawlers — blocking these does not affect AI answer
+    # visibility; usually deliberate. Info-level note, distinct issue string.
+    train_names = blocked_names(_AI_TRAINING_UAS)
+    if train_names or train_signal:
+        if train_names:
+            tail = ' (+ Content-Signal ai-train=no)' if train_signal else ''
+            issues.append('AI training bots blocked in robots.txt — ' + ', '.join(train_names) + tail
+                          + ' — training/data-collection only; AI answer visibility is not affected')
+        else:
+            issues.append('AI training bots blocked in robots.txt — Content-Signal ai-train=no'
+                          + ' — training opt-out only; AI answer visibility is not affected')
 
     # Classic search engines.
     blocked_se = [ua for ua in _SEARCH_ENGINE_UAS if is_blocked(ua)]

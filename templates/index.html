@@ -211,7 +211,7 @@
       </div>
 
       <label class="check"><input type="checkbox" id="crawler-render-js" onchange="_scToggleCompareNoJs(this.checked)" /> Render JS (Playwright, slower)</label>
-      <label class="check" id="crawler-compare-no-js-row" style="display:none;padding-left:22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;" title="Crawl every page in BOTH modes — JS-rendered (Playwright) AND raw HTML (no JS). The diff shows which pages have content invisible to AI crawlers (ChatGPT, AI, Perplexity, Google-Extended) which mostly don't execute JS.">
+      <label class="check" id="crawler-compare-no-js-row" style="display:none;padding-left:22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;" title="Crawl every page in BOTH modes — JS-rendered (Playwright) AND raw HTML (no JS). The diff shows which pages have content invisible to AI crawlers (ChatGPT, Claude, Perplexity, Google-Extended) which mostly don't execute JS.">
         <input type="checkbox" id="crawler-compare-no-js" /> Compare with non-JS HTML <small>(diff per page; flags JS-only content)</small>
       </label>
       <label class="check"><input type="checkbox" id="crawler-ignore-robots" /> Ignore robots.txt</label>
@@ -302,7 +302,8 @@
       </div>
 
       <div class="cat-label">Issues</div>
-      <div class="ci-cat" data-cat="AI crawlers blocked" onclick="selectCategory('AI crawlers blocked')" title="robots.txt blocks AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended) — site can't appear in ChatGPT, AI, Perplexity or Google AI Overviews"><span>AI Crawlers Blocked</span><span class="ci-count err" data-count="AI crawlers blocked">0</span></div>
+      <div class="ci-cat" data-cat="AI crawlers blocked" onclick="selectCategory('AI crawlers blocked')" title="robots.txt blocks AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended) — site can't appear in ChatGPT, Claude, Perplexity or Google AI Overviews"><span>AI Crawlers Blocked</span><span class="ci-count err" data-count="AI crawlers blocked">0</span></div>
+      <div class="ci-cat" data-cat="AI training bots blocked" onclick="selectCategory('AI training bots blocked')" title="robots.txt blocks training-only crawlers (CCBot, Bytespider) — does not affect AI answer visibility; usually a deliberate content-protection choice"><span>AI Training Bots Blocked</span><span class="ci-count info" data-count="AI training bots blocked">0</span></div>
       <div class="ci-cat" data-cat="Search engines blocked" onclick="selectCategory('Search engines blocked')" title="robots.txt blocks Googlebot/Bingbot or Disallow: / for all bots — removes the site from normal search results"><span>Search Engines Blocked</span><span class="ci-count err" data-count="Search engines blocked">0</span></div>
       <div class="ci-cat" data-cat="Missing meta description" onclick="selectCategory('Missing meta description')"><span>Missing Meta Desc</span><span class="ci-count err" data-count="Missing meta description">0</span></div>
       <div class="ci-cat" data-cat="Meta desc too long" onclick="selectCategory('Meta desc too long')"><span>Meta Too Long</span><span class="ci-count warn" data-count="Meta desc too long">0</span></div>
