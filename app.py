@@ -1379,7 +1379,18 @@ def _detect_waf_block(resp):
     return None
 
 
-def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, capture_no_js=False):
+def _is_challenge_response(resp):
+    """True if a 403/503 is a solvable bot interstitial (vs a hard WAF block)."""
+    if resp is None:
+        return False
+    try:
+        from challenge_browser import is_challenge_response
+        return is_challenge_response(resp.status_code, dict(resp.headers), resp.text)
+    except Exception:
+        return False
+
+
+def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, capture_no_js=False, challenge_browser=None):
     """Crawl a single page and return audit data dict.
 
     If ``pw_page`` (a live Playwright page) is provided, the HTML body will be
@@ -1417,6 +1428,8 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         retries_done = 0
         last_exc = None
         ssl_bypassed = False
+        challenge_html = None
+        challenge_status = None
         for attempt in range(3):  # 1 primary + 2 retries
             try:
                 resp = session.get(url, timeout=15, allow_redirects=True)
@@ -1476,6 +1489,28 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
                     if _waf:
                         result['_waf_block'] = _waf
                         break
+                    # Cloudflare-style managed challenge. Testing showed no UA
+                    # (Googlebot/bingbot/Chrome/Firefox), no header set and no
+                    # headless browser gets through — only a headed one — and
+                    # the host issues no clearance cookie, so every page needs
+                    # the browser. Skip the UA swap entirely here: it cannot
+                    # work and each attempt is another 403 against the host.
+                    if _is_challenge_response(resp):
+                        result['cf_challenge'] = True
+                        if challenge_browser is not None:
+                            _ch_html, _ch_status, _ch_err = challenge_browser.fetch(url)
+                            if _ch_html and not _ch_err:
+                                challenge_html = _ch_html
+                                challenge_status = _ch_status or 200
+                                result['challenge_solved'] = True
+                            else:
+                                result['issues'].append(
+                                    'Bot challenge (Cloudflare) could not be solved — page not crawlable: '
+                                    + (_ch_err or 'unknown error'))
+                        else:
+                            result['issues'].append(
+                                'Bot challenge (Cloudflare) blocked this page — enable "Solve bot challenges" to crawl this site')
+                        break
                     # One UA-swap attempt to dodge Cloudflare-style fingerprinting.
                     # Only swap UA on the first attempt so we don't keep cycling.
                     if attempt == 0:
@@ -1506,7 +1541,7 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         if ssl_bypassed:
             result['ssl_verify_failed'] = True
             result['issues'].append('SSL certificate verification failed (incomplete chain / untrusted cert) — crawled with verification disabled; fix the cert chain')
-        result['status_code'] = resp.status_code
+        result['status_code'] = challenge_status if challenge_html else resp.status_code
         result['response_time'] = round(resp.elapsed.total_seconds(), 2)
         result['content_type'] = resp.headers.get('Content-Type', '')[:50]
         result['last_modified'] = resp.headers.get('Last-Modified', '')[:60]
@@ -1630,9 +1665,11 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         if result['x_robots_tag'] and 'noindex' in result['x_robots_tag'].lower():
             result['indexable'] = False
 
-        if resp.status_code >= 400:
-            result['error'] = f'HTTP {resp.status_code}'
-            result['issues'].append(f'HTTP {resp.status_code} error')
+        # Judge on the effective status: a solved challenge carries the real
+        # document even though the original response was a 403 interstitial.
+        if result['status_code'] >= 400:
+            result['error'] = f"HTTP {result['status_code']}"
+            result['issues'].append(f"HTTP {result['status_code']} error")
             return result
 
         # Skip non-HTML
@@ -1642,7 +1679,7 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
             return result
 
         # Limit body size
-        raw_html = resp.text[:5_000_000]
+        raw_html = (challenge_html or resp.text)[:5_000_000]
         # Keep pre-JS HTML for the JS-vs-non-JS diff (cheap; one extra ref).
         pre_js_html = raw_html
         result['js_rendered'] = False
@@ -1655,7 +1692,10 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # we still read .content() regardless so we don't fall back to the
         # empty pre-JS HTML. That silent fallback was why "No analytics
         # detected" fired on JS-rendered sites like Wix.
-        if pw_page is not None and ('text/html' in ctype or 'application/xhtml' in ctype):
+        # Skipped when the body came from the challenge browser: that HTML is
+        # already browser-rendered, and re-fetching through the headless
+        # renderer would just land back on the interstitial.
+        if pw_page is not None and not challenge_html and ('text/html' in ctype or 'application/xhtml' in ctype):
             try:
                 pw_page.goto(resp.url, wait_until='load', timeout=20000)
             except Exception as e:
@@ -3042,6 +3082,8 @@ def crawl_site():
         ignore_robots = bool(cfg.get('ignore_robots', False))
         ignore_noindex = bool(cfg.get('ignore_noindex', False))
         compare_no_js = bool(cfg.get('compare_no_js', False)) and render_js
+        user_agent_opt = cfg.get('user_agent') or ''
+        solve_challenges = bool(cfg.get('solve_challenges', True))
     else:
         seed_url = (data.get('url', '') or '').strip()
         if not seed_url:
@@ -3060,6 +3102,12 @@ def crawl_site():
         # JS vs non-JS compare. Gated on render_js — only meaningful when
         # we have something to compare against.
         compare_no_js = bool(data.get('compare_no_js', False)) and render_js
+        # Crawl identity. Accepts a preset key ('googlebot', 'bingbot', ...) or
+        # a raw UA string; blank keeps the default Chrome identity.
+        user_agent_opt = data.get('user_agent') or ''
+        # Headed-browser fallback for hosts behind a bot challenge. On by
+        # default: it only launches if a challenge is actually encountered.
+        solve_challenges = bool(data.get('solve_challenges', True))
     # Concurrent workers. Default 5 matches Screaming Frog. Clamped to [1, 20].
     # When render_js is on, Playwright can't share a single page across threads —
     # force single-worker mode so page state stays consistent.
@@ -3222,6 +3270,42 @@ def crawl_site():
             'Sec-Fetch-User': '?1',
         })
 
+        # Crawl identity override (Googlebot/bingbot/mobile/custom). Applied to
+        # the requests session and mirrored onto the browsers below so every
+        # fetch path presents the same agent.
+        crawl_ua = session.headers['User-Agent']
+        if user_agent_opt:
+            try:
+                from challenge_browser import resolve_user_agent
+                _ua = resolve_user_agent(user_agent_opt)
+            except Exception:
+                _ua = str(user_agent_opt).strip() or None
+            if _ua:
+                crawl_ua = _ua
+                session.headers['User-Agent'] = _ua
+                # The Sec-Ch-Ua hints describe desktop Chrome; sending them
+                # alongside a Googlebot/Firefox agent is self-contradictory and
+                # is itself a bot signal, so drop them for non-Chrome agents.
+                if 'Chrome/' not in _ua:
+                    for _h in ('Sec-Ch-Ua', 'Sec-Ch-Ua-Mobile', 'Sec-Ch-Ua-Platform'):
+                        session.headers.pop(_h, None)
+                yield f"data: {json.dumps({'type': 'info', 'msg': f'Crawling as: {_ua[:70]}'})}\n\n"
+
+        # Headed-browser fallback for bot challenges. Constructed eagerly but
+        # launches lazily on the first challenge, so a normal crawl never pays
+        # for it. Runs on its own virtual display — no window is ever shown.
+        challenge_browser = None
+        if solve_challenges:
+            try:
+                from challenge_browser import ChallengeBrowser
+                challenge_browser = ChallengeBrowser(
+                    user_agent=crawl_ua,
+                    delay=max(crawl_delay, 2.0),
+                )
+            except Exception as e:
+                app.logger.warning(f"[crawler] challenge browser unavailable: {e}")
+                challenge_browser = None
+
         # Launch Playwright browser once per crawl if JS rendering requested
         pw_ctx = None
         pw_browser = None
@@ -3233,7 +3317,7 @@ def crawl_site():
                 pw_browser = pw_ctx.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
                 pw_page = pw_browser.new_page(
                     viewport={'width': 1280, 'height': 900},
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36'
+                    user_agent=crawl_ua,
                 )
                 pw_page.set_default_timeout(20000)
                 yield f"data: {json.dumps({'type': 'info', 'msg': 'JS rendering enabled (Playwright). Crawl will be 3-5x slower.'})}\n\n"
@@ -3364,7 +3448,7 @@ def crawl_site():
         def _fetch_job(url, depth):
             """Worker: politeness-wait, fetch, return (url, depth, page_data)."""
             _wait_host_turn(url)
-            pd = _crawl_page(url, session, domain, pw_page=pw_page, ignore_noindex=ignore_noindex, capture_no_js=compare_no_js)
+            pd = _crawl_page(url, session, domain, pw_page=pw_page, ignore_noindex=ignore_noindex, capture_no_js=compare_no_js, challenge_browser=challenge_browser)
             pd['depth'] = depth
             _adjust_host_backoff(url, pd)
             return url, depth, pd
@@ -3590,9 +3674,18 @@ def crawl_site():
             app.logger.info(f"[crawler] {crawl_id} suspended (resumable for {SUSPENDED_CRAWL_TTL//60}m): {len(results)} done, {len(queue)} queued")
             session.close()
             _teardown_pw(pw_page, pw_browser, pw_ctx)
+            if challenge_browser is not None:
+                challenge_browser.close()
             ACTIVE_CRAWL_RULES.pop(crawl_id, None)
             ACTIVE_CRAWL_LIMITS.pop(crawl_id, None)
             return
+        finally:
+            # The challenge browser owns an Xvfb display and a Chrome process.
+            # Close it on every exit path — an unhandled error here would
+            # otherwise leak both for the lifetime of the app. close() is
+            # idempotent, so the explicit calls below stay harmless.
+            if challenge_browser is not None:
+                challenge_browser.close()
 
         session.close()
         _teardown_pw(pw_page, pw_browser, pw_ctx)

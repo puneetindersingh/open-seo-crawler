@@ -731,6 +731,8 @@ function startCrawl(opts) {
     ignore_noindex: document.getElementById('crawler-ignore-noindex').checked,
     include_patterns: document.getElementById('crawler-include').value.trim(),
     exclude_patterns: document.getElementById('crawler-exclude').value.trim(),
+    user_agent: _scSelectedUserAgent(),
+    solve_challenges: document.getElementById('crawler-solve-challenges')?.checked !== false,
   };
   if (resumeFromId) reqBody.resume_crawl_id = resumeFromId;
 
@@ -3009,6 +3011,20 @@ function _scToggleCompareNoJs(checked) {
   }
 }
 window._scToggleCompareNoJs = _scToggleCompareNoJs;
+
+function _scToggleCustomUa(value) {
+  const box = document.getElementById('crawler-user-agent-custom');
+  if (!box) return;
+  box.style.display = value === '__custom' ? 'block' : 'none';
+  if (value === '__custom') box.focus();
+}
+window._scToggleCustomUa = _scToggleCustomUa;
+
+function _scSelectedUserAgent() {
+  const sel = document.getElementById('crawler-user-agent')?.value || '';
+  if (sel !== '__custom') return sel;
+  return (document.getElementById('crawler-user-agent-custom')?.value || '').trim();
+}
 
 window.runNearDupAnalysis = async function() {
   const thresholdEl = document.getElementById('crawler-neardup-threshold');

@@ -210,7 +210,27 @@
                oninput="document.getElementById('crawler-depth-label').textContent=this.value" />
       </div>
 
+      <div class="slider-row">
+        <label for="crawler-user-agent">User agent</label>
+        <select id="crawler-user-agent" onchange="_scToggleCustomUa(this.value)" style="width:100%;"
+                title="Identity sent with every request. Use Googlebot/bingbot to see what a search engine is served (cloaking checks). Note: this does not get past bot challenges — verified bots are matched by IP, not by user-agent string.">
+          <option value="">Chrome (default)</option>
+          <option value="chrome-mobile">Chrome — mobile</option>
+          <option value="googlebot">Googlebot</option>
+          <option value="googlebot-mobile">Googlebot — smartphone</option>
+          <option value="bingbot">Bingbot</option>
+          <option value="firefox">Firefox</option>
+          <option value="safari">Safari</option>
+          <option value="__custom">Custom…</option>
+        </select>
+        <input type="text" id="crawler-user-agent-custom" placeholder="Paste a custom user-agent string"
+               style="width:100%;margin-top:4px;display:none;" />
+      </div>
+
       <label class="check"><input type="checkbox" id="crawler-render-js" onchange="_scToggleCompareNoJs(this.checked)" /> Render JS (Playwright, slower)</label>
+      <label class="check" title="Some hosts answer every request with a Cloudflare 'Just a moment...' interstitial that returns 403 to any normal crawler. Changing the user-agent does not help, and neither does headless Chrome. When this is on, those pages are re-fetched through a real browser on a hidden virtual display (no window appears). It only starts if a challenge is actually hit, and those pages are fetched one at a time with a delay, so a challenged site crawls slowly. Requires playwright + xvfb.">
+        <input type="checkbox" id="crawler-solve-challenges" checked /> Solve bot challenges <small>(headed browser fallback; slow, only on 403 challenge)</small>
+      </label>
       <label class="check" id="crawler-compare-no-js-row" style="display:none;padding-left:22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;" title="Crawl every page in BOTH modes — JS-rendered (Playwright) AND raw HTML (no JS). The diff shows which pages have content invisible to AI crawlers (ChatGPT, Claude, Perplexity, Google-Extended) which mostly don't execute JS.">
         <input type="checkbox" id="crawler-compare-no-js" /> Compare with non-JS HTML <small>(diff per page; flags JS-only content)</small>
       </label>
