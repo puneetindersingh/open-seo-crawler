@@ -654,11 +654,121 @@ window.applyCmsRecs = function() {
 // targeting the suspended state on the server.
 let crawlerLastCrawlId = null;
 
+// URLs resolved from the sitemap the user pointed us at. Sent to /crawl as
+// the start list and reused for the post-crawl sitemap diff. Held in memory
+// only — never written to a saved crawl.
+let crawlerSeedUrls = [];
+let crawlerSeedSitemapName = '';
+// 'site' = start from a website URL and follow links (default).
+// 'sitemap' = start from a sitemap URL; its pages are queued up front and the
+// crawler still follows links from them.
+let crawlerStartSource = 'site';
+
+function _scSetStartSource(mode) {
+  crawlerStartSource = (mode === 'sitemap') ? 'sitemap' : 'site';
+  const siteMode = crawlerStartSource === 'site';
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+  show('crawler-src-site-row', siteMode);
+  show('crawler-src-sitemap-row', !siteMode);
+  [['crawler-src-site-btn', siteMode], ['crawler-src-sitemap-btn', !siteMode]].forEach(([id, on]) => {
+    const b = document.getElementById(id);
+    if (!b) return;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  // Leaving sitemap mode drops the loaded list — otherwise a website-URL crawl
+  // would silently inherit a start list the user can no longer see.
+  if (siteMode && crawlerSeedUrls.length) crawlerClearSitemapSeed();
+  const focusId = siteMode ? 'crawler-url' : 'crawler-sitemap-url';
+  const f = document.getElementById(focusId);
+  if (f) f.focus();
+}
+
+function _scToggleAuthFields(on) {
+  const box = document.getElementById('crawler-auth-fields');
+  if (box) box.style.display = on ? '' : 'none';
+  if (on) { const u = document.getElementById('crawler-auth-user'); if (u) u.focus(); }
+}
+
+// Credentials for the current site, or null. Deliberately read live from the
+// inputs (never cached, never persisted) so nothing lingers after the user
+// clears them.
+function _scBasicAuth() {
+  const box = document.getElementById('crawler-use-auth');
+  if (!box || !box.checked) return null;
+  const user = (document.getElementById('crawler-auth-user')?.value || '').trim();
+  if (!user) return null;
+  return { username: user, password: document.getElementById('crawler-auth-pass')?.value || '' };
+}
+
+function _scSeedStatus(html, tone) {
+  const el = document.getElementById('crawler-sitemap-seed-status');
+  if (!el) return;
+  el.style.display = html ? '' : 'none';
+  el.style.color = tone === 'error' ? '#b91c1c' : (tone === 'ok' ? '#15803d' : 'var(--text-muted,#64748b)');
+  el.innerHTML = html || '';
+}
+
+// Fetch + parse a sitemap URL server-side (it handles sitemap indexes, .gz
+// and plain-text lists) and keep the URL list for the next crawl. Runs with
+// the basic-auth credentials below, so a sitemap behind the same staging
+// password as the site loads fine.
+async function crawlerLoadSitemapUrl() {
+  const inp = document.getElementById('crawler-sitemap-url');
+  const url = (inp && inp.value || '').trim();
+  if (!url) { if (inp) inp.focus(); return; }
+  const btn = document.getElementById('crawler-sitemap-load');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  _scSeedStatus('Fetching ' + _smEscape(url) + '…');
+  try {
+    const auth = _scBasicAuth();
+    const r = await fetch('/sitemap/fetch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(auth ? { url, basic_auth: auth } : { url }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) { crawlerClearSitemapSeed(d.error || ('HTTP ' + r.status)); return; }
+    crawlerSeedUrls = d.urls || [];
+    crawlerSeedSitemapName = d.source || url;
+    // The site under audit is whatever host the sitemap's URLs live on. Mirror
+    // it into the (hidden) website-URL field so robots.txt preview, the retry
+    // banner and saved-crawl naming all keep working unchanged.
+    let origin = '';
+    try { origin = new URL(crawlerSeedUrls[0]).origin; } catch {}
+    const siteField = document.getElementById('crawler-url');
+    if (origin && siteField) { siteField.value = origin; crawlerFetchRobots(true); }
+    const warn = (d.warnings || []).length
+      ? '<br><span style="color:#b45309;">' + _smEscape(d.warnings.join(' ')) + '</span>' : '';
+    _scSeedStatus(
+      '<b>' + crawlerSeedUrls.length.toLocaleString() + '</b> URL' + (crawlerSeedUrls.length === 1 ? '' : 's')
+      + ' found' + (origin ? ' on ' + _smEscape(origin.replace(/^https?:\/\//, '')) : '')
+      + ' — off-site and non-page URLs are dropped when the crawl starts. '
+      + '<a href="#" onclick="event.preventDefault();crawlerClearSitemapSeed()">Clear</a>' + warn, 'ok');
+  } catch (e) {
+    crawlerClearSitemapSeed('Sitemap fetch failed: ' + (e && e.message || 'network error'));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Load'; }
+  }
+}
+
+function crawlerClearSitemapSeed(errMsg) {
+  crawlerSeedUrls = [];
+  crawlerSeedSitemapName = '';
+  _scSeedStatus(errMsg ? _smEscape(errMsg) : '', errMsg ? 'error' : '');
+}
+
 function startCrawl(opts) {
   opts = opts || {};
   const resumeFromId = opts.resumeFromId || null;
   const url = document.getElementById('crawler-url').value.trim();
-  if (!url) { document.getElementById('crawler-url').focus(); return; }
+  if (crawlerStartSource === 'sitemap' && !crawlerSeedUrls.length) {
+    _scSeedStatus('Load a sitemap first — press Load next to the sitemap URL.', 'error');
+    const smInp = document.getElementById('crawler-sitemap-url');
+    if (smInp) smInp.focus();
+    return;
+  }
+  if (!url && !crawlerSeedUrls.length) { document.getElementById('crawler-url').focus(); return; }
 
   crawlerAbort = new AbortController();
   markBusy('site-crawler', resumeFromId ? `Resuming crawl of ${url}` : `Crawling ${url}`);
@@ -734,6 +844,10 @@ function startCrawl(opts) {
     user_agent: _scSelectedUserAgent(),
     solve_challenges: document.getElementById('crawler-solve-challenges')?.checked !== false,
   };
+  const _auth = _scBasicAuth();
+  if (_auth) reqBody.basic_auth = _auth;
+  // Only on a fresh crawl — a resume already has the queue it left off with.
+  if (!resumeFromId && crawlerSeedUrls.length) reqBody.seed_urls = crawlerSeedUrls;
   if (resumeFromId) reqBody.resume_crawl_id = resumeFromId;
 
   fetch('/crawl', {
@@ -1350,7 +1464,16 @@ window.analyseSitemap = async function(opts) {
   catch { _smSetStatus('prompt', { reason: 'Could not detect domain from crawl results.' }); return; }
   _smSetStatus('loading');
   const body = { domain, results: crawlerResults, inlinks: crawlerInlinks || {} };
+  const _auth = _scBasicAuth();
+  if (_auth) body.basic_auth = _auth;
   if (opts && opts.sitemap_url) body.sitemap_url = opts.sitemap_url;
+  // An uploaded sitemap is the one the user pointed us at, so diff against it
+  // rather than re-discovering (discovery is usually what failed on a staging
+  // host in the first place). An explicit URL typed into the prompt wins.
+  else if (crawlerSeedUrls.length) {
+    body.sitemap_urls = crawlerSeedUrls;
+    body.sitemap_label = crawlerSeedSitemapName || 'uploaded sitemap';
+  }
   try {
     const r = await fetch('/sitemap-analyse', {
       method: 'POST',
@@ -4034,7 +4157,7 @@ function crawlFinished() {
 // instead of guessing exclude patterns from the platform, just SHOW what
 // robots.txt says so the user can see and add their own rules below.
 let _crawlerRobotsLast = '';
-async function crawlerFetchRobots() {
+async function crawlerFetchRobots(force) {
   const inp = document.getElementById('crawler-url');
   const out = document.getElementById('crawler-robots-preview');
   const status = document.getElementById('crawler-robots-status');
@@ -4048,11 +4171,18 @@ async function crawlerFetchRobots() {
   }
   let origin = '';
   try { origin = new URL(url.startsWith('http') ? url : 'https://' + url).origin; } catch { return; }
-  if (origin === _crawlerRobotsLast) return;
+  if (origin === _crawlerRobotsLast && !force) return;
   _crawlerRobotsLast = origin;
   if (status) status.textContent = 'fetching…';
   try {
-    const r = await fetch('/fetch-robots-txt?url=' + encodeURIComponent(origin));
+    // POSTed rather than sent as a query string so credentials for a
+    // protected staging host stay out of access logs.
+    const _rAuth = _scBasicAuth();
+    const r = await fetch('/fetch-robots-txt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_rAuth ? { url: origin, basic_auth: _rAuth } : { url: origin }),
+    });
     const d = await r.json();
     if (d.error) {
       out.value = '';
@@ -4072,6 +4202,14 @@ async function crawlerFetchRobots() {
   }
 }
 
+(function _wireSitemapUrlEnter() {
+  const inp = document.getElementById('crawler-sitemap-url');
+  if (!inp) return;
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); crawlerLoadSitemapUrl(); }
+  });
+})();
+
 (function _wireRobotsAutoFetch() {
   const inp = document.getElementById('crawler-url');
   if (!inp) return;
@@ -4080,7 +4218,8 @@ async function crawlerFetchRobots() {
     if (t) clearTimeout(t);
     t = setTimeout(() => crawlerFetchRobots(), 600);
   });
-  inp.addEventListener('blur', crawlerFetchRobots);
+  // Wrapped: the raw listener would pass the event object as `force`.
+  inp.addEventListener('blur', () => crawlerFetchRobots());
   if (inp.value && inp.value.trim()) setTimeout(crawlerFetchRobots, 200);
 })();
 
@@ -4182,7 +4321,7 @@ window.scBulkRecrawlVisible = async function(btn) {
         const resp = await fetch('/recrawl-url', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ url })
+          body: JSON.stringify(Object.assign({ url }, _scBasicAuth() ? { basic_auth: _scBasicAuth() } : {}))
         });
         const fresh = await resp.json();
         if (fresh.error) { errors++; }
@@ -4247,7 +4386,7 @@ async function scRecrawlUrl(btn, url) {
     const resp = await fetch('/recrawl-url', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ url })
+      body: JSON.stringify(Object.assign({ url }, _scBasicAuth() ? { basic_auth: _scBasicAuth() } : {}))
     });
     const fresh = await resp.json();
     if (fresh.error) { console.warn('Recrawl error:', fresh.error); return; }

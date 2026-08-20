@@ -17,6 +17,7 @@ Features:
 """
 from flask import Flask, render_template, request, Response, stream_with_context, jsonify, send_file
 import requests
+import base64
 import json
 import os
 import re as _re
@@ -87,6 +88,71 @@ def _http_head(url, **kwargs):
         r = requests.head(url, **kwargs)
         r.ssl_bypassed = True
         return r
+
+
+# =============================================================================
+# HTTP basic authentication
+# Staging builds, pre-launch sites and client UAT environments are routinely
+# put behind a server-level basic-auth prompt. Without credentials every fetch
+# comes back 401, the crawl reports a one-page site, and the tool is unusable
+# on exactly the environments that most need auditing.
+# =============================================================================
+
+def _basic_auth_creds(data):
+    """Pull {'username', 'password'} out of a request body, or None.
+
+    Accepts the nested form ({"basic_auth": {"username": ..., "password": ...}})
+    and the flat one ({"auth_user": ..., "auth_pass": ...}) so form posts can
+    send credentials too. A blank username means "no auth" — an empty password
+    is legitimate, an empty username never is.
+    """
+    if not isinstance(data, dict):
+        return None
+    ba = data.get('basic_auth')
+    if isinstance(ba, dict):
+        user = (ba.get('username') or '').strip()
+        pwd = ba.get('password') or ''
+    else:
+        user = (data.get('auth_user') or '').strip()
+        pwd = data.get('auth_pass') or ''
+    if not user:
+        return None
+    return {'username': user, 'password': pwd}
+
+
+class _HostScopedBasicAuth(requests.auth.AuthBase):
+    """Basic credentials pinned to a set of hosts.
+
+    Plain ``session.auth`` attaches Authorization to EVERY request the session
+    makes. A crawl legitimately leaves the audited host — redirect targets and
+    any absolute URL a page happens to point at — and posting a client's
+    staging password to a third party is both a leak and a practical problem
+    (some CDNs 403 a request carrying an unexpected Authorization header).
+    So the header is scoped to the crawled host plus its www / non-www twin,
+    which is exactly what ``_bare_host`` normalisation gives us.
+    """
+
+    def __init__(self, username, password, hosts):
+        self.username = username or ''
+        self.password = password or ''
+        self.hosts = {h for h in (_bare_host(x) for x in hosts) if h}
+
+    def __call__(self, r):
+        if _bare_host(urlparse(r.url).netloc) in self.hosts:
+            token = base64.b64encode(
+                f'{self.username}:{self.password}'.encode('utf-8')).decode('ascii')
+            r.headers['Authorization'] = 'Basic ' + token
+        else:
+            # Drop anything a previous same-host hop left on the request.
+            r.headers.pop('Authorization', None)
+        return r
+
+
+def _make_auth(creds, *urls):
+    """Build a host-scoped auth object for ``urls``, or None when no creds."""
+    if not creds:
+        return None
+    return _HostScopedBasicAuth(creds.get('username'), creds.get('password'), urls)
 
 
 def _robots_pattern_match(pattern, url):
@@ -1015,7 +1081,7 @@ def detect_cms_route():
     try:
         resp = _http_get(url, timeout=10, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/132.0.0.0 Safari/537.36'
-        })
+        }, auth=_make_auth(_basic_auth_creds(data), url))
         result = detect_cms(url, resp.text, dict(resp.headers))
         if result.get('cms'):
             prof = CMS_PROFILES.get(result['cms'], {})
@@ -1669,7 +1735,18 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # document even though the original response was a 403 interstitial.
         if result['status_code'] >= 400:
             result['error'] = f"HTTP {result['status_code']}"
-            result['issues'].append(f"HTTP {result['status_code']} error")
+            if result['status_code'] in (401, 407):
+                # Server-level basic auth (staging / UAT). Nothing on the page
+                # is auditable until credentials are supplied, so name the fix
+                # instead of leaving a bare "HTTP 401 error" on every row.
+                realm = (hdrs.get('www-authenticate') or '')[:80]
+                result['auth_required'] = True
+                result['issues'].append(
+                    f"HTTP {result['status_code']} — authentication required"
+                    + (f' ({realm})' if realm else '')
+                    + '. Tick "Site requires basic auth" and enter credentials.')
+            else:
+                result['issues'].append(f"HTTP {result['status_code']} error")
             return result
 
         # Skip non-HTML
@@ -2434,7 +2511,7 @@ _SITEMAP_DEFAULT_PATHS = (
 _SITEMAP_NS = '{http://www.sitemaps.org/schemas/sitemap/0.9}'
 
 
-def _discover_sitemaps(domain):
+def _discover_sitemaps(domain, auth=None):
     """Find sitemap URLs for a domain. Tries robots.txt first, then common
     default paths. When robots.txt points at a sibling subdomain (multisite
     misconfiguration) we surface a warning AND also probe the analysed
@@ -2455,7 +2532,7 @@ def _discover_sitemaps(domain):
 
     try:
         r = _http_get(f"{domain.rstrip('/')}/robots.txt", timeout=10,
-                         headers={'User-Agent': 'Mozilla/5.0'})
+                         headers={'User-Agent': 'Mozilla/5.0'}, auth=auth)
         if r.ok and r.text:
             for line in r.text.splitlines():
                 line = line.strip()
@@ -2480,11 +2557,11 @@ def _discover_sitemaps(domain):
             url = f"{domain.rstrip('/')}{path}"
             try:
                 resp = _http_head(url, timeout=8, allow_redirects=True,
-                                     headers={'User-Agent': 'Mozilla/5.0'})
+                                     headers={'User-Agent': 'Mozilla/5.0'}, auth=auth)
                 if resp.status_code == 405:
                     resp = _http_get(url, timeout=10, allow_redirects=True,
                                         headers={'User-Agent': 'Mozilla/5.0'},
-                                        stream=True)
+                                        stream=True, auth=auth)
                     resp.close()
                 if resp.ok:
                     ct = (resp.headers.get('content-type') or '').lower()
@@ -2497,7 +2574,7 @@ def _discover_sitemaps(domain):
     return found, warnings
 
 
-def _fetch_sitemap_recursive(seed_urls, max_depth=5):
+def _fetch_sitemap_recursive(seed_urls, max_depth=5, auth=None):
     """Walk a sitemap (handling sitemap-index recursion) and collect every URL."""
     import xml.etree.ElementTree as ET
     import gzip
@@ -2514,7 +2591,8 @@ def _fetch_sitemap_recursive(seed_urls, max_depth=5):
         try:
             r = _http_get(sm_url, timeout=20,
                              headers={'User-Agent': 'Mozilla/5.0',
-                                      'Accept': 'application/xml,text/xml,*/*'})
+                                      'Accept': 'application/xml,text/xml,*/*'},
+                             auth=auth)
             if not r.ok:
                 errors.append({'sitemap': sm_url, 'error': f'http_{r.status_code}'})
                 sitemaps_meta.append({'url': sm_url, 'url_count': 0, 'error': f'http_{r.status_code}'})
@@ -2562,6 +2640,137 @@ def _fetch_sitemap_recursive(seed_urls, max_depth=5):
     for u in seed_urls:
         _walk(u, 0)
     return urls, sitemaps_meta, errors
+
+
+# Upload limits. Nothing is written to disk — the parsed URL list goes back to
+# the browser, which posts it to /crawl as the crawl's start list.
+_SITEMAP_UPLOAD_MAX_BYTES = 32 * 1024 * 1024
+_SITEMAP_SEED_CAP = 100000
+
+
+def _sm_child_text(node, name):
+    """Text of a direct child element, ignoring foreign namespaces.
+
+    Sitemap extensions (image:, video:, xhtml:) nest their own <loc>, so a
+    blind ``iter()`` over the tree would sweep image URLs into the page list.
+    Elements are matched in the sitemaps namespace or with no namespace at all
+    (plenty of hand-rolled sitemaps omit the xmlns).
+    """
+    for child in node:
+        tag = child.tag
+        if tag.startswith(_SITEMAP_NS):
+            tag = tag[len(_SITEMAP_NS):]
+        elif '}' in tag:
+            continue
+        if tag == name and child.text and child.text.strip():
+            return child.text.strip()
+    return None
+
+
+def _parse_sitemap_bytes(content, filename=''):
+    """Parse an uploaded sitemap.
+
+    Returns ``(entries, child_sitemap_urls, fmt, error)``. Handles gzip (by
+    extension OR magic bytes — browsers hand over .xml.gz undecompressed),
+    XML urlsets, XML sitemap indexes, and the plain-text sitemap format Google
+    also accepts (one URL per line; a CSV's first column works too).
+    """
+    import gzip
+    import xml.etree.ElementTree as ET
+
+    if content[:2] == b'\x1f\x8b' or filename.lower().endswith('.gz'):
+        try:
+            content = gzip.decompress(content)
+        except Exception as e:
+            return [], [], 'gzip', f'could not decompress: {str(e)[:120]}'
+
+    if content.lstrip()[:1] == b'<':
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError as e:
+            return [], [], 'xml', f'XML parse error: {str(e)[:160]}'
+        tag = root.tag.split('}', 1)[-1] if '}' in root.tag else root.tag
+        entries, children = [], []
+        for node in root:
+            loc = _sm_child_text(node, 'loc')
+            if not loc:
+                continue
+            if tag == 'sitemapindex':
+                children.append(loc)
+            else:
+                entries.append({'url': loc,
+                                'lastmod': _sm_child_text(node, 'lastmod'),
+                                'source_sitemap': filename or 'upload'})
+        if not entries and not children:
+            return [], [], tag or 'xml', 'no <loc> entries found — is this a sitemap?'
+        return entries, children, ('sitemapindex' if tag == 'sitemapindex' else 'urlset'), None
+
+    text = content.decode('utf-8', 'replace')
+    entries = [{'url': cell, 'lastmod': None, 'source_sitemap': filename or 'upload'}
+               for cell in (line.split(',')[0].strip().strip('"\'')
+                            for line in text.splitlines())
+               if cell.startswith(('http://', 'https://'))]
+    if not entries:
+        return [], [], 'text', 'no http(s) URLs found in the file'
+    return entries, [], 'text', None
+
+
+def _origin_of_first(raw):
+    """Scheme + host of the first usable URL in a seed list, or ''.
+
+    A sitemap-only crawl has no website URL to work from, so the crawl root is
+    derived from the sitemap's own contents.
+    """
+    for item in raw or []:
+        u = (item.get('url') if isinstance(item, dict) else item) or ''
+        u = str(u).strip()
+        if not u.startswith(('http://', 'https://')):
+            continue
+        try:
+            pu = urlparse(u)
+        except Exception:
+            continue
+        if pu.scheme and pu.netloc:
+            return f'{pu.scheme}://{pu.netloc}'
+    return ''
+
+
+def _normalize_seed_urls(raw, domain):
+    """Filter a user-supplied URL list down to crawlable same-site pages.
+
+    Returns ``(urls, skipped_counts)``. Off-host entries are dropped rather
+    than crawled: a sitemap listing a sibling subdomain would otherwise widen
+    the crawl to a different site without the user asking for it.
+    """
+    out, seen = [], set()
+    skipped = {'invalid': 0, 'off-host': 0, 'non-HTML': 0, 'duplicate': 0}
+    base = _bare_host(domain) if domain else ''
+    for item in raw or []:
+        u = (item.get('url') if isinstance(item, dict) else item) or ''
+        u = str(u).strip()
+        if not u.startswith(('http://', 'https://')):
+            skipped['invalid'] += 1
+            continue
+        try:
+            host = _bare_host(urlparse(u).netloc)
+        except Exception:
+            host = ''
+        if not host:
+            skipped['invalid'] += 1
+            continue
+        if base and host != base:
+            skipped['off-host'] += 1
+            continue
+        if _is_non_html_url(u):
+            skipped['non-HTML'] += 1
+            continue
+        n = _normalize_crawl_url(u)
+        if n in seen:
+            skipped['duplicate'] += 1
+            continue
+        seen.add(n)
+        out.append(n)
+    return out, skipped
 
 
 # File extensions that are NOT HTML pages — sitemaps shouldn't list them
@@ -2619,10 +2828,16 @@ def _norm_url(u):
         return u.rstrip('/').lower()
 
 
-@app.route('/fetch-robots-txt', methods=['GET'])
+@app.route('/fetch-robots-txt', methods=['GET', 'POST'])
 def fetch_robots_txt():
-    """Fetch a site's robots.txt for the URL filters preview panel."""
-    target = (request.args.get('url') or '').strip()
+    """Fetch a site's robots.txt for the URL filters preview panel.
+
+    POST (JSON) exists so basic-auth credentials for a locked-down staging
+    site can be sent in a body instead of a query string, which would end up
+    in access logs.
+    """
+    req_body = (request.get_json(silent=True) or {}) if request.method == 'POST' else {}
+    target = (req_body.get('url') or request.args.get('url') or '').strip()
     if not target:
         return jsonify({'error': 'url required'}), 400
     if not target.startswith('http'):
@@ -2634,7 +2849,8 @@ def fetch_robots_txt():
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         resp = _http_get(robots_url, timeout=10,
                             headers={'User-Agent': 'Mozilla/5.0 (compatible; OpenSEOCrawler-RobotsPreview)'},
-                            allow_redirects=True)
+                            allow_redirects=True,
+                            auth=_make_auth(_basic_auth_creds(req_body), robots_url))
         body = (resp.text or '')[:20000]
         return jsonify({
             'url': robots_url,
@@ -2646,7 +2862,6 @@ def fetch_robots_txt():
         return jsonify({'error': str(e)[:200]}), 200
 
 
-@app.route('/sitemap-analyse', methods=['POST'])
 def _bare_host(url):
     """Normalise a URL/domain to a bare host for matching: strip scheme,
     www., path and trailing slash."""
@@ -2691,11 +2906,15 @@ def _foreign_host_warning(foreign_hosts, domain):
             f"so they are not orphans of this crawl.")
 
 
+@app.route('/sitemap-analyse', methods=['POST'])
 def sitemap_analyse():
     """Discover the site's sitemap(s) and diff against a crawl.
 
     Body: {"domain": "https://example.com", "results": [...page rows...],
            "inlinks": {url: [source_urls...]}}
+    Optional: "sitemap_url" (analyse this one instead of discovering),
+    "sitemap_urls" + "sitemap_label" (diff against a sitemap the user
+    uploaded — nothing is fetched), "basic_auth" for protected hosts.
     """
     data = request.get_json() or {}
     domain = (data.get('domain') or '').rstrip('/')
@@ -2704,6 +2923,8 @@ def sitemap_analyse():
     results = data.get('results') or []
     inlinks_map = data.get('inlinks') or {}
     manual_sm = (data.get('sitemap_url') or '').strip()
+    uploaded_urls = data.get('sitemap_urls')
+    auth = _make_auth(_basic_auth_creds(data), domain)
 
     if not domain:
         return jsonify({'error': 'domain required'}), 400
@@ -2713,8 +2934,15 @@ def sitemap_analyse():
             manual_sm = 'https://' + manual_sm.lstrip('/')
         discovered = [{'url': manual_sm, 'source': 'manual'}]
         discovery_warnings = []
+    elif isinstance(uploaded_urls, list) and uploaded_urls:
+        # The user handed us the sitemap, so diff against that instead of
+        # re-discovering — the usual reason to upload one is that discovery
+        # can't reach it (staging, no robots.txt entry, non-standard path).
+        label = (data.get('sitemap_label') or 'uploaded sitemap').strip()
+        discovered = [{'url': label, 'source': 'upload'}]
+        discovery_warnings = []
     else:
-        discovered, discovery_warnings = _discover_sitemaps(domain)
+        discovered, discovery_warnings = _discover_sitemaps(domain, auth=auth)
         if not discovered:
             return jsonify({
                 'sitemaps_found': [],
@@ -2722,8 +2950,16 @@ def sitemap_analyse():
                 'tried_paths': list(_SITEMAP_DEFAULT_PATHS),
             }), 200
 
-    seed = [d['url'] for d in discovered]
-    sm_urls, sitemaps_meta, sm_errors = _fetch_sitemap_recursive(seed)
+    if discovered[0]['source'] == 'upload':
+        label = discovered[0]['url']
+        sm_urls = [{'url': str(u).strip(), 'lastmod': None, 'source_sitemap': label}
+                   for u in uploaded_urls if str(u).strip()]
+        sitemaps_meta = [{'url': label, 'url_count': len(sm_urls), 'error': None,
+                          'is_index': False}]
+        sm_errors = []
+    else:
+        seed = [d['url'] for d in discovered]
+        sm_urls, sitemaps_meta, sm_errors = _fetch_sitemap_recursive(seed, auth=auth)
 
     # Drop URLs on a different host than the analysed site (multisite robots.txt
     # pointing at a sibling subdomain). They're a different site, not orphans
@@ -2858,6 +3094,131 @@ def sitemap_analyse():
 # Near-duplicate content detection (Shingle Jaccard 5-gram + df=1 filter).
 # Pure stdlib, no external services.
 # =============================================================================
+
+def _build_seed_list(entries, child_sitemaps, fmt, label, auth=None, follow_index=True):
+    """Flatten parsed sitemap entries into a deduped URL list + metadata.
+
+    Shared by /sitemap/fetch and /sitemap/upload so both return the same shape.
+    Child sitemaps of an index are fetched over the network (with ``auth``)
+    unless ``follow_index`` is off.
+    """
+    warnings = []
+    sitemaps = [{'url': label, 'url_count': len(entries), 'error': None,
+                 'is_index': fmt == 'sitemapindex'}]
+    if child_sitemaps:
+        if follow_index:
+            child_entries, child_meta, child_errors = _fetch_sitemap_recursive(
+                child_sitemaps, auth=auth)
+            entries = list(entries) + child_entries
+            sitemaps.extend(child_meta)
+            for e in child_errors:
+                warnings.append(f"{e.get('sitemap')}: {e.get('error')}")
+        else:
+            warnings.append(f'{len(child_sitemaps)} child sitemap(s) listed in the index were not fetched.')
+
+    seen, urls = set(), []
+    for e in entries:
+        u = (e.get('url') or '').strip()
+        if u and u not in seen:
+            seen.add(u)
+            urls.append(u)
+    if len(urls) > _SITEMAP_SEED_CAP:
+        warnings.append(f'Truncated to the first {_SITEMAP_SEED_CAP:,} URLs.')
+        urls = urls[:_SITEMAP_SEED_CAP]
+    return urls, sitemaps, warnings
+
+
+@app.route('/sitemap/fetch', methods=['POST'])
+def sitemap_fetch():
+    """Fetch and parse a sitemap URL into the crawl's start list.
+
+    Body: {"url": "https://example.com/sitemap.xml", "basic_auth": {...}}
+    A sitemap index is walked; .gz is decompressed; a plain-text URL list
+    works too. Returns {source, format, count, urls, sitemaps, warnings} —
+    the same shape as /sitemap/upload. Nothing is stored: the browser holds
+    the list and posts it back to /crawl as `seed_urls`.
+    """
+    data = request.get_json(silent=True) or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'Sitemap URL required'}), 400
+    if not url.startswith(('http://', 'https://')):
+        url = 'https://' + url.lstrip('/')
+
+    auth = _make_auth(_basic_auth_creds(data), url)
+    try:
+        r = _http_get(url, timeout=20, allow_redirects=True, auth=auth,
+                      headers={'User-Agent': 'Mozilla/5.0',
+                               'Accept': 'application/xml,text/xml,*/*'})
+    except Exception as e:
+        return jsonify({'error': f'Could not fetch {url}: {str(e)[:160]}'}), 400
+    if r.status_code in (401, 403):
+        return jsonify({'error': f'{url} returned HTTP {r.status_code} — if the sitemap is behind '
+                                 f'basic auth, tick "Site requires basic auth" below and enter '
+                                 f'credentials, then load it again.'}), 400
+    if not r.ok:
+        return jsonify({'error': f'{url} returned HTTP {r.status_code}'}), 400
+
+    entries, child_sitemaps, fmt, err = _parse_sitemap_bytes(r.content, url)
+    if err:
+        return jsonify({'error': f'{url}: {err}'}), 400
+
+    urls, sitemaps, warnings = _build_seed_list(entries, child_sitemaps, fmt, url, auth=auth)
+    if not urls:
+        detail = ' ' + ' '.join(warnings) if warnings else ''
+        return jsonify({'error': f'{url}: no usable URLs found.{detail}'.strip()}), 400
+
+    app.logger.info(f"[sitemap] fetched {url}: {len(urls)} URLs ({fmt})")
+    return jsonify({'source': url, 'format': fmt, 'count': len(urls),
+                    'urls': urls, 'sitemaps': sitemaps, 'warnings': warnings})
+
+
+@app.route('/sitemap/upload', methods=['POST'])
+def sitemap_upload():
+    """Parse an uploaded sitemap into a URL list the crawler can start from.
+
+    multipart/form-data:
+      file          sitemap.xml / .xml.gz / .txt / .csv
+      follow_index  when the file is a <sitemapindex>, fetch each child
+                    sitemap over the network and flatten (default on)
+      auth_user / auth_pass   basic-auth credentials for those child fetches
+
+    Returns {filename, format, count, urls, sitemaps, warnings}. Nothing is
+    persisted server-side: the browser holds the list and posts it back with
+    /crawl as `seed_urls`.
+    """
+    f = request.files.get('file')
+    if f is None or not (f.filename or '').strip():
+        return jsonify({'error': 'No file uploaded'}), 400
+    content = f.read(_SITEMAP_UPLOAD_MAX_BYTES + 1)
+    if len(content) > _SITEMAP_UPLOAD_MAX_BYTES:
+        return jsonify({'error': f'File is larger than {_SITEMAP_UPLOAD_MAX_BYTES // (1024 * 1024)}MB'}), 413
+    if not content.strip():
+        return jsonify({'error': 'File is empty'}), 400
+
+    filename = os.path.basename(f.filename)
+    entries, child_sitemaps, fmt, err = _parse_sitemap_bytes(content, filename)
+    if err:
+        return jsonify({'error': f'{filename}: {err}'}), 400
+
+    creds = _basic_auth_creds({'auth_user': request.form.get('auth_user'),
+                               'auth_pass': request.form.get('auth_pass')})
+    follow = (request.form.get('follow_index') or '1').strip().lower() not in ('0', 'false', 'no')
+    urls, sitemaps, warnings = _build_seed_list(
+        entries, child_sitemaps, fmt, filename,
+        auth=_make_auth(creds, *child_sitemaps) if child_sitemaps else None,
+        follow_index=follow)
+    if not urls:
+        # A sitemap index whose children all failed is the common case here —
+        # surface why (404 / auth / parse error) instead of a bare "no URLs".
+        detail = ' ' + ' '.join(warnings) if warnings else ''
+        return jsonify({'error': f'{filename}: no usable URLs found.{detail}'.strip()}), 400
+
+    app.logger.info(f"[sitemap] uploaded {filename}: {len(urls)} URLs ({fmt})")
+    return jsonify({'filename': filename, 'source': filename, 'format': fmt,
+                    'count': len(urls), 'urls': urls, 'sitemaps': sitemaps,
+                    'warnings': warnings})
+
 
 _ND_STOP = {
     'a', 'an', 'the', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
@@ -2994,6 +3355,7 @@ def recrawl_url():
                 'Accept': 'text/html,application/xhtml+xml,*/*;q=0.9',
                 'Accept-Language': 'en-US,en;q=0.9',
             })
+            session.auth = _make_auth(_basic_auth_creds(data), url)
             result = _crawl_page(url, session, domain)
         return jsonify(result)
     except Exception as e:
@@ -3084,10 +3446,24 @@ def crawl_site():
         compare_no_js = bool(cfg.get('compare_no_js', False)) and render_js
         user_agent_opt = cfg.get('user_agent') or ''
         solve_challenges = bool(cfg.get('solve_challenges', True))
+        # Credentials come from the resumed config, but a fresh set in the
+        # request wins — that's how a user fixes a crawl that 401'd.
+        auth_creds = _basic_auth_creds(data) or cfg.get('basic_auth')
+        seed_urls_raw = []
     else:
+        # Optional start list (a sitemap, resolved by /sitemap/fetch or
+        # /sitemap/upload). Read before the seed URL because a sitemap-only
+        # start derives the site to crawl from it.
+        seed_urls_raw = data.get('seed_urls') or []
         seed_url = (data.get('url', '') or '').strip()
         if not seed_url:
-            return json.dumps({'error': 'URL is required'}), 400
+            # Started from a sitemap alone: the site under audit is whatever
+            # host its URLs live on, so use that origin as the crawl root.
+            # It also gives robots.txt, CMS detection and the trap probes the
+            # origin they each need.
+            seed_url = _origin_of_first(seed_urls_raw)
+            if not seed_url:
+                return json.dumps({'error': 'Enter a website URL, or load a sitemap to crawl from'}), 400
         if not seed_url.startswith('http'):
             seed_url = 'https://' + seed_url
 
@@ -3108,6 +3484,8 @@ def crawl_site():
         # Headed-browser fallback for hosts behind a bot challenge. On by
         # default: it only launches if a challenge is actually encountered.
         solve_challenges = bool(data.get('solve_challenges', True))
+        # HTTP basic auth for staging / UAT environments.
+        auth_creds = _basic_auth_creds(data)
     # Concurrent workers. Default 5 matches Screaming Frog. Clamped to [1, 20].
     # When render_js is on, Playwright can't share a single page across threads —
     # force single-worker mode so page state stays consistent.
@@ -3218,7 +3596,18 @@ def crawl_site():
     parsed = urlparse(seed_url)
     domain = parsed.netloc.lower().replace('www.', '')
 
-    app.logger.info(f"[crawler] Starting crawl of {seed_url} (max={max_pages}, depth={max_depth}, delay={crawl_delay}s, js={render_js}) from {request.remote_addr}")
+    # Basic-auth credentials, scoped to the crawled host so they never travel
+    # to a third party the crawl happens to touch.
+    crawl_auth = _make_auth(auth_creds, seed_url)
+
+    # Sitemap-seeded start list. Either supplements a website-URL crawl or is
+    # the whole starting point (a sitemap-only crawl derives seed_url above).
+    # Link discovery is unchanged — these URLs just prime the queue so pages
+    # that are only weakly linked, or reachable only through a JS-built nav,
+    # get crawled instead of turning up as "sitemap-only" at the end.
+    seed_list, seed_skipped = _normalize_seed_urls(seed_urls_raw, domain)
+
+    app.logger.info(f"[crawler] Starting crawl of {seed_url} (max={max_pages}, depth={max_depth}, delay={crawl_delay}s, js={render_js}, auth={'yes' if crawl_auth else 'no'}, seeded={len(seed_list)}) from {request.remote_addr}")
 
     def generate():
         # Fetch robots.txt up-front so the user sees what we're following.
@@ -3234,7 +3623,8 @@ def crawl_site():
         robots_issues = []        # AI/search-engine blocking flags, attached to the homepage row
         robots_attached = False   # attach once, to the first (seed) page emitted
         try:
-            resp = _http_get(robots_url, timeout=8, headers={'User-Agent': 'SEO-Audit-Bot'})
+            resp = _http_get(robots_url, timeout=8, headers={'User-Agent': 'SEO-Audit-Bot'},
+                             auth=crawl_auth)
             if resp.status_code == 200:
                 robots_can_fetch = _build_robots_checker(resp.text)
                 robots_rules = resp.text.count('Disallow')
@@ -3269,6 +3659,10 @@ def crawl_site():
             'Sec-Fetch-Site': 'same-origin',
             'Sec-Fetch-User': '?1',
         })
+        if crawl_auth is not None:
+            session.auth = crawl_auth
+            _auth_user = auth_creds.get('username', '')
+            yield f"data: {json.dumps({'type': 'info', 'msg': f'HTTP basic auth enabled (user: {_auth_user}) — sent only to {domain}'})}\n\n"
 
         # Crawl identity override (Googlebot/bingbot/mobile/custom). Applied to
         # the requests session and mirrored onto the browsers below so every
@@ -3301,6 +3695,7 @@ def crawl_site():
                 challenge_browser = ChallengeBrowser(
                     user_agent=crawl_ua,
                     delay=max(crawl_delay, 2.0),
+                    http_credentials=auth_creds,
                 )
             except Exception as e:
                 app.logger.warning(f"[crawler] challenge browser unavailable: {e}")
@@ -3315,10 +3710,16 @@ def crawl_site():
                 from playwright.sync_api import sync_playwright
                 pw_ctx = sync_playwright().start()
                 pw_browser = pw_ctx.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
-                pw_page = pw_browser.new_page(
-                    viewport={'width': 1280, 'height': 900},
-                    user_agent=crawl_ua,
-                )
+                _pw_kwargs = {'viewport': {'width': 1280, 'height': 900},
+                              'user_agent': crawl_ua}
+                if auth_creds:
+                    # Chromium answers the 401 challenge itself, so the render
+                    # pass sees the same page the requests session does.
+                    _pw_kwargs['http_credentials'] = {
+                        'username': auth_creds.get('username', ''),
+                        'password': auth_creds.get('password', ''),
+                    }
+                pw_page = pw_browser.new_page(**_pw_kwargs)
                 pw_page.set_default_timeout(20000)
                 yield f"data: {json.dumps({'type': 'info', 'msg': 'JS rendering enabled (Playwright). Crawl will be 3-5x slower.'})}\n\n"
             except Exception as e:
@@ -3345,6 +3746,18 @@ def crawl_site():
             _seed_alt = _crawl_slash_alt(_seed_norm)
             if _seed_alt:
                 visited.add(_seed_alt)
+            # Prime the queue from the sitemap. Depth 0: these were
+            # handed to us rather than discovered, so max_depth shouldn't drop
+            # them. _dequeue_next still applies robots.txt + URL filters, so an
+            # excluded pattern removes them exactly like a discovered link.
+            for _s in seed_list:
+                if _s in visited:
+                    continue
+                visited.add(_s)
+                _s_alt = _crawl_slash_alt(_s)
+                if _s_alt:
+                    visited.add(_s_alt)
+                queue.append((_s, 0))
             results = []
             errors = 0
             total_time = 0
@@ -3353,6 +3766,22 @@ def crawl_site():
 
         tracked_kws = []  # left in place for payload compatibility; no external data sources in the public build
         yield f"data: {json.dumps({'type': 'start', 'domain': domain, 'workers': max_workers, 'crawl_id': crawl_id})}\n\n"
+        # Staging and pre-launch hosts almost always ship "Disallow: /", which
+        # silently zeroes out the whole crawl. Say so before the user waits.
+        if not ignore_robots:
+            try:
+                _seed_blocked = not robots_can_fetch(_normalize_crawl_url(seed_url))
+            except Exception:
+                _seed_blocked = False
+            if _seed_blocked:
+                _blocked_msg = ('robots.txt on this host disallows the start URL — nothing will be '
+                                'crawled. Tick "Ignore robots.txt" in the sidebar to audit it anyway '
+                                '(normal for staging / pre-launch sites).')
+                yield f"data: {json.dumps({'type': 'info', 'msg': _blocked_msg})}\n\n"
+
+        if seed_list and not resumed_state:
+            _skipped_note = ', '.join(f'{v} {k}' for k, v in seed_skipped.items() if v)
+            yield f"data: {json.dumps({'type': 'info', 'msg': f'Queued {len(seed_list)} URL(s) from the sitemap' + (f' — skipped {_skipped_note}' if _skipped_note else '') + '. Links found on those pages are still followed as usual.'})}\n\n"
 
         # CMS fingerprint using the seed page (cheap HEAD+GET already handles this below,
         # but we want the info up-front so the UI can badge + offer one-click recommendations).
@@ -3462,6 +3891,11 @@ def crawl_site():
             if alt:
                 visited.add(alt)
 
+        # Why URLs were dropped before ever being fetched. A crawl that ends
+        # with zero pages is otherwise indistinguishable from a dead host, and
+        # blaming the start URL sends the user chasing the wrong problem.
+        skip_counts = {'depth': 0, 'rules': 0, 'robots': 0}
+
         def _dequeue_next():
             """Pop the next URL that passes filters + robots. Returns (url, depth) or None.
             URLs are added to `visited` at enqueue time now (to prevent the same URL
@@ -3470,12 +3904,15 @@ def crawl_site():
             while queue:
                 url, depth = queue.popleft()
                 if depth > max_depth:
+                    skip_counts['depth'] += 1
                     continue
                 if not _url_allowed(url):
+                    skip_counts['rules'] += 1
                     continue
                 if not ignore_robots:
                     try:
                         if not robots_can_fetch(url):
+                            skip_counts['robots'] += 1
                             continue
                     except Exception:
                         pass
@@ -3661,6 +4098,9 @@ def crawl_site():
                 'errors': errors,
                 'total_time': total_time,
                 'config': {
+                    'basic_auth': auth_creds,
+                    'user_agent': user_agent_opt,
+                    'solve_challenges': solve_challenges,
                     'max_pages': max_pages,
                     'max_depth': max_depth,
                     'crawl_delay': crawl_delay,
@@ -3806,7 +4246,8 @@ def crawl_site():
                 return
             seen.add(sm_url)
             try:
-                r = _http_get(sm_url, timeout=10, headers={'User-Agent': 'SEO-Audit-Bot'})
+                r = _http_get(sm_url, timeout=10, headers={'User-Agent': 'SEO-Audit-Bot'},
+                              auth=crawl_auth)
                 if r.status_code != 200:
                     return
                 root = _ET.fromstring(r.content)
@@ -3864,8 +4305,24 @@ def crawl_site():
         stop_reason = None
         if len(results) <= 1:
             seed_row = results[0] if results else None
-            if not seed_row:
+            if not seed_row and skip_counts['robots']:
+                # Every candidate URL was refused by robots.txt, so no request
+                # was ever made — the start URL is fine, the rules aren't.
+                stop_reason = (f"No pages were crawled — robots.txt on this host disallows them "
+                               f"({skip_counts['robots']} URL(s) blocked, including the start URL). "
+                               f'Staging and pre-launch sites usually ship "Disallow: /". '
+                               f'Tick "Ignore robots.txt" in the sidebar and run it again.')
+            elif not seed_row and skip_counts['rules']:
+                stop_reason = (f"No pages were crawled — every URL was removed by your include / "
+                               f"exclude patterns or the built-in non-page filters "
+                               f"({skip_counts['rules']} URL(s) dropped). Check the URL filters panel.")
+            elif not seed_row:
                 stop_reason = 'No pages could be crawled — the start URL could not be fetched.'
+            elif seed_row.get('auth_required') or seed_row.get('status_code') in (401, 407):
+                stop_reason = (f"Crawl stopped at the start page — the server returned "
+                               f"HTTP {seed_row.get('status_code')} (authentication required). "
+                               f'Tick "Site requires basic auth" in the sidebar, enter the '
+                               f'username and password for this environment, and retry.')
             elif seed_row.get('error'):
                 extra = '; '.join((seed_row.get('issues') or [])[:2])
                 stop_reason = (f"Crawl stopped at the start page — it returned an error "

@@ -184,9 +184,41 @@
 
   <main class="wrap">
     <aside class="sidebar">
-      <label>Website URL
-        <input type="url" id="crawler-url" placeholder="https://example.com" />
+      <div class="start-source">
+        <div class="ss-tabs" role="tablist" aria-label="Crawl start source">
+          <button type="button" id="crawler-src-site-btn" class="ss-tab active" role="tab" aria-selected="true"
+                  onclick="_scSetStartSource('site')"
+                  title="Start from a website URL and discover pages by following links — the default.">Website URL</button>
+          <button type="button" id="crawler-src-sitemap-btn" class="ss-tab" role="tab" aria-selected="false"
+                  onclick="_scSetStartSource('sitemap')"
+                  title="Start from a sitemap instead. Every URL it lists is queued up front, and the crawler still follows links from those pages to discover everything else.">Sitemap URL</button>
+        </div>
+
+        <label id="crawler-src-site-row">
+          <input type="url" id="crawler-url" placeholder="https://example.com" />
+        </label>
+
+        <label id="crawler-src-sitemap-row" style="display:none;">
+          <span style="display:flex;align-items:center;gap:6px;">
+            <input type="url" id="crawler-sitemap-url" placeholder="https://example.com/sitemap.xml" style="flex:1;min-width:0;" />
+            <button type="button" id="crawler-sitemap-load" class="btn-secondary" onclick="crawlerLoadSitemapUrl()"
+                    style="white-space:nowrap;flex-shrink:0;">Load</button>
+          </span>
+          <small>Sitemap index, .xml.gz and plain-text URL lists all work. The site to crawl is taken from the URLs inside.</small>
+        </label>
+        <div id="crawler-sitemap-seed-status" style="display:none;margin-top:4px;font-size:11px;line-height:1.45;"></div>
+      </div>
+
+      <label class="check" title="For staging, pre-launch and UAT environments protected by a server-level basic-auth prompt. Credentials are used for the sitemap fetch above as well as the crawl itself — pages, robots.txt, sitemaps, the JS renderer — and are never sent to any other host. They are held in this browser tab only: never written to disk and never included in a saved crawl.">
+        <input type="checkbox" id="crawler-use-auth" onchange="_scToggleAuthFields(this.checked)" /> Site requires basic auth <small>(staging / UAT)</small>
       </label>
+      <div id="crawler-auth-fields" style="display:none;padding:6px 8px 4px 22px;border-left:2px solid var(--accent,#6366f1);margin-left:4px;">
+        <input type="text" id="crawler-auth-user" placeholder="Username" autocomplete="off" autocapitalize="off" spellcheck="false"
+               style="width:100%;margin-bottom:4px;" />
+        <input type="password" id="crawler-auth-pass" placeholder="Password" autocomplete="new-password"
+               style="width:100%;" />
+        <small style="display:block;margin-top:4px;">Sent only to the host being crawled, never to third-party hosts. Not saved to disk or into saved crawls.</small>
+      </div>
 
       <div class="slider-row">
         <label>Max pages: <strong id="crawler-max-label">1500</strong></label>
@@ -261,7 +293,7 @@
         <label>Live robots.txt
           <span style="display:flex;align-items:center;gap:6px;">
             <small id="crawler-robots-status" style="flex:1;"></small>
-            <button type="button" id="crawler-robots-refetch" onclick="crawlerFetchRobots()" title="Re-fetch robots.txt" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:13px;line-height:1;">↻</button>
+            <button type="button" id="crawler-robots-refetch" onclick="crawlerFetchRobots(true)" title="Re-fetch robots.txt (re-runs with the credentials entered above)" style="background:none;border:none;cursor:pointer;padding:2px 4px;font-size:13px;line-height:1;">↻</button>
           </span>
           <textarea id="crawler-robots-preview" rows="5" readonly placeholder="Enter a URL above and robots.txt will load here."></textarea>
         </label>

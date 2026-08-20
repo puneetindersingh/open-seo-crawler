@@ -109,8 +109,13 @@ class ChallengeBrowser:
 
     _SENTINEL = object()
 
-    def __init__(self, user_agent=None, delay=3.0, launch_timeout=90, settle_timeout=30):
+    def __init__(self, user_agent=None, delay=3.0, launch_timeout=90, settle_timeout=30,
+                 http_credentials=None):
         self._ua = user_agent
+        # {'username': ..., 'password': ...} for sites behind basic auth.
+        # Chromium answers the 401 challenge itself, so a challenged staging
+        # site is fetched with the same credentials as the requests session.
+        self._creds = http_credentials or None
         self._delay = max(0.0, float(delay))
         self._launch_timeout = launch_timeout
         self._settle_timeout = settle_timeout
@@ -187,6 +192,11 @@ class ChallengeBrowser:
                           'locale': 'en-AU', 'timezone_id': 'Australia/Sydney'}
             if self._ua:
                 ctx_kwargs['user_agent'] = self._ua
+            if self._creds:
+                ctx_kwargs['http_credentials'] = {
+                    'username': self._creds.get('username', ''),
+                    'password': self._creds.get('password', ''),
+                }
             ctx = browser.new_context(**ctx_kwargs)
         except Exception as e:
             self._init_error = str(e)[:200]
