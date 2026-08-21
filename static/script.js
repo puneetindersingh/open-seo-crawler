@@ -4762,10 +4762,15 @@ function openCrawlLoader(opts) {
       body.innerHTML = '<div style="padding:32px;text-align:center;color:#64748b;font-size:13px;">No saved crawls in the last 30 days. Every crawl auto-saves — run one and it will appear here.</div>';
       return;
     }
+    // Host of the crawl currently in memory — used to spot a cross-domain
+    // pairing (prod vs stage) and pre-tick path matching for those rows.
+    let currentHost = '';
+    try { currentHost = new URL(crawlerResults[0].url).host.replace(/^www\./, ''); } catch {}
+
     let headerNote;
     if (compareOnly) {
       headerNote = hasCurrent
-        ? `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Pick a saved crawl to diff against the current crawl (${crawlerResults.length} pages).</div>`
+        ? `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Pick a saved crawl to diff against the current crawl (${crawlerResults.length} pages${currentHost ? ' on ' + currentHost : ''}).<br>Saved crawls on a <strong>different domain</strong> are matched by path automatically, so you can diff production against staging.</div>`
         : `<div style="padding:10px 14px;font-size:12px;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;margin:10px 14px;">Run or load a crawl first, then come back here to compare.</div>`;
     } else {
       headerNote = hasCurrent
@@ -4787,8 +4792,12 @@ function openCrawlLoader(opts) {
       const timeStr = dt.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit', hour12:false });
       const seed = (c.seed || '').replace(/^https?:\/\//,'').replace(/\/$/,'');
       const savedBy = (c.saved_by || 'unknown');
+      // Different host on each side => pair pages by path, or every URL would
+      // read as removed-from-one-side and added-to-the-other.
+      const rowHost = (seed.split('/')[0] || '').replace(/^www\./, '').toLowerCase();
+      const crossDomain = !!(currentHost && rowHost && rowHost !== currentHost);
       const compareBtn = hasCurrent
-        ? `<button onclick='compareWithCurrent(${JSON.stringify(c.file)}, ${JSON.stringify(c.name)})' style="padding:6px 12px;font-size:11px;background:${compareOnly ? '#6366f1' : 'transparent'};color:${compareOnly ? '#fff' : '#6366f1'};border:1px solid #6366f1;border-radius:4px;cursor:pointer;font-weight:${compareOnly ? '600' : '400'};">Compare</button>`
+        ? `<button onclick='compareWithCurrent(${JSON.stringify(c.file)}, ${JSON.stringify(c.name)}, ${crossDomain})' title="${crossDomain ? 'Different domain — pages will be matched by path (prod vs stage)' : 'Same domain — pages matched by full URL'}" style="padding:6px 12px;font-size:11px;background:${compareOnly ? '#6366f1' : 'transparent'};color:${compareOnly ? '#fff' : '#6366f1'};border:1px solid #6366f1;border-radius:4px;cursor:pointer;font-weight:${compareOnly ? '600' : '400'};">Compare${crossDomain ? ' ⇄' : ''}</button>`
         : '';
       const loadBtn = compareOnly
         ? ''
@@ -4915,17 +4924,18 @@ function deleteSavedCrawl(file) {
   });
 }
 
-function compareWithCurrent(file, savedName) {
+function compareWithCurrent(file, savedName, crossDomain) {
   if (!crawlerResults || !crawlerResults.length) {
     showToast('Load or run a crawl first, then compare.', 'error'); return;
   }
   closeCrawlLoader();
   window._compareActiveTab = 'overview';
-  showToast('Comparing…', 'info');
+  window._compareMatch = crossDomain ? 'path' : 'url';
+  showToast(crossDomain ? 'Comparing across domains (matching by path)…' : 'Comparing…', 'info');
   fetch('/crawl/compare', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ a_file: file, b_results: crawlerResults })
+    body: JSON.stringify({ a_file: file, b_results: crawlerResults, match: window._compareMatch })
   }).then(r => r.json()).then(d => {
     if (d.error) { showToast('Compare failed: ' + d.error, 'error'); return; }
     _renderCompareModal(d, savedName);
@@ -4960,7 +4970,11 @@ function _renderCompareModal(d, savedName) {
     });
   }
   const title = document.getElementById('crawl-compare-title');
-  if (title) title.textContent = `Compare: "${savedName || (d.a && d.a.name) || ''}" (old) vs current crawl`;
+  if (title) {
+    const hosts = (d.a_host && d.b_host && d.a_host !== d.b_host) ? ` · ${d.a_host} → ${d.b_host}` : '';
+    const how = d.match === 'path' ? ' · matched by path' : '';
+    title.textContent = `Compare: "${savedName || (d.a && d.a.name) || ''}" (old) vs current crawl${hosts}${how}`;
+  }
   const escHtml = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const delta = (a, b, opts = {}) => {
@@ -5120,17 +5134,27 @@ function _renderCompareModal(d, savedName) {
       let oldv = v.old, newv = v.new;
       if (f === 'body_hash') { oldv = oldv ? oldv.slice(0, 8) + '…' : '—'; newv = newv ? newv.slice(0, 8) + '…' : '—'; }
       else { oldv = (oldv == null ? '—' : String(oldv)).slice(0, 220); newv = (newv == null ? '—' : String(newv)).slice(0, 220); }
+      const note = v.note
+        ? `<div style="color:#b45309;font-size:11px;margin-top:2px;">${escHtml(v.note)}</div>` : '';
       return `<div style="display:grid;grid-template-columns:120px 1fr;gap:8px;margin-top:4px;">
         <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">${FIELD_LABELS[f] || f}</div>
         <div style="font-size:12px;">
           <div style="color:#ef4444;">− ${escHtml(oldv)}</div>
           <div style="color:#10b981;">+ ${escHtml(newv)}</div>
+          ${note}
         </div>
       </div>`;
     }).join('');
+    // Cross-domain: the same page exists at two addresses, so link both.
+    const twoSided = c.url_a && c.url_b && c.url_a !== c.url_b;
+    const urlLine = twoSided
+      ? `<a href="${c.url_a}" target="_blank" style="color:#ef4444;text-decoration:none;">${escHtml(c.url_a)}</a>
+         <span style="color:#94a3b8;padding:0 6px;">→</span>
+         <a href="${c.url_b}" target="_blank" style="color:#10b981;text-decoration:none;">${escHtml(c.url_b)}</a>`
+      : `<a href="${c.url}" target="_blank" style="color:#6366f1;text-decoration:none;">${escHtml(c.url)}</a>`;
     return `<div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;">
       <div style="font-size:12px;font-family:'SF Mono','Menlo',monospace;word-break:break-all;margin-bottom:4px;">
-        <a href="${c.url}" target="_blank" style="color:#6366f1;text-decoration:none;">${escHtml(c.url)}</a>
+        ${urlLine}
       </div>
       ${fields}
     </div>`;

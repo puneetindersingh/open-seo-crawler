@@ -4561,7 +4561,13 @@ def crawl_delete():
 def crawl_compare():
     """Diff two crawls. Accepts {a_file, b_file} or {a_file, b_results}.
     Returns aggregate metrics, issues comparison, structure diff,
-    plus added/removed/changed URL lists."""
+    plus added/removed/changed URL lists.
+
+    ``match``: 'url' (default) pairs pages by their full URL. 'path' pairs them
+    by path + query only, which is what makes a production-vs-staging diff
+    possible — the two crawls live on different hosts, so every URL would
+    otherwise read as removed-from-A and added-to-B.
+    """
     body = request.json or {}
 
     def _load_file(fn):
@@ -4595,8 +4601,48 @@ def crawl_compare():
     else:
         return jsonify({'error': 'Supply b_file or b_results'}), 400
 
+    match_mode = 'path' if str(body.get('match') or '').lower() in (
+        'path', 'cross-domain', 'cross_domain') else 'url'
+
     def _key(u):
-        return (u or '').rstrip('/').lower()
+        if match_mode != 'path':
+            return (u or '').rstrip('/').lower()
+        try:
+            pu = urlparse(u or '')
+        except Exception:
+            return (u or '').rstrip('/').lower()
+        path = (pu.path or '/').rstrip('/') or '/'
+        return (path + (('?' + pu.query) if pu.query else '')).lower()
+
+    def _dominant_host(rows):
+        """Host the crawl actually lives on. Sampled rather than taken from
+        row 0 so one stray absolute link can't misidentify the site."""
+        counts = {}
+        for r in rows[:500]:
+            h = _bare_host(urlparse(r.get('url') or '').netloc)
+            if h:
+                counts[h] = counts.get(h, 0) + 1
+        return max(counts, key=counts.get) if counts else ''
+
+    a_host = _dominant_host(a_results)
+    b_host = _dominant_host(b_results)
+
+    def _host_field(value, own_host):
+        """Normalise a URL-valued field (canonical, redirect target) for a
+        cross-domain diff. A value pointing at the crawl's own host collapses
+        to its path, so prod and stage only differ when the PATH differs. A
+        value pointing somewhere else is left whole — so a staging page that
+        canonicalises back to production still shows up as a difference, which
+        is exactly the leak this comparison exists to catch."""
+        if match_mode != 'path' or not value:
+            return value
+        v = str(value).strip()
+        try:
+            h = _bare_host(urlparse(v).netloc)
+        except Exception:
+            return v.lower()
+        return _key(v) if (h and own_host and h == own_host) else v.lower()
+
     a_by = {_key(r.get('url')): r for r in a_results if r.get('url')}
     b_by = {_key(r.get('url')): r for r in b_results if r.get('url')}
     a_urls = set(a_by.keys()); b_urls = set(b_by.keys())
@@ -4613,19 +4659,43 @@ def crawl_compare():
         if v is None: return ''
         if isinstance(v, list): return ', '.join(sorted(str(x) for x in v))
         return str(v)
+    # Fields that differ between two crawls for reasons that aren't content
+    # changes. Still reported when a page is flagged, but never enough to flag
+    # a page on their own — otherwise every shared URL lands in "changed" and
+    # the list stops meaning anything. response_time varies run to run; depth
+    # shifts whenever the two crawls started differently (a sitemap-seeded
+    # crawl reaches pages at depth 0 that a link crawl reaches at depth 3).
+    noisy = {'response_time'} | ({'depth'} if match_mode == 'path' else set())
+
     changed = []
     for k in sorted(shared):
         ar = a_by[k]; br = b_by[k]
         diffs = {}
         for f in watch:
             av = ar.get(f); bv = br.get(f)
-            if (av if av is not None else '') != (bv if bv is not None else ''):
+            if f in ('canonical', 'redirect_url'):
+                cav, cbv = _host_field(av, a_host), _host_field(bv, b_host)
+            else:
+                cav, cbv = av, bv
+            if (cav if cav is not None else '') != (cbv if cbv is not None else ''):
                 diffs[f] = {'old': av, 'new': bv}
+                # Cross-domain: the raw values can be byte-identical and still
+                # be a difference — a self-referencing canonical on A vs the
+                # same absolute URL on B, which for B points at the OTHER
+                # environment. Without a note the row reads as "x changed to x".
+                if (f in ('canonical', 'redirect_url')
+                        and str(av or '').strip().lower() == str(bv or '').strip().lower()):
+                    diffs[f]['note'] = (
+                        f'Same value on both crawls — but on {b_host or "the newer crawl"} '
+                        f'it points at {a_host or "the other environment"} rather than its '
+                        f'own host. The newer environment is referencing the older one.')
         sa = _norm_list(ar.get('schema_types')); sb = _norm_list(br.get('schema_types'))
         if sa != sb:
             diffs['schema_types'] = {'old': sa or '—', 'new': sb or '—'}
-        if diffs:
-            changed.append({'url': ar.get('url') or br.get('url'), 'diffs': diffs})
+        if diffs and any(f not in noisy for f in diffs):
+            changed.append({'url': br.get('url') or ar.get('url'),
+                            'url_a': ar.get('url'), 'url_b': br.get('url'),
+                            'diffs': diffs})
 
     def _agg(rows):
         n = len(rows); codes = {'2xx':0,'3xx':0,'4xx':0,'5xx':0,'other':0}
@@ -4672,33 +4742,37 @@ def crawl_compare():
         out = _re.sub(r'^\d+\s+', '', out).strip()
         return out or s
     def _issue_url_sets(rows):
+        # {issue: {match_key: display_url}} — pages are paired by key so a
+        # cross-domain diff works, while the UI still links a real URL.
         m = {}
         for r in rows:
             url = r.get('url') or ''
+            key = _key(url)
             seen = set()
             for issue in (r.get('issues') or []):
                 norm = _normalize_issue(issue)
                 if not norm or norm in seen: continue
                 seen.add(norm)
-                m.setdefault(norm, set()).add(url)
+                m.setdefault(norm, {})[key] = url
         return m
     urls_a_by_issue = _issue_url_sets(a_results)
     urls_b_by_issue = _issue_url_sets(b_results)
     issues_compare = []
     _URL_CAP = 500
     for iss in sorted(set(urls_a_by_issue) | set(urls_b_by_issue)):
-        ua = urls_a_by_issue.get(iss, set()); ub = urls_b_by_issue.get(iss, set())
-        ia = len(ua); ib = len(ub)
+        ua = urls_a_by_issue.get(iss, {}); ub = urls_b_by_issue.get(iss, {})
+        ka, kb = set(ua), set(ub)
+        ia = len(ka); ib = len(kb)
         if ia == ib == 0: continue
-        only_a = sorted(ua - ub)[:_URL_CAP]
-        only_b = sorted(ub - ua)[:_URL_CAP]
-        both   = sorted(ua & ub)[:_URL_CAP]
+        k_only_a, k_only_b, k_both = ka - kb, kb - ka, ka & kb
         issues_compare.append({
             'issue': iss, 'a': ia, 'b': ib, 'delta': ib - ia,
-            'only_a': only_a, 'only_b': only_b, 'both': both,
-            'only_a_total': len(ua - ub),
-            'only_b_total': len(ub - ua),
-            'both_total':   len(ua & ub),
+            'only_a': sorted(ua[k] for k in k_only_a)[:_URL_CAP],
+            'only_b': sorted(ub[k] for k in k_only_b)[:_URL_CAP],
+            'both':   sorted(ub[k] for k in k_both)[:_URL_CAP],
+            'only_a_total': len(k_only_a),
+            'only_b_total': len(k_only_b),
+            'both_total':   len(k_both),
         })
     issues_compare.sort(key=lambda x: (abs(x['delta']), x['a'] + x['b']), reverse=True)
 
@@ -4722,6 +4796,9 @@ def crawl_compare():
 
     return jsonify({
         'a': a_meta, 'b': b_meta,
+        'match': match_mode,
+        'a_host': a_host, 'b_host': b_host,
+        'cross_domain': bool(a_host and b_host and a_host != b_host),
         'aggregate': {'a': agg_a, 'b': agg_b},
         'issues': issues_compare,
         'structure': structure[:30],
