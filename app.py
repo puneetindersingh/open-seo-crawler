@@ -384,10 +384,11 @@ STATIC_VERSION = str(int(time.time()))
 
 
 def _local_commit_sha():
-    """Short SHA of the currently-installed build, or 'dev' if not a
-    git checkout. Resolved per-call (not cached at startup) so devs
-    don't get a stale 'update available' banner the moment they push
-    a commit without restarting the dev server."""
+    """Short SHA of the code on disk, or 'dev' if not a git checkout.
+    This can move ahead of the running process (a pull by the daily
+    updater or by hand, a local commit), so the version badge uses
+    _BOOT_SHA for "what is running" and this only to spot a pending
+    restart."""
     try:
         import subprocess as _sp
         out = _sp.run(['git', '-C', os.path.dirname(os.path.abspath(__file__)),
@@ -398,6 +399,12 @@ def _local_commit_sha():
     except Exception:
         pass
     return 'dev'
+
+
+# The build this process actually loaded. Compared against the disk SHA so a
+# pulled-but-not-restarted install reports itself as stale instead of
+# "Up to date" while still running the old code.
+_BOOT_SHA = _local_commit_sha()
 
 
 # ---------------------------------------------------------------------------
@@ -611,10 +618,14 @@ def crawl_budget_analyze():
 
 @app.route('/version')
 def version():
-    """Local build SHA, served to the UI for display + comparison
-    against the GitHub master HEAD (client-side fetch)."""
+    """Running build SHA, served to the UI for display + comparison
+    against the GitHub master HEAD (client-side fetch). disk_sha is what a
+    restart would load; restart_needed flags the two drifting apart."""
+    disk = _local_commit_sha()
     return jsonify({
-        'sha': _local_commit_sha(),
+        'sha': _BOOT_SHA,
+        'disk_sha': disk,
+        'restart_needed': disk != _BOOT_SHA,
         'repo': 'puneetindersingh/open-seo-crawler',
     })
 
@@ -700,7 +711,11 @@ def update_self():
             'ok': True,
             'before': before,
             'after': after,
-            'changed': before != after,
+            # True whenever the running process is not on the new build, even
+            # if this pull fetched nothing (disk already updated elsewhere);
+            # the UI restarts on this, so a stale process always gets replaced.
+            'changed': after != _BOOT_SHA,
+            'pulled': before != after,
             'message': msg[:400],
         })
     except Exception as e:
@@ -772,7 +787,7 @@ def restart_self():
 
 @app.route('/')
 def index():
-    return render_template('index.html', v=STATIC_VERSION, build_sha=_local_commit_sha())
+    return render_template('index.html', v=STATIC_VERSION, build_sha=_BOOT_SHA)
 
 
 # =============================================================================

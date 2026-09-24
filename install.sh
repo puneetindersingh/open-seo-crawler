@@ -271,6 +271,15 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse '@{u}' 2>/dev/null || git rev-parse origin/HEAD)
 
 if [ "$LOCAL" = "$REMOTE" ]; then
+  # The code on disk is current, but the running app may still be an older
+  # build (an earlier pull whose restart never happened). Ask it which build
+  # it loaded and restart it if that differs.
+  RUNNING=$(curl -fsS --max-time 5 "http://localhost:__PORT__/version" 2>/dev/null | sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p' || true)
+  if [ -n "$RUNNING" ] && [ "$RUNNING" != "$(git rev-parse --short HEAD)" ]; then
+    log "code up to date ($LOCAL) but app is running $RUNNING, restarting"
+    sudo /bin/systemctl restart "${SERVICE_NAME}.service"
+    exit 0
+  fi
   log "already up to date ($LOCAL)"
   exit 0
 fi
@@ -318,7 +327,7 @@ fi
 log "update complete: now at $REMOTE"
 UPDATE_EOF
 
-sed -i "s|__INSTALL_DIR__|$INSTALL_DIR|g; s|__SERVICE_NAME__|$SERVICE_NAME|g" "$INSTALL_DIR/update.sh"
+sed -i "s|__INSTALL_DIR__|$INSTALL_DIR|g; s|__SERVICE_NAME__|$SERVICE_NAME|g; s|__PORT__|$PORT|g" "$INSTALL_DIR/update.sh"
 chmod +x "$INSTALL_DIR/update.sh"
 
 # Sudoers rule: let the updater restart only this one service, no password.
