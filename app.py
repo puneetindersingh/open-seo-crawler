@@ -22,6 +22,7 @@ import os
 import re as _re
 import time
 import logging
+import queue
 import threading
 from collections import deque, defaultdict as _dd
 from urllib.parse import urlparse, urljoin, urlunparse, parse_qs, urlencode
@@ -1390,7 +1391,272 @@ def _is_challenge_response(resp):
         return False
 
 
-def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, capture_no_js=False, challenge_browser=None):
+class PlaywrightRenderer:
+    """Owns a Playwright sync session on a single dedicated thread.
+
+    Playwright's sync API uses greenlets bound to the thread that called
+    sync_playwright().start(). Calling page.goto() from any other thread
+    raises 'cannot switch to a different thread (which happens to have
+    exited)'. This renderer confines every Playwright call to one worker
+    thread for its entire lifetime, and exposes a thread-safe render(url)
+    that any caller (Flask request thread, ThreadPoolExecutor worker, etc.)
+    can invoke. Requests are serialised through a queue.
+    """
+    _SENTINEL = object()
+
+    def __init__(self, user_agent, launch_timeout=30):
+        self._ua = user_agent
+        self._queue = queue.Queue()
+        self._ready = threading.Event()
+        self._init_error = None
+        self._closed = False
+        self._thread = threading.Thread(target=self._run, daemon=True, name='pw-renderer')
+        self._thread.start()
+        if not self._ready.wait(timeout=launch_timeout):
+            raise RuntimeError('Playwright init timed out')
+        if self._init_error:
+            raise RuntimeError(self._init_error)
+
+    def _run(self):
+        pw = browser = page = None
+        try:
+            from playwright.sync_api import sync_playwright
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-dev-shm-usage'],
+            )
+            page = browser.new_page(
+                viewport={'width': 1280, 'height': 900},
+                user_agent=self._ua,
+            )
+            page.set_default_timeout(20000)
+        except Exception as e:
+            self._init_error = str(e)
+            self._ready.set()
+            for obj, m in ((page, 'close'), (browser, 'close'), (pw, 'stop')):
+                if obj is not None:
+                    try: getattr(obj, m)()
+                    except Exception: pass
+            return
+        self._ready.set()
+        try:
+            while True:
+                item = self._queue.get()
+                if item is self._SENTINEL:
+                    break
+                url, timeout, future, want_clicks = item
+                if future.cancelled():
+                    continue
+                err_parts = []
+                html = ''
+                try:
+                    page.goto(url, wait_until='load', timeout=timeout)
+                except Exception as e:
+                    err_parts.append(f'goto: {str(e)[:160]}')
+                try:
+                    page.wait_for_load_state('networkidle', timeout=4000)
+                except Exception:
+                    pass
+                try:
+                    html = page.content()
+                except Exception as e:
+                    err_parts.append(f'content: {str(e)[:160]}')
+                click_links = []
+                if want_clicks and html and _needs_js_click_discovery(html):
+                    try:
+                        click_links = _discover_js_click_links(page, page.url or url)
+                    except Exception as e:
+                        err_parts.append(f'js-click: {str(e)[:160]}')
+                err = '; '.join(err_parts) if err_parts else None
+                future.set_result((html, err, click_links) if want_clicks else (html, err))
+        finally:
+            for obj, m in ((page, 'close'), (browser, 'close'), (pw, 'stop')):
+                if obj is not None:
+                    try: getattr(obj, m)()
+                    except Exception: pass
+
+    def render(self, url, timeout=20000):
+        """Render url and return (html, error_or_None). Safe to call from any thread."""
+        if self._closed:
+            return ('', 'renderer closed')
+        from concurrent.futures import Future
+        f = Future()
+        self._queue.put((url, timeout, f, False))
+        try:
+            return f.result(timeout=(timeout / 1000.0) + 30)
+        except Exception as e:
+            f.cancel()
+            return ('', f'render: {str(e)[:160]}')
+
+    def render_with_clicks(self, url, timeout=20000):
+        """Like render(), plus JS click-link discovery when the rendered page
+        has almost no <a href> anchors. Returns (html, error_or_None, links)."""
+        if self._closed:
+            return ('', 'renderer closed', [])
+        from concurrent.futures import Future
+        f = Future()
+        self._queue.put((url, timeout, f, True))
+        try:
+            return f.result(timeout=(timeout / 1000.0) + 60)
+        except Exception as e:
+            f.cancel()
+            return ('', f'render: {str(e)[:160]}', [])
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._queue.put(self._SENTINEL)
+        except Exception:
+            pass
+        self._thread.join(timeout=10)
+
+
+# JS click-link discovery. No-code builders (Bubble, some Wix/Softr/Glide
+# builds) render navigation as clickable <div>s wired to JS workflows, with no
+# <a href> anywhere in the DOM, rendered or not. Link extraction then finds
+# nothing and the crawl stops at the homepage even with JS rendering on.
+# When a rendered page carries almost no anchors, click each clickable
+# element in the headless page and capture where it would go:
+#   - history.pushState / replaceState and window.open are stubbed to record
+#     the URL instead of acting on it
+#   - full navigations are caught at the network layer and answered with a
+#     204, which cancels the navigation and leaves the document in place
+#     (route.abort() would drop the page onto chrome-error://)
+_JS_CLICK_MIN_ANCHORS = 3
+_JS_CLICK_MAX_ELEMENTS = 120
+_JS_CLICK_ANCHOR_RE = _re.compile(r'<a\s[^>]*href\s*=', _re.I)
+
+
+def _needs_js_click_discovery(html):
+    return len(_JS_CLICK_ANCHOR_RE.findall(html or '', 0)) < _JS_CLICK_MIN_ANCHORS
+
+_JS_CLICK_HOOK = r"""() => {
+  if (window.__ocClkHooked) return;
+  window.__ocClkHooked = 1; window.__ocClk = []; window.__ocClkCur = '';
+  const rec = u => { try { window.__ocClk.push([String(new URL(u, location.href)), window.__ocClkCur]); } catch (e) {} };
+  history.pushState = function (s, t, u) { if (u != null) rec(u); };
+  history.replaceState = function (s, t, u) { if (u != null) rec(u); };
+  window.open = function (u) { if (u) rec(u); return null; };
+}"""
+_JS_CLICK_MARK = r"""(max) => {
+  const sel = '.clickable-element,[onclick],[role=link],[data-href],[data-url],[data-link]';
+  const seen = new Set(); const out = [];
+  for (const e of document.querySelectorAll(sel)) {
+    if (e.closest('a[href]') || e.querySelector('a[href]')) continue;
+    if (e.tagName === 'SCRIPT' || e.tagName === 'STYLE') continue;
+    const txt = (e.innerText || e.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 180);
+    const key = e.className + '|' + txt;
+    if (seen.has(key)) continue; seen.add(key);
+    const direct = e.getAttribute('data-href') || e.getAttribute('data-url') || e.getAttribute('data-link') || '';
+    e.setAttribute('data-oc-clk', out.length);
+    out.push([txt, direct]);
+    if (out.length >= max) break;
+  }
+  return out;
+}"""
+_JS_CLICK_FIRE = r"""(i) => {
+  const e = document.querySelector('[data-oc-clk="' + i + '"]');
+  if (!e) return;
+  window.__ocClkCur = (e.innerText || e.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 180);
+  e.click();
+}"""
+
+
+def _discover_js_click_links(pw_page, page_url):
+    """Return [[absolute_url, anchor_text], ...] reached by clicking
+    href-less clickable elements. Best effort: any failure returns what was
+    collected so far."""
+    from urllib.parse import urljoin, urlparse
+    found = []
+    navs = []
+
+    def _route(route, req):
+        try:
+            if req.is_navigation_request() and req.frame == pw_page.main_frame:
+                navs.append([req.url, ''])
+                route.fulfill(status=204, body='')
+                return
+        except Exception:
+            pass
+        try:
+            route.continue_()
+        except Exception:
+            pass
+
+    cur_path = urlparse(page_url).path.rstrip('/')
+    routed = False
+    try:
+        pw_page.route('**/*', _route)
+        routed = True
+        pw_page.evaluate(_JS_CLICK_HOOK)
+        cands = pw_page.evaluate(_JS_CLICK_MARK, _JS_CLICK_MAX_ELEMENTS) or []
+        # Labels of recent clicks that produced no navigation inside their
+        # wait window. A slow workflow can fire after the next click starts,
+        # so when one window catches several navigations the earlier ones
+        # belong to those silent clicks, not the current one.
+        silent = []
+        for i, (txt, direct) in enumerate(cands):
+            if direct:
+                found.append([urljoin(page_url, direct), txt])
+                continue
+            n_before = len(navs)
+            try:
+                pw_page.evaluate(_JS_CLICK_FIRE, i)
+                pw_page.wait_for_timeout(200)
+            except Exception:
+                continue
+            new = navs[n_before:]
+            if not new:
+                silent = (silent + [txt])[-3:]
+                continue
+            if len(new) == 1:
+                new[0][1] = txt
+            else:
+                # Arrival order is not reliable, so pair each URL with the
+                # label whose words best match its path slug.
+                labels = silent + [txt]
+                for nav in new:
+                    slug = set(_re.findall(r'[a-z0-9]+', urlparse(nav[0]).path.lower()))
+                    best = max(labels, key=lambda l: len(slug & set(_re.findall(r'[a-z0-9]+', l.lower())))) if labels else txt
+                    nav[1] = best
+                    if len(labels) > 1:
+                        labels.remove(best)
+            silent = []
+        try:
+            found.extend(pw_page.evaluate('window.__ocClk || []') or [])
+        except Exception:
+            pass
+    except Exception:
+        pass
+    finally:
+        if routed:
+            try:
+                pw_page.unroute('**/*', _route)
+            except Exception:
+                pass
+    found.extend(navs)
+
+    out, seen = [], set()
+    for u, txt in found:
+        if not u or not u.lower().startswith(('http://', 'https://')):
+            continue
+        p = urlparse(u)
+        # Same path, different query/fragment = in-page state (tabs, scroll
+        # anchors such as Bubble's ?section=faq), not a separate page.
+        if p.netloc == urlparse(page_url).netloc and p.path.rstrip('/') == cur_path:
+            continue
+        u = u.split('#', 1)[0]
+        if u in seen:
+            continue
+        seen.add(u)
+        out.append([u, (txt or '')[:180]])
+    return out
+
+
+def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, capture_no_js=False, challenge_browser=None):
     """Crawl a single page and return audit data dict.
 
     If ``pw_page`` (a live Playwright page) is provided, the HTML body will be
@@ -1695,25 +1961,18 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
         # Skipped when the body came from the challenge browser: that HTML is
         # already browser-rendered, and re-fetching through the headless
         # renderer would just land back on the interstitial.
-        if pw_page is not None and not challenge_html and ('text/html' in ctype or 'application/xhtml' in ctype):
+        if pw_renderer is not None and not challenge_html and ('text/html' in ctype or 'application/xhtml' in ctype):
             try:
-                pw_page.goto(resp.url, wait_until='load', timeout=20000)
-            except Exception as e:
-                # Even if goto times out, the page may have loaded enough of
-                # the DOM to be useful — keep going and let content() decide.
-                result.setdefault('render_errors', []).append(f'goto: {str(e)[:160]}')
-            # Best-effort settle window for late-injected trackers
-            try:
-                pw_page.wait_for_load_state('networkidle', timeout=4000)
-            except Exception:
-                pass
-            try:
-                rendered = pw_page.content()
+                rendered, render_err, click_links = pw_renderer.render_with_clicks(resp.url, timeout=20000)
+                if render_err:
+                    result.setdefault('render_errors', []).append(render_err)
                 if rendered and len(rendered) > 100:
                     raw_html = rendered[:5_000_000]
                     result['js_rendered'] = True
+                    if click_links:
+                        result['_js_click_links'] = click_links
             except Exception as e:
-                result.setdefault('render_errors', []).append(f'content: {str(e)[:160]}')
+                result.setdefault('render_errors', []).append(f'render: {str(e)[:160]}')
 
         soup = BeautifulSoup(raw_html, 'html.parser')
 
@@ -2245,6 +2504,28 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
 
         # Transport (internal): [[target, anchor, placement], ...]
         # Transport (external): [[target, anchor, placement, rel, target_attr], ...]
+        # Links found by clicking href-less JS elements (see
+        # _discover_js_click_links). Queued for crawling like real links, but
+        # flagged: search engines only follow <a href>, so these pages are
+        # effectively unlinked for Google.
+        _js_click = result.pop('_js_click_links', None) or []
+        _js_click_int = 0
+        for _cu, _ct in _js_click:
+            _cdom = urlparse(_cu).netloc.lower().replace('www.', '')
+            _canchor = (_ct or '(no text)')[:160] + ' [JS click]'
+            if _cdom == domain:
+                _cn = _normalize_crawl_url(_cu)
+                if _cn not in int_links:
+                    int_links[_cn] = (_canchor, 'body')
+                    _js_click_int += 1
+            else:
+                ext_count += 1
+                if len(ext_links_list) < 300:
+                    ext_links_list.append([_cu, _canchor, 'body', '', ''])
+        if _js_click_int:
+            result['js_click_links'] = _js_click_int
+            result['issues'].append(f'JS-only navigation: {_js_click_int} internal link(s) have no <a href> (search engines cannot follow them)')
+
         result['internal_link_urls'] = [[t, a, p] for t, (a, p) in int_links.items()]
         result['internal_links'] = len(int_links)
         result['external_link_urls'] = ext_links_list
@@ -2412,11 +2693,10 @@ def _crawl_page(url, session, domain, pw_page=None, ignore_noindex=False, captur
     return result
 
 
-def _teardown_pw(pw_page, pw_browser, pw_ctx):
-    for name, obj, method in (('page', pw_page, 'close'), ('browser', pw_browser, 'close'), ('pw', pw_ctx, 'stop')):
-        if obj is not None:
-            try: getattr(obj, method)()
-            except Exception: pass
+def _teardown_pw(pw_renderer):
+    if pw_renderer is not None:
+        try: pw_renderer.close()
+        except Exception: pass
 
 
 
@@ -3307,24 +3587,18 @@ def crawl_site():
                 challenge_browser = None
 
         # Launch Playwright browser once per crawl if JS rendering requested
-        pw_ctx = None
-        pw_browser = None
-        pw_page = None
+        # Playwright's sync API is bound to the thread that started it, and
+        # pages are fetched on ThreadPoolExecutor workers, so every browser
+        # call goes through PlaywrightRenderer's single dedicated thread.
+        pw_renderer = None
         if render_js:
             try:
-                from playwright.sync_api import sync_playwright
-                pw_ctx = sync_playwright().start()
-                pw_browser = pw_ctx.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
-                pw_page = pw_browser.new_page(
-                    viewport={'width': 1280, 'height': 900},
-                    user_agent=crawl_ua,
-                )
-                pw_page.set_default_timeout(20000)
+                pw_renderer = PlaywrightRenderer(user_agent=crawl_ua)
                 yield f"data: {json.dumps({'type': 'info', 'msg': 'JS rendering enabled (Playwright). Crawl will be 3-5x slower.'})}\n\n"
             except Exception as e:
                 app.logger.warning(f"[crawler] Playwright init failed: {e}")
                 yield f"data: {json.dumps({'type': 'info', 'msg': f'JS rendering unavailable ({str(e)[:100]}); using raw HTML only.'})}\n\n"
-                pw_page = None
+                pw_renderer = None
 
         if resumed_state:
             queue = deque(tuple(item) for item in resumed_state.get('queue', []))
@@ -3448,7 +3722,7 @@ def crawl_site():
         def _fetch_job(url, depth):
             """Worker: politeness-wait, fetch, return (url, depth, page_data)."""
             _wait_host_turn(url)
-            pd = _crawl_page(url, session, domain, pw_page=pw_page, ignore_noindex=ignore_noindex, capture_no_js=compare_no_js, challenge_browser=challenge_browser)
+            pd = _crawl_page(url, session, domain, pw_renderer=pw_renderer, ignore_noindex=ignore_noindex, capture_no_js=compare_no_js, challenge_browser=challenge_browser)
             pd['depth'] = depth
             _adjust_host_backoff(url, pd)
             return url, depth, pd
@@ -3673,7 +3947,7 @@ def crawl_site():
             }
             app.logger.info(f"[crawler] {crawl_id} suspended (resumable for {SUSPENDED_CRAWL_TTL//60}m): {len(results)} done, {len(queue)} queued")
             session.close()
-            _teardown_pw(pw_page, pw_browser, pw_ctx)
+            _teardown_pw(pw_renderer)
             if challenge_browser is not None:
                 challenge_browser.close()
             ACTIVE_CRAWL_RULES.pop(crawl_id, None)
@@ -3688,7 +3962,7 @@ def crawl_site():
                 challenge_browser.close()
 
         session.close()
-        _teardown_pw(pw_page, pw_browser, pw_ctx)
+        _teardown_pw(pw_renderer)
 
         # Summary
         avg_time = round(total_time / len(results), 2) if results else 0
