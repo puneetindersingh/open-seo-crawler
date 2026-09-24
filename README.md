@@ -269,13 +269,15 @@ To disable auto-start on logon, delete the `Open SEO Crawler (Autostart)` shortc
 
 > If PowerShell's execution policy blocks the script, the `-ExecutionPolicy Bypass` prefix shown above handles it. No admin rights are needed; `winget --scope user` and the user-level Startup shortcut both work without UAC.
 
-### Optional: JS rendering (for SPAs)
+### JS rendering (for SPAs and no-code builders)
 
-Only needed for React / Vue / Wix / heavy Squarespace sites. Adds ~400 MB of browser dependencies.
+Needed for React / Vue / Wix / Bubble / heavy Squarespace sites. Tick **Render JS** before a crawl: the first time, the crawler installs Playwright and Chromium into its own Python by itself (one-time download, a couple of minutes, progress shown in the corner). Sites whose menus are clickable elements with no `<a href>` links (Bubble and similar) are followed by clicking them in the headless browser, and each such page is flagged "JS-only navigation", because search engines only follow real links.
+
+If the automatic setup fails (no internet, locked-down Python), the crawl tells you why. Install manually with the crawler's Python, then restart it:
 
 ```bash
-pip install playwright
-playwright install chromium
+python -m pip install playwright
+python -m playwright install chromium
 ```
 
 ## Usage

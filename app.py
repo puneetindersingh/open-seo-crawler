@@ -1406,6 +1406,54 @@ def _is_challenge_response(resp):
         return False
 
 
+# Render JS needs Playwright and a Chromium build, neither of which the
+# installers set up (about 150 MB). Before 2026-09 a missing renderer
+# silently fell back to plain HTML, so a JS-only site "crawled" one page
+# with no hint why. Now the first crawl with Render JS installs it into the
+# running interpreter (the install's own venv) and reports progress.
+_JS_RENDERER_MANUAL = 'python -m pip install playwright && python -m playwright install chromium'
+
+
+def _js_renderer_installable(err):
+    """True when a PlaywrightRenderer init error is one we can fix by
+    installing (module or browser missing), not e.g. missing system libs."""
+    e = (err or '').lower()
+    return ("no module named 'playwright'" in e
+            or "executable doesn't exist" in e
+            or 'playwright install' in e and 'install-deps' not in e)
+
+
+def _install_js_renderer():
+    """Generator: install playwright + chromium, yielding progress strings.
+    Raises RuntimeError with the tail of the output on failure."""
+    import subprocess as _sp
+    import sys as _sys
+    import importlib
+    steps = []
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        steps.append(('Installing Playwright (Python package)', [_sys.executable, '-m', 'pip', 'install', '--quiet', 'playwright']))
+    steps.append(('Downloading Chromium for JS rendering', [_sys.executable, '-m', 'playwright', 'install', 'chromium']))
+    for label, cmd in steps:
+        yield f'{label}. One-time setup, this can take a couple of minutes.'
+        proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True, errors='replace')
+        tail = []
+        last = time.time()
+        for line in proc.stdout:
+            line = line.strip()
+            if line:
+                tail = (tail + [line])[-8:]
+            if time.time() - last > 15:
+                last = time.time()
+                yield f'{label}, still working...'
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f'{label} failed: ' + ' | '.join(tail)[-400:])
+        importlib.invalidate_caches()
+    yield 'JS rendering installed.'
+
+
 class PlaywrightRenderer:
     """Owns a Playwright sync session on a single dedicated thread.
 
@@ -3606,14 +3654,28 @@ def crawl_site():
         # pages are fetched on ThreadPoolExecutor workers, so every browser
         # call goes through PlaywrightRenderer's single dedicated thread.
         pw_renderer = None
+        js_unavailable = None
         if render_js:
-            try:
-                pw_renderer = PlaywrightRenderer(user_agent=crawl_ua)
-                yield f"data: {json.dumps({'type': 'info', 'msg': 'JS rendering enabled (Playwright). Crawl will be 3-5x slower.'})}\n\n"
-            except Exception as e:
-                app.logger.warning(f"[crawler] Playwright init failed: {e}")
-                yield f"data: {json.dumps({'type': 'info', 'msg': f'JS rendering unavailable ({str(e)[:100]}); using raw HTML only.'})}\n\n"
-                pw_renderer = None
+            for _pw_attempt in range(2):
+                try:
+                    pw_renderer = PlaywrightRenderer(user_agent=crawl_ua)
+                    yield f"data: {json.dumps({'type': 'info', 'msg': 'JS rendering enabled (Playwright). Crawl will be 3-5x slower.'})}\n\n"
+                    break
+                except Exception as e:
+                    pw_renderer = None
+                    app.logger.warning(f"[crawler] Playwright init failed: {e}")
+                    if _pw_attempt == 0 and _js_renderer_installable(str(e)):
+                        try:
+                            for _msg in _install_js_renderer():
+                                yield f"data: {json.dumps({'type': 'info', 'msg': _msg})}\n\n"
+                            continue
+                        except Exception as ie:
+                            js_unavailable = str(ie)
+                            break
+                    js_unavailable = str(e)
+                    break
+            if js_unavailable:
+                yield f"data: {json.dumps({'type': 'warning', 'msg': f'JS rendering could not start ({js_unavailable[:160]}). Crawling plain HTML only.'})}\n\n"
 
         if resumed_state:
             queue = deque(tuple(item) for item in resumed_state.get('queue', []))
@@ -4160,8 +4222,20 @@ def crawl_site():
                 stop_reason = (f"Crawl stopped at the start page — it returned an error "
                                f"({seed_row.get('error')}). {extra}").strip()
             elif not (seed_row.get('internal_link_urls') or []):
-                stop_reason = ("Crawl stopped at the start page — it loaded but no internal links were found. "
-                               "If the site builds its navigation with JavaScript, turn on 'Render JS' and retry.")
+                if render_js and js_unavailable:
+                    stop_reason = ("Crawl stopped at the start page. Render JS is on, but the JS renderer could not "
+                                   f"start ({js_unavailable[:200]}), so only plain HTML was read and it has no links. "
+                                   f"Install it manually with: {_JS_RENDERER_MANUAL}  then restart the crawler and retry.")
+                elif render_js and seed_row.get('js_rendered'):
+                    stop_reason = ("Crawl stopped at the start page. It was rendered with JavaScript, but no links "
+                                   "or clickable navigation leading to other pages on this site were found.")
+                elif render_js:
+                    _rerr = '; '.join(seed_row.get('render_errors') or [])[:200]
+                    stop_reason = ("Crawl stopped at the start page. Render JS is on, but the page did not render"
+                                   + (f" ({_rerr})" if _rerr else '') + ", so only plain HTML was read and it has no links.")
+                else:
+                    stop_reason = ("Crawl stopped at the start page — it loaded but no internal links were found. "
+                                   "If the site builds its navigation with JavaScript, turn on 'Render JS' and retry.")
             else:
                 stop_reason = ("Crawl stopped at the start page — links were found but none were crawlable "
                                "(blocked by robots.txt, removed by your URL include/exclude filters, or pointing "

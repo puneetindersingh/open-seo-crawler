@@ -798,6 +798,11 @@ function startCrawl(opts) {
               if (typeof window._maybeRefreshSiteStructure === 'function') {
                 window._maybeRefreshSiteStructure();
               }
+            } else if (p.type === 'info' || p.type === 'warning') {
+              // Setup / renderer status from the server (JS rendering
+              // install progress, renderer failures). Used to be dropped,
+              // which hid a failed Render JS behind a one-page crawl.
+              showToast(p.msg || '', p.type === 'warning' ? 'warn' : 'info');
             } else if (p.type === 'cms_detected') {
               // CMS-recommendations banner removed — see live robots.txt
               // preview in the URL filters panel instead.
