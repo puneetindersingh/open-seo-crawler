@@ -630,6 +630,15 @@ def version():
     })
 
 
+def _require_local_request():
+    """Reject requests not originating from localhost. /update and /restart
+    perform sensitive operations (git pull, dependency install, process
+    restart) and must never be reachable from the network."""
+    if request.remote_addr not in ('127.0.0.1', '::1', 'localhost'):
+        return jsonify({'ok': False, 'error': 'Forbidden: local access only.'}), 403
+    return None
+
+
 @app.route('/update', methods=['POST'])
 def update_self():
     """Reconcile the local checkout to origin/master and report the result.
@@ -651,6 +660,9 @@ def update_self():
         installer's Autostart.ps1 / Update.ps1 / recover-windows.ps1 use,
         so a broken checkout repairs itself on the next update or reboot.
     Untracked files (crawl data, logs, the venv) survive the reset."""
+    _auth_err = _require_local_request()
+    if _auth_err:
+        return _auth_err
     import subprocess as _sp
     repo = os.path.dirname(os.path.abspath(__file__))
     if not os.path.isdir(os.path.join(repo, '.git')):
@@ -727,6 +739,9 @@ def restart_self():
     """Detached restart of the running Flask process. Platform split:
     POSIX uses bash + nohup; Windows uses cmd.exe + start to launch a
     detached pythonw.exe so the new process survives this one's death."""
+    _auth_err = _require_local_request()
+    if _auth_err:
+        return _auth_err
     import subprocess as _sp
     import sys as _sys
     repo = os.path.dirname(os.path.abspath(__file__))
