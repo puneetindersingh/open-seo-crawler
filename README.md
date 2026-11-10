@@ -79,7 +79,8 @@ No account, no API key, no telemetry. Crawl the site here to find the pages with
 
 - **Concurrent crawling**: 5 workers by default, 1-20 configurable. Per-host politeness keeps you under target rate limits while still moving fast.
 - **CMS detection + one-click recommendations**: auto-detects Shopify, WordPress (+ Yoast / Rank Math), Webflow, Wix, Squarespace, Kajabi, Ghost, Drupal, HubSpot, Joomla. Applies sensible exclude patterns and JS-render settings per platform.
-- **Smart retry**: exponential backoff on 429 / 5xx / connection errors. Respects `Retry-After`. Per-host adaptive back-off doubles when a server starts rate-limiting, decays back when it recovers.
+- **Smart retry**: exponential backoff on 429 / 5xx / connection errors. Respects `Retry-After`, as seconds or as a date. Per-host adaptive back-off doubles when a server starts rate-limiting, decays back when it recovers.
+- **Latency-aware pacing**: a host that answers slowly without ever returning an error gets its requests spaced out (about two in flight instead of one per worker), and goes back to full speed when it recovers. On by default; send `auto_throttle: false` to `/crawl` to switch it off.
 - **Sitemap analysis**: fetches sitemap.xml, cross-checks against the crawl: flags missing from sitemap, orphans, sitemap-only URLs, non-200 in sitemap, redirects in sitemap.
 - **Near-duplicate content**: shingle-based Jaccard similarity flags pairs of pages that are 90%+ similar (tweakable 80 / 85 / 90 or custom).
 - **Robots.txt aware** (or ignore it, your choice).

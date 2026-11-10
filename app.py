@@ -9,6 +9,7 @@ Features:
   - Concurrent threaded crawl with per-host politeness
   - CMS detection (Shopify, WordPress + Yoast/Rank Math, Webflow, Wix, Squarespace, etc.)
   - Retry on 429 / 5xx / connection errors with exponential backoff
+  - Latency-aware pacing: requests are spaced out on a host that answers slowly
   - Duplicate title / meta / H1 / body detection
   - Orphan page detection (sitemap vs crawled URLs)
   - Redirect chain detection
@@ -29,6 +30,7 @@ from collections import deque, defaultdict as _dd
 from urllib.parse import urlparse, urljoin, urlunparse, parse_qs, urlencode
 from bs4 import BeautifulSoup
 import page_checks   # extra per-page crawler checks (pure, offline-testable)
+import crawl_throttle   # Retry-After parsing + latency-aware pacing (pure, offline-testable)
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s: %(message)s')
@@ -264,7 +266,14 @@ def _parse_robots_groups(robots_text):
     groups = {}
     current = []
     starting_group = True
-    for raw in (robots_text or '').splitlines():
+    # A byte order mark glued to the first line hides it: "\ufeffUser-agent: *"
+    # is not a User-agent line, so the whole first group used to be dropped and
+    # its Disallow rules ignored. Also arrives as "ï»¿" when the file is served
+    # without a charset and decoded as Latin-1.
+    robots_text = (robots_text or '').lstrip('\ufeff')
+    if robots_text.startswith('\u00ef\u00bb\u00bf'):
+        robots_text = robots_text[3:]
+    for raw in robots_text.splitlines():
         line = raw.split('#', 1)[0].strip()
         if not line or ':' not in line:
             continue
@@ -2013,8 +2022,9 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
                     # retries here alone cannot win while other workers are
                     # still hitting the same host.
                     ra = resp.headers.get('Retry-After', '').strip()
-                    try: wait = float(ra) if ra else 2 * (2 ** attempt)
-                    except ValueError: wait = 2 * (2 ** attempt)
+                    # Retry-After is seconds or an HTTP date; both are read.
+                    wait = crawl_throttle.parse_retry_after(ra)
+                    if wait is None: wait = 2 * (2 ** attempt)
                     wait = min(wait, 120)
                     result['_retry_hint'] = wait
                     if attempt < 2:
@@ -4282,6 +4292,7 @@ def crawl_site():
             max_pages = 999999
         max_depth = min(int(cfg.get('max_depth', 10) or 10), 20)
         crawl_delay = max(float(cfg.get('crawl_delay', 0.4) or 0.4), 0.0)
+        auto_throttle = bool(cfg.get('auto_throttle', True))
         render_js = bool(cfg.get('render_js', False))
         ignore_robots = bool(cfg.get('ignore_robots', False))
         ignore_noindex = bool(cfg.get('ignore_noindex', False))
@@ -4300,6 +4311,9 @@ def crawl_site():
             max_pages = 999999  # unlimited
         max_depth = min(int(data.get('max_depth', 10) or 10), 20)
         crawl_delay = max(float(data.get('crawl_delay', 0.4) or 0.4), 0.0)
+        # Space requests out on a host that answers slowly (crawl_throttle.py).
+        # On unless the request says otherwise.
+        auto_throttle = bool(data.get('auto_throttle', True))
         render_js = bool(data.get('render_js', False))
         ignore_robots = bool(data.get('ignore_robots', False))
         ignore_noindex = bool(data.get('ignore_noindex', False))
@@ -4610,6 +4624,9 @@ def crawl_site():
         host_lock = threading.Lock()
         host_backoff = {}      # host → multiplier for adaptive slow-down on 429/403/503
         host_pause_until = {}  # host → epoch-seconds to halt ALL workers for this host
+        # Latency-aware pacing: a host that answers slowly without ever sending
+        # a 429/503 gets its requests spaced out, and released when it recovers.
+        latency_throttle = crawl_throttle.LatencyThrottle(enabled=auto_throttle)
         url_retry_count = {}   # url → times requeued after a 429 that outlasted its retries
 
         def _wait_host_turn(u):
@@ -4628,7 +4645,7 @@ def crawl_site():
                     last = host_last_fetch.get(host, 0)
                     pause_until = host_pause_until.get(host, 0)
                     backoff = host_backoff.get(host, 1.0)
-                    effective_delay = live_delay * backoff
+                    effective_delay = max(live_delay * backoff, latency_throttle.gap(host))
                     wait = max((last + effective_delay) - now, pause_until - now)
                     if wait <= 0:
                         host_last_fetch[host] = now
@@ -4676,6 +4693,10 @@ def crawl_site():
                     # Decay back toward 1.0 on successes
                     if cur > 1.0:
                         host_backoff[host] = max(1.0, cur * 0.8)
+                    # A healthy response also tells the latency throttle how
+                    # quickly this host is answering.
+                    if 200 <= status < 400:
+                        latency_throttle.record(host, page_data.get('response_time'))
 
         def _fetch_job(url, depth):
             """Worker: politeness-wait, fetch, return (url, depth, page_data)."""
@@ -4739,6 +4760,10 @@ def crawl_site():
                                 'url': url, 'status_code': 0, 'error': str(e)[:200],
                                 'issues': [f'Fetch error: {str(e)[:80]}'], 'depth': submitted[1] if submitted else 0,
                             }
+
+                        # A host that turned slow (or recovered) since the last result.
+                        for _note in latency_throttle.pop_notices():
+                            yield f"data: {json.dumps({'type': 'speed_adjusted', 'reason': _note})}\n\n"
 
                         # Count adaptive signal for surfacing a speed notice
                         status = page_data.get('status_code', 0)
@@ -4938,6 +4963,7 @@ def crawl_site():
                     'max_pages': max_pages,
                     'max_depth': max_depth,
                     'crawl_delay': crawl_delay,
+                    'auto_throttle': auto_throttle,
                     'render_js': render_js,
                     'compare_no_js': compare_no_js,
                     'ignore_robots': ignore_robots,
