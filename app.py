@@ -2074,7 +2074,9 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
 
         # Meta description
         meta_tag = soup.find('meta', attrs={'name': 'description'})
-        result['meta_description'] = meta_tag.get('content', '') if meta_tag else ''
+        # Whitespace collapsed the way a results page shows it: a description
+        # that is only newlines and spaces is missing, not 6 characters long.
+        result['meta_description'] = ' '.join((meta_tag.get('content') or '').split()) if meta_tag else ''
         result['meta_len'] = len(result['meta_description'])
 
         # H1s and H2s (full lists, not just first/count). Pick the first
