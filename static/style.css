@@ -1407,3 +1407,18 @@ tbody:has(tr[data-url]) { user-select: none; }
 .bot-legend.ok { color: var(--ok-fg); }
 .bot-legend.warn { color: var(--warn-fg); }
 .bot-legend.err { color: var(--err-fg); }
+
+/* Convention tag: a finding that rests on a common guideline, not a Google requirement. */
+.conv-chip {
+  display: inline-block;
+  padding: 0 6px;
+  margin-right: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+.info-box .conv-line { margin-top: 4px; }

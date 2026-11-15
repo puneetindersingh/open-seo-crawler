@@ -185,7 +185,7 @@ _PAGE_CHECK_ERR_RE = re.compile(
     r'^\d+ link\(s\) to a local or staging host|^\d+ form\(s\) submit over http|^no <head> element|'
     r'^canonical points to a non-200|^canonical points to a non-indexable|'
     r'^(search|ai search|ai assistant) bot (blocked|challenged):|^noindex only for |'
-    r'^noindex in the html is removed by javascript')
+    r'^noindex in the html is removed by javascript|^http version does not redirect to https')
 
 _PAGE_CHECK_WARN_RE = re.compile(
     r'^multiple (title tags|canonical tags|meta descriptions|viewport tags|head elements|body elements)|'
@@ -197,7 +197,8 @@ _PAGE_CHECK_WARN_RE = re.compile(
     r'^no <body> element|^html document over 2mb|^no internal outlinks|^inbound internal links come only|'
     r'pagination url\(s\) declared by rel|'
     r'^(search|ai search|ai assistant|training) bot (sees different content|sees a thinner page|redirected elsewhere):|'
-    r'^content needs javascript|^mobile page has less content|^mobile and desktop pages differ')
+    r'^content needs javascript|^mobile page has less content|^mobile and desktop pages differ|'
+    r'^host variant redirect is temporary|^www and non-www both answer')
 
 _ERR_RE = re.compile(r'^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content')
 _WARN_RE = re.compile(
@@ -283,6 +284,59 @@ def issue_group(issue):
         if pattern.search(issue if target == 'raw' else stripped):
             return (label, slug)
     return (stripped, stripped)
+
+
+# Findings that rest on a common guideline, not a Google requirement
+# (_SC_CONVENTION in script.js). Keyed by summary slug.
+CONVENTION = {
+    'Title too long', 'Title too short', 'Meta desc too long', 'Meta desc too short',
+    'Title may truncate in results', 'Meta description may truncate in results',
+    'Multiple H1s', 'H1 same as title', 'H1 too long', 'first heading', 'Heading level skips',
+    'Thin content', 'Slow', 'URL:', 'No schema', 'long alt', 'Large DOM', '__deep',
+}
+
+
+def _js_round3(x):
+    """Math.round(x * 1000) / 1000, which rounds halves up (Python's round does not)."""
+    return math.floor(x * 1000 + 0.5) / 1000
+
+
+def page_weights(rows, inlinks):
+    """{url: 0..1} how central each page is (_scPageWeights in script.js)."""
+    inlinks = inlinks or {}
+
+    def look(u):
+        if not u:
+            return []
+        for k in (u, u[:-1] if u.endswith('/') else u, u + '/'):
+            v = inlinks.get(k)
+            if v is not None:  # JS || stops at an empty array, which is truthy there
+                return v
+        return []
+
+    counts = [len(look(r.get('url'))) or (len(look(r.get('original_url'))) if r.get('original_url') else 0)
+              for r in rows]
+    max_n = max(counts or [0])
+    w = {}
+    for r, n in zip(rows, counts):
+        d = r.get('depth')
+        ok = isinstance(d, (int, float)) and not isinstance(d, bool) and math.isfinite(d)
+        d = max(0, d) if ok else 5
+        by_depth = 1 / (1 + d)
+        by_links = math.log1p(n) / math.log1p(max_n) if max_n > 0 else 0
+        v = _js_round3(max(by_depth, by_links))
+        u = r.get('url')
+        if u not in w or w[u] < v:
+            w[u] = v
+    return w
+
+
+def group_score(urls, total, weights):
+    """Rank inside one severity: reach times the most central page hit (_scGroupScore)."""
+    urls = list(urls)
+    top = max([weights.get(u) or 0 for u in urls] or [0])
+    share = len(urls) / total if total else 0
+    return _js_round3((0.6 + 0.4 * share) * (0.6 + 0.8 * top))
 
 
 # ── small helpers that match the browser's formatting ────────────────────────
@@ -444,10 +498,10 @@ def build_brief(crawl, prompt=None, page_table=True, page_limit=200, max_urls=10
     groups = OrderedDict()
     for r in rows:
         for issue in (r.get('issues') or []):
-            label = issue_group(issue)[0]
+            label, slug = issue_group(issue)
             g = groups.get(label)
             if g is None:
-                g = groups[label] = {'sev': sev_of(issue), 'pages': OrderedDict()}
+                g = groups[label] = {'sev': sev_of(issue), 'slug': slug, 'pages': OrderedDict()}
             detail = issue if (issue != label and re.search(r'[(\d:]', issue)) else ''
             origin = r.get('original_url')
             if _REDIRECT_ISSUE.match(issue) and origin and _url_key(origin) != _url_key(r.get('url')):
@@ -457,14 +511,16 @@ def build_brief(crawl, prompt=None, page_table=True, page_limit=200, max_urls=10
                 g['pages'][r.get('url')] = detail
     for key, heading in (('error', 'Errors (must fix)'), ('warn', 'Warnings (should fix)'),
                          ('info', 'Info (often intentional)')):
+        weights = page_weights(rows, inlinks)
         found = sorted([(label, g) for label, g in groups.items() if g['sev'] == key],
-                       key=lambda item: -len(item[1]['pages']))
+                       key=lambda item: (-group_score(item[1]['pages'], len(rows), weights), -len(item[1]['pages'])))
         if not found:
             continue
         add([f'## {heading}', ''])
         for label, g in found:
             n = len(g['pages'])
-            add([f'### {md_cell(label)} ({n} page{"" if n == 1 else "s"})'])
+            tag = ' [convention, not a Google requirement]' if g['slug'] in CONVENTION else ''
+            add([f'### {md_cell(label)} ({n} page{"" if n == 1 else "s"}){tag}'])
             spared = [_js_str(r.get('url')) for r in rows if r.get('url') not in g['pages']]
             if n > max_urls and len(spared) <= max_urls:
                 add([f'- Every crawled page except: {", ".join(spared)}' if spared else '- Every crawled page'])
@@ -1046,15 +1102,19 @@ def crawl_summary(ref='latest', sample_urls=5):
         codes[str(c)] = codes.get(str(c), 0) + 1
     times = [_num(r.get('response_time')) for r in rows]
     groups = _groups(rows)
+    weights = page_weights(rows, d.get('inlinks') or {})
     by_sev = {s: [] for s in SEVERITIES}
     for g in groups.values():
-        entry = {'issue': g['issue'], 'pages': len(g['pages'])}
+        entry = {'issue': g['issue'], 'pages': len(g['pages']),
+                 'score': group_score(g['pages'], len(rows), weights)}
+        if g['slug'] in CONVENTION:
+            entry['convention'] = True
         if sample_urls:
             entry['sample'] = [({'url': u, 'detail': det} if det else {'url': u})
                                for u, det in list(g['pages'].items())[:sample_urls]]
         by_sev[g['severity']].append(entry)
     for s in SEVERITIES:
-        by_sev[s].sort(key=lambda e: -e['pages'])
+        by_sev[s].sort(key=lambda e: (-e['score'], -e['pages'], e['issue']))
     pages_with = {s: len({u for g in groups.values() if g['severity'] == s for u in g['pages']}) for s in SEVERITIES}
     out = {
         'crawl': d['file'],

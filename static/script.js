@@ -132,6 +132,9 @@ const ISSUE_META = {
   '__bots': { sev: 'warn', why: 'A sample of pages is requested as a browser and as each crawler that publishes its user agent, then compared: blocks and challenges, redirects, title, H1, canonical, noindex and the text itself. Googlebot, Bingbot and Applebot run JavaScript; most AI crawlers do not say they do, so they are judged on the raw HTML, and the pages are also rendered to measure what only exists after JavaScript runs. Serving crawlers materially different content can count as cloaking.', sources: [['Google - JavaScript SEO basics', 'https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics'], ['Google - Spam policies (cloaking)', 'https://developers.google.com/search/docs/essentials/spam-policies'], ['Bing - Webmaster guidelines', 'https://www.bing.com/webmasters/help/webmaster-guidelines-30fba23a'], ['Cloudflare - Verified bots', 'https://developers.cloudflare.com/bots/concepts/bot/verified-bots/']] },
   'unavailable_after date has passed': { sev: 'error', why: 'The page carries a date that has already gone by, so Google drops it from results. Usually left over from a campaign or an event page. Remove the directive if the page should stay.', sources: [['Google - Robots meta tag', 'https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag']] },
   'soft 404': { sev: 'error', why: 'The URL answers 200 OK while the page itself says the content is gone, which is what an empty category or a mistyped path usually produces. Google treats these as soft 404s and drops them, and every mistyped URL becomes another indexable duplicate. Return a real 404 or 410, or redirect to the page that replaced it.', sources: [['Google - HTTP status codes', 'https://developers.google.com/search/docs/crawling-indexing/http-network-errors']] },
+  'Host variant redirect is temporary': { sev: 'warn', why: 'The http:// or www version of the site reaches the real one through a 302 or 307. Google reads a temporary redirect as "keep the old URL", so links that point at the variant may not count towards the site you want ranked, and the variant can linger in results. Make the redirect a 301 or 308, ideally in one hop.', sources: [['Google - Redirects and Google Search', 'https://developers.google.com/search/docs/crawling-indexing/301-redirects']] },
+  'HTTP version does not redirect to HTTPS': { sev: 'error', why: 'The site answers on plain http:// with a normal page instead of sending visitors to https://. That is a second, insecure copy of every page: browsers mark it "Not secure", and Google has two versions to choose between. Redirect every http:// URL to its https:// address with a 301.', sources: [['web.dev - Enable HTTPS', 'https://web.dev/articles/enable-https'], ['Google - Canonicalization', 'https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls'], ['Google - Redirects and Google Search', 'https://developers.google.com/search/docs/crawling-indexing/301-redirects']] },
+  'www and non-www both answer 200': { sev: 'warn', why: 'The site loads at both the www and the bare address without redirecting, so every page exists twice. Canonical tags can paper over it, but links and shares split between the two hosts. Pick one and 301 the other to it.', sources: [['Google - Canonicalization', 'https://developers.google.com/search/docs/crawling-indexing/consolidate-duplicate-urls'], ['Google - Redirects and Google Search', 'https://developers.google.com/search/docs/crawling-indexing/301-redirects']] },
   'Title may truncate in results': { sev: 'warn', why: 'Google cuts desktop titles near 580 pixels, not at a character count, so a title of wide characters clips while a short count looks fine. The figure is an estimate from an Arial width table: treat it as a nudge to put the distinguishing words first, not as an error.', sources: [['Google - Title links', 'https://developers.google.com/search/docs/appearance/title-link']] },
   'Meta description may truncate in results': { sev: 'warn', why: 'Descriptions are cut near 920 pixels on desktop and shorter on mobile. The tail is what disappears, so lead with the outcome and keep the qualifier that earns the click early.', sources: [['Google - Snippets', 'https://developers.google.com/search/docs/appearance/snippet']] },
   'No self-referencing hreflang entry': { sev: 'warn', why: 'Every page in an hreflang set has to list itself. Without it the set is incomplete and Google may discard the whole cluster, which is when the wrong country version starts ranking.', sources: [['Google - Localized versions', 'https://developers.google.com/search/docs/specialty/international/localized-versions']] },
@@ -175,6 +178,50 @@ const ISSUE_META = {
   '__traps':          { sev: 'error', why: 'The server returns 200 OK for URLs that cannot exist. A soft 404 at the root makes every mistyped URL an indexable duplicate. A 200 on a nested path under a real page is worse: the served page\'s relative links resolve one level deeper, creating an INFINITE URL space, search engines waste crawl budget on phantom pages and scrapers can crawl forever, burning unlimited bandwidth on transfer-capped hosting. Fix: return 404 (or 301 to the real page) for any path that doesn\'t map to real content.', sources: [['Google: Soft 404 errors', 'https://developers.google.com/search/docs/crawling-indexing/http-network-errors#soft-404-errors'], ['Google: Infinite spaces', 'https://developers.google.com/search/blog/2008/08/to-infinity-and-beyond-no']] },
 };
 
+// Findings that rest on a common guideline rather than anything Google
+// documents as a requirement: length limits, heading habits, word counts,
+// speed and depth thresholds. They are shown with a Convention tag so a
+// reader can weigh them against the page's purpose. Keyed by summary slug.
+const _SC_CONVENTION = new Set([
+  'Title too long', 'Title too short', 'Meta desc too long', 'Meta desc too short',
+  'Title may truncate in results', 'Meta description may truncate in results',
+  'Multiple H1s', 'H1 same as title', 'H1 too long', 'first heading', 'Heading level skips',
+  'Thin content', 'Slow', 'URL:', 'No schema', 'long alt', 'Large DOM', '__deep',
+]);
+const _SC_CONVENTION_NOTE = 'A common guideline, not a Google requirement. Weigh it against what the page is for.';
+
+// How central a page is, 0 to 1: the start page and pages a click or two
+// from it score high, and so do pages with many internal links pointing in
+// (log scale against the most linked page). Rounded so the browser and the
+// MCP tools, which repeat this sum in Python, always agree.
+function _scPageWeights(pages, inlinks) {
+  const look = (u) => {
+    if (!u || !inlinks) return [];
+    return inlinks[u] || inlinks[u.replace(/\/$/, '')] || inlinks[u + '/'] || [];
+  };
+  const counts = pages.map(r => look(r.url).length || (r.original_url ? look(r.original_url).length : 0));
+  const maxN = counts.reduce((m, n) => Math.max(m, n), 0);
+  const w = new Map();
+  pages.forEach((r, i) => {
+    const d = (typeof r.depth === 'number' && Number.isFinite(r.depth)) ? Math.max(0, r.depth) : 5;
+    const byDepth = 1 / (1 + d);
+    const byLinks = maxN > 0 ? Math.log1p(counts[i]) / Math.log1p(maxN) : 0;
+    const v = Math.round(Math.max(byDepth, byLinks) * 1000) / 1000;
+    if (!w.has(r.url) || w.get(r.url) < v) w.set(r.url, v);
+  });
+  return w;
+}
+
+// Rank score for one issue group: how much of the crawl it reaches and how
+// central the most central affected page is. Severity is sorted first and
+// separately; this orders issues inside one severity.
+function _scGroupScore(urls, total, weights) {
+  let top = 0;
+  for (const u of urls) top = Math.max(top, weights.get(u) || 0);
+  const share = total ? urls.length / total : 0;
+  return Math.round((0.6 + 0.4 * share) * (0.6 + 0.8 * top) * 1000) / 1000;
+}
+
 // Severity for the page_checks.py findings. Kept as two shared regexes
 // because three functions below classify issues independently (sevOf, plus
 // the inline sev() in matchesCategory and updateCounts) and they have to
@@ -183,10 +230,10 @@ const ISSUE_META = {
 // Error tier: a directive a browser moves out of head is ignored by Google,
 // and a malformed canonical hands the page to a URL that does not exist.
 // Both silently undo whatever the tag meant to say.
-const _PAGE_CHECK_ERR_RE = /^(title|canonical|meta robots) outside head|^unavailable_after|^canonical is malformed|^multiple conflicting canonicals|^canonical conflict|^soft 404|^noindex in the x-robots-tag|^conflicting robots directives|^robots "none"|^lorem ipsum placeholder|^\d+ link\(s\) to a local or staging host|^\d+ form\(s\) submit over http|^no <head> element|^canonical points to a non-200|^canonical points to a non-indexable|^(search|ai search|ai assistant) bot (blocked|challenged):|^noindex only for |^noindex in the html is removed by javascript/;
+const _PAGE_CHECK_ERR_RE = /^(title|canonical|meta robots) outside head|^unavailable_after|^canonical is malformed|^multiple conflicting canonicals|^canonical conflict|^soft 404|^noindex in the x-robots-tag|^conflicting robots directives|^robots "none"|^lorem ipsum placeholder|^\d+ link\(s\) to a local or staging host|^\d+ form\(s\) submit over http|^no <head> element|^canonical points to a non-200|^canonical points to a non-indexable|^(search|ai search|ai assistant) bot (blocked|challenged):|^noindex only for |^noindex in the html is removed by javascript|^http version does not redirect to https/;
 // Warning tier: real faults, but they cost visibility rather than removing
 // the page from the index.
-const _PAGE_CHECK_WARN_RE = /^multiple (title tags|canonical tags|meta descriptions|viewport tags|head elements|body elements)|^canonical (points to http|is a relative url|points to another host|only in the http header)|^noindex plus a canonical|^meta description outside head|^no compression|^paginated page|hreflang|^no lang attribute|^invalid lang attribute|^html lang|^h1 too long|may truncate in results|point to http|on-page anchor\(s\) point to nothing|^no doctype|^no charset declared|^charset is |^nosnippet|^canonical contains a fragment|^canonical points to a url that redirects|^no <body> element|^html document over 2mb|^no internal outlinks|^inbound internal links come only|pagination url\(s\) declared by rel|^(search|ai search|ai assistant|training) bot (sees different content|sees a thinner page|redirected elsewhere):|^content needs javascript|^mobile page has less content|^mobile and desktop pages differ/;
+const _PAGE_CHECK_WARN_RE = /^multiple (title tags|canonical tags|meta descriptions|viewport tags|head elements|body elements)|^canonical (points to http|is a relative url|points to another host|only in the http header)|^noindex plus a canonical|^meta description outside head|^no compression|^paginated page|hreflang|^no lang attribute|^invalid lang attribute|^html lang|^h1 too long|may truncate in results|point to http|on-page anchor\(s\) point to nothing|^no doctype|^no charset declared|^charset is |^nosnippet|^canonical contains a fragment|^canonical points to a url that redirects|^no <body> element|^html document over 2mb|^no internal outlinks|^inbound internal links come only|pagination url\(s\) declared by rel|^(search|ai search|ai assistant|training) bot (sees different content|sees a thinner page|redirected elsewhere):|^content needs javascript|^mobile page has less content|^mobile and desktop pages differ|^host variant redirect is temporary|^www and non-www both answer/;
 
 function sevOf(issue) {
   const l = (issue || '').toLowerCase();
@@ -1656,6 +1703,9 @@ window.selectCategory = function(cat) {
     'Mobile and desktop pages differ': 'Mobile and desktop pages that differ',
     'unavailable_after date has passed': 'Pages whose unavailable_after date has passed',
     'soft 404': 'Soft 404s (200 status on a page that says it is missing)',
+    'Host variant redirect is temporary': 'Host variant reaches the site through a temporary redirect',
+    'HTTP version does not redirect to HTTPS': 'HTTP version of the site does not redirect to HTTPS',
+    'www and non-www both answer 200': 'www and non-www addresses both serve the site',
     'Title may truncate in results': 'Titles wide enough to truncate (pixel width, not characters)',
     'Meta description may truncate in results': 'Meta descriptions wide enough to truncate',
     'No self-referencing hreflang entry': 'Hreflang sets missing a self-reference',
@@ -3066,14 +3116,17 @@ function _scIssueTally(pages) {
       const key = `${sev}|${slug}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (!groups.has(key)) groups.set(key, { slug, label, sev, count: 0 });
+      if (!groups.has(key)) groups.set(key, { slug, label, sev, count: 0, urls: [] });
       groups.get(key).count++;
+      groups.get(key).urls.push(r.url);
       seenSev.add(sev);
     }
     for (const sev of seenSev) affected[sev]++;
   }
+  const weights = _scPageWeights(pages, typeof crawlerInlinks !== 'undefined' ? crawlerInlinks : {});
+  for (const g of groups.values()) g.score = _scGroupScore(g.urls, pages.length, weights);
   const rows = [...groups.values()].sort((a, b) =>
-    _SC_SEV_ORDER[a.sev] - _SC_SEV_ORDER[b.sev] || b.count - a.count || a.label.localeCompare(b.label));
+    _SC_SEV_ORDER[a.sev] - _SC_SEV_ORDER[b.sev] || b.score - a.score || b.count - a.count || a.label.localeCompare(b.label));
   return { rows, affected };
 }
 
@@ -3082,7 +3135,7 @@ function _scIssuesTable(rows, total, limit) {
   const body = shown.map(r => `
     <tr>
       <td class="mark"><span class="sev-mark ${r.sev}" title="${_SC_SEV_NAME[r.sev]}"></span></td>
-      <td><button type="button" class="link-btn" onclick="selectCategory(${jsArg(r.slug)})">${escapeHtml(r.label)}</button></td>
+      <td><button type="button" class="link-btn" onclick="selectCategory(${jsArg(r.slug)})">${escapeHtml(r.label)}</button>${_SC_CONVENTION.has(r.slug) ? ` <span class="conv-chip" title="${escapeHtml(_SC_CONVENTION_NOTE)}">Convention</span>` : ''}</td>
       <td class="num">${r.count.toLocaleString()}</td>
       <td class="num muted">${total ? Math.max(1, Math.round((r.count / total) * 100)) : 0}%</td>
     </tr>`).join('');
@@ -3191,7 +3244,7 @@ function _scRenderSummaryPanel() {
         </section>
       </div>
       <section class="card">
-        <h3 class="card-title">Issues <span class="muted">${rows.length} type${rows.length === 1 ? '' : 's'}, most pages first</span></h3>
+        <h3 class="card-title">Issues <span class="muted" title="Inside each severity, issues that reach more of the site and touch more central pages (the start page, pages a click or two away, pages with many internal links) come first.">${rows.length} type${rows.length === 1 ? '' : 's'}, biggest reach first</span></h3>
         ${rows.length ? `<div class="card-flush" id="sum-issues">${_scIssuesTable(rows, total, LIMIT)}</div>
           ${rows.length > LIMIT ? `<div class="sum-more"><button type="button" class="link-btn" onclick="_scSummaryShowAll(this)">Show all ${rows.length} issues</button></div>` : ''}`
           : '<div class="sum-empty">No issues found on the crawled pages.</div>'}
@@ -3733,8 +3786,12 @@ function renderIssueInfo(cat) {
     : '';
   // The title bar above already names the view, so this is only the why and
   // the sources: one header per view.
+  const convHtml = _SC_CONVENTION.has(cat)
+    ? `<div class="conv-line"><span class="conv-chip">Convention</span>${escapeHtml(_SC_CONVENTION_NOTE)}</div>`
+    : '';
   box.innerHTML = `<div class="info-box">
     <div>${escapeHtml(meta.why)}</div>
+    ${convHtml}
     ${sourcesHtml}
   </div>`;
   box.style.display = '';
@@ -4704,9 +4761,9 @@ function _scBuildAiBrief(opts) {
   const groups = new Map();
   for (const r of rows) {
     for (const issue of (r.issues || [])) {
-      const [label] = _scIssueGroup(issue);
+      const [label, slug] = _scIssueGroup(issue);
       let g = groups.get(label);
-      if (!g) { g = { sev: sevOf(issue), pages: new Map() }; groups.set(label, g); }
+      if (!g) { g = { sev: sevOf(issue), slug, pages: new Map() }; groups.set(label, g); }
       // Keep the raw text only when it carries detail (a count, a value, a
       // target); a bare restatement of the heading is noise.
       let detail = issue !== label && /[(\d:]/.test(issue) ? issue : '';
@@ -4720,12 +4777,15 @@ function _scBuildAiBrief(opts) {
   }
   const SEV = [['error', 'Errors (must fix)'], ['warn', 'Warnings (should fix)'], ['info', 'Info (often intentional)']];
   for (const [key, heading] of SEV) {
-    const list = [...groups.entries()].filter(([, g]) => g.sev === key).sort((a, b) => b[1].pages.size - a[1].pages.size);
+    const weights = _scPageWeights(rows, inlinks);
+    const score = (g) => _scGroupScore([...g.pages.keys()], rows.length, weights);
+    const list = [...groups.entries()].filter(([, g]) => g.sev === key)
+      .sort((a, b) => score(b[1]) - score(a[1]) || b[1].pages.size - a[1].pages.size);
     if (!list.length) continue;
     add(`## ${heading}`, '');
     for (const [label, g] of list) {
       const n = g.pages.size;
-      add(`### ${_scMdCell(label)} (${n} page${n === 1 ? '' : 's'})`);
+      add(`### ${_scMdCell(label)} (${n} page${n === 1 ? '' : 's'})${_SC_CONVENTION.has(g.slug) ? ' [convention, not a Google requirement]' : ''}`);
       // An issue on nearly every page is shorter, and complete, as the few
       // pages without it; a capped list leaves the assistant guessing.
       const spared = rows.filter(r => !g.pages.has(r.url)).map(r => r.url);

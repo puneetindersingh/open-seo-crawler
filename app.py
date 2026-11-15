@@ -3781,6 +3781,38 @@ def _probe_url_traps(base, results, session):
     return out
 
 
+def _probe_host_variants(results, session):
+    """Post-crawl host check (at most 3 requests, 5 hops each).
+
+    Requests the start page's origin under http:// and under the www or bare
+    host, following redirects by hand so every hop's status is kept, then
+    returns {start page URL: [issues]} from page_checks.host_variant_issues.
+    Bodies are never read. Never raises.
+    """
+    pages = [r for r in results if r.get('url') and not r.get('error') and (r.get('status_code') or 0) == 200]
+    if not pages:
+        return {}
+    start = min(pages, key=lambda r: r.get('depth') or 0)
+    landing = start['url']
+    probes = []
+    for variant in page_checks.host_variants(landing):
+        chain, url, err = [], variant, None
+        try:
+            for _ in range(6):
+                resp = session.get(url, timeout=10, allow_redirects=False, stream=True)
+                resp.close()
+                chain.append([url, resp.status_code])
+                loc = resp.headers.get('Location')
+                if not (300 <= resp.status_code < 400 and loc):
+                    break
+                url = urljoin(url, loc)
+        except Exception as e:
+            err = str(e)[:120]
+        probes.append({'url': variant, 'chain': chain, 'error': err})
+    issues = page_checks.host_variant_issues(probes, landing)
+    return {landing: issues} if issues else {}
+
+
 # =============================================================================
 # Bot readability check
 # =============================================================================
@@ -5171,6 +5203,24 @@ def crawl_site():
                     for _i in _extra:
                         if _i not in _issues:
                             _issues.append(_i)
+        except Exception:
+            pass
+
+        # Host variants (up to 3 requests): http:// and the www or bare twin
+        # should each 301 to the origin the crawl landed on. Rides on
+        # late_issues so the start page's row picks the findings up.
+        try:
+            for _u, _extra in _probe_host_variants(results, session).items():
+                _row = next((r for r in results if r.get('url') == _u), None)
+                if _row is None:
+                    continue
+                _issues = _row.setdefault('issues', [])
+                _merged = _crawl_extra.setdefault(_u, [])
+                for _i in _extra:
+                    if _i not in _issues:
+                        _issues.append(_i)
+                    if _i not in _merged:
+                        _merged.append(_i)
         except Exception:
             pass
 

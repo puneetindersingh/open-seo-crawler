@@ -579,4 +579,44 @@ check('extra_issues finds the soft 404', has(everything, 'Soft 404'))
 check('extra_issues never raises on junk',
       isinstance(pc.extra_issues('', soup_of(''), {}, {}, '', ''), list))
 
+# --- host variants --------------------------------------------------------
+check('www landing probes http and the bare host',
+      sorted(pc.host_variants('https://www.example.com/')) ==
+      ['http://example.com/', 'http://www.example.com/', 'https://example.com/'])
+check('bare landing probes the www twin',
+      'https://www.example.com/' in pc.host_variants('https://example.com/about'))
+check('a three-label country domain gets a www twin',
+      'https://www.example.com.au/' in pc.host_variants('https://example.com.au/'))
+check('a subdomain gets no www twin',
+      pc.host_variants('https://shop.example.com/') == ['http://shop.example.com/'])
+check('an http landing gets no https probes',
+      all(u.startswith('http://') for u in pc.host_variants('http://www.example.com/')))
+check('an IP or a port gets no probes',
+      pc.host_variants('http://127.0.0.1:5000/') == [] and pc.host_variants('https://example.com:8443/') == [])
+
+L = 'https://www.example.com/'
+ok301 = {'url': 'http://example.com/', 'chain': [['http://example.com/', 301], ['https://example.com/', 301], [L, 200]]}
+check('permanent hops to the landing say nothing', pc.host_variant_issues([ok301], L) == [])
+temp = {'url': 'http://example.com/', 'chain': [['http://example.com/', 302], [L, 200]]}
+iss = pc.host_variant_issues([temp], L)
+check('a 302 to the landing is a temporary host redirect',
+      iss == ['Host variant redirect is temporary (http://example.com/ answers 302)'])
+plain = {'url': 'http://www.example.com/', 'chain': [['http://www.example.com/', 200]]}
+check('http answering 200 is reported',
+      pc.host_variant_issues([plain], L) == ['HTTP version does not redirect to HTTPS (http://www.example.com/ answers 200)'])
+twin = {'url': 'https://example.com/', 'chain': [['https://example.com/', 200]]}
+check('bare and www both answering 200 is reported',
+      pc.host_variant_issues([twin], L) == ['www and non-www both answer 200 (https://example.com/)'])
+dead = {'url': 'https://example.com/', 'chain': [], 'error': 'Name or service not known'}
+gone = {'url': 'https://example.com/', 'chain': [['https://example.com/', 404]]}
+away = {'url': 'https://example.com/', 'chain': [['https://example.com/', 301], ['https://other.example.net/', 200]]}
+check('a variant that does not resolve, 404s or leaves the site says nothing',
+      pc.host_variant_issues([dead, gone, away], L) == [])
+both = {'url': 'http://example.com/', 'chain': [['http://example.com/', 301], ['http://www.example.com/', 200]]}
+check('http landing on the http www twin is one finding, not two',
+      pc.host_variant_issues([plain, both], L) == ['HTTP version does not redirect to HTTPS (http://www.example.com/ answers 200)'])
+check('an http site is never told to redirect to https',
+      pc.host_variant_issues([{'url': 'http://example.com/', 'chain': [['http://example.com/', 200]]}], 'http://www.example.com/')
+      == ['www and non-www both answer 200 (http://example.com/)'])
+
 print(f'{PASS}/{PASS} page_checks checks passed')

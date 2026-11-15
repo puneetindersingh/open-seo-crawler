@@ -28,6 +28,9 @@ const lifted = [
   grab("const _SC_AI_DEFAULT_PROMPT", "`;\n"),
   grab("function _scLocalDate()", "\n}\n"),
   grab("function _scMdCell(v, max)", "\n}\n"),
+  grab("const _SC_CONVENTION = ", "]);\n"),
+  grab("function _scPageWeights(pages, inlinks)", "\n}\n"),
+  grab("function _scGroupScore(urls, total, weights)", "\n}\n"),
   grab("function _scBuildAiBrief(opts)", "\n}\n"),
 ].join("\n");
 

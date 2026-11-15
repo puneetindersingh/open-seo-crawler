@@ -1134,3 +1134,87 @@ def extra_issues(raw_html, soup, headers, result, page_url, domain,
         except Exception:
             continue
     return out
+
+
+# ---------------------------------------------------------------------------
+# Host variants: the same site under http:// and under the www or bare host.
+# A visitor or a link can reach any of the four, so each should answer with a
+# permanent redirect to the one the crawl landed on. Google treats a
+# temporary redirect as "keep the old URL indexed", and two variants that
+# both answer 200 are duplicate sites.
+# ---------------------------------------------------------------------------
+
+# Second-level public suffixes where the registrable name has three labels
+# (example.com.au). Only these and plain two-label hosts get a www twin
+# probed: shop.example.com has no www twin worth asking about.
+_SECOND_LEVEL = {
+    'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au', 'asn.au', 'id.au',
+    'co.uk', 'org.uk', 'me.uk', 'ac.uk', 'gov.uk', 'co.nz', 'net.nz', 'org.nz', 'govt.nz',
+    'com.sg', 'com.my', 'co.in', 'co.za', 'com.br', 'co.jp', 'com.hk', 'com.cn', 'com.mx',
+}
+_TEMPORARY = (302, 303, 307)
+
+
+def _origin(url):
+    p = urlparse(url or '')
+    return f'{p.scheme.lower()}://{(p.hostname or "").lower()}' + (f':{p.port}' if p.port else '')
+
+
+def host_variants(landing_url):
+    """The other ways to write the landing page's origin, as root URLs.
+
+    https://www.example.com/ gives http://www.example.com/,
+    https://example.com/ and http://example.com/. A plain http landing
+    gets no https probes: the crawl already reports pages served over HTTP.
+    """
+    p = urlparse(landing_url or '')
+    host = (p.hostname or '').lower()
+    if not host or p.port or re.fullmatch(r'[\d.]+|\[.*\]', host):
+        return []
+    bare = host[4:] if host.startswith('www.') else host
+    labels = bare.split('.')
+    twin_ok = host.startswith('www.') or len(labels) == 2 or (
+        len(labels) == 3 and '.'.join(labels[-2:]) in _SECOND_LEVEL)
+    hosts = [host] + ([bare if host != bare else 'www.' + bare] if twin_ok else [])
+    schemes = ['http', 'https'] if p.scheme == 'https' else ['http']
+    out = []
+    for h in hosts:
+        for s in schemes:
+            u = f'{s}://{h}/'
+            if _origin(u) != _origin(landing_url):
+                out.append(u)
+    return out
+
+
+def host_variant_issues(probes, landing_url):
+    """Issue strings for the start page from the host-variant probes.
+
+    probes: [{'url': variant, 'chain': [[url, status], ...], 'error': str}],
+    where the chain is every response in order, the last one final. A
+    variant that does not resolve, refuses, or errors says nothing: plenty
+    of sites never set up the www twin, and that is not a fault.
+    """
+    target = _origin(landing_url)
+    https_site = target.startswith('https:')
+    out = []
+    for pr in probes or []:
+        chain = pr.get('chain') or []
+        if pr.get('error') or not chain:
+            continue
+        url = pr.get('url') or chain[0][0]
+        final_url, final_status = chain[-1][0], chain[-1][1]
+        temps = [s for _, s in chain[:-1] if s in _TEMPORARY]
+        if not (200 <= (final_status or 0) < 300):
+            continue
+        final_origin = _origin(final_url)
+        if final_origin == target:
+            if temps:
+                out.append(f'Host variant redirect is temporary ({url} answers {temps[0]})')
+            continue
+        # Ended on a 200 somewhere other than the landing origin.
+        if https_site and final_origin.startswith('http:'):
+            out.append(f'HTTP version does not redirect to HTTPS ({final_url} answers {final_status})')
+        elif final_origin.replace('://www.', '://') == target.replace('://www.', '://'):
+            out.append(f'www and non-www both answer 200 ({final_url})')
+    # One line per finding: http://www and http:// can land on the same 200.
+    return list(dict.fromkeys(out))
