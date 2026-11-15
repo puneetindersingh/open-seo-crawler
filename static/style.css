@@ -839,54 +839,6 @@ tbody:has(tr[data-url]) { user-select: none; }
   color: var(--text-muted, #64748b);
 }
 
-/* ── Crawl Budget view ───────────────────────────────────────────────── */
-.sc-views { display:flex; gap:4px; align-self:stretch; margin-left:8px; }
-.sc-view-btn {
-  height:48px; padding:0 10px; border:0; border-radius:0; background:none;
-  box-shadow: inset 0 -2px 0 transparent;
-  font-size:var(--fs-sm); font-weight:600; color:var(--text-muted); cursor:pointer;
-}
-.sc-view-btn:hover { color:var(--text); }
-.sc-view-btn.active { color:var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
-.cb-view { padding:28px 24px; overflow-y:auto; }
-.cb-inner { max-width:940px; margin:0 auto; }
-.cb-title { font-size:var(--fs-xl); font-weight:600; margin:0 0 4px; color:var(--text); }
-.cb-subtitle { color:var(--text-muted); font-size:13px; margin:0 0 20px; }
-.cb-input-row { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
-.cb-input-row input {
-  flex:1; font-size:var(--fs-sm); height:36px; padding:0 12px; background:var(--surface);
-  border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);
-}
-.cb-btn-primary {
-  height:36px; padding:0 18px; font-size:var(--fs-sm); font-weight:600; white-space:nowrap;
-  background:var(--accent); color:var(--on-accent); border:none; border-radius:var(--radius-sm); cursor:pointer;
-}
-.cb-btn-primary:hover { background:var(--accent-hover); }
-.cb-btn-primary:disabled { opacity:.6; cursor:default; }
-.cb-status { font-size:12px; color:var(--text-muted); min-height:18px; margin-bottom:18px; }
-.cb-summary { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:18px; }
-.cb-stat {
-  flex:1; min-width:150px; background:var(--surface); border:1px solid var(--border);
-  border-radius:var(--radius); padding:14px 16px;
-}
-.cb-stat .v { font-size:var(--fs-xl); font-weight:600; line-height:1.2; }
-.cb-stat .l { font-size:var(--fs-xs); color:var(--text-muted); margin-top:4px; }
-.cb-table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
-.cb-table thead tr { background:var(--surface2); font-size:var(--fs-xs); color:var(--text); }
-.cb-table th { padding:8px 10px; text-align:left; }
-.cb-table td { padding:9px 10px; border-top:1px solid var(--border); }
-.cb-badge { font-size:var(--fs-xs); font-weight:600; padding:1px 6px; border-radius:var(--radius-sm); text-transform:capitalize; }
-.cb-explainers { margin-top:30px; display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
-.cb-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:16px; }
-.cb-card h3 { font-size:13px; font-weight:700; margin:0 0 8px; color:var(--text); }
-.cb-card p { font-size:12px; color:var(--text-muted); line-height:1.6; margin:0; }
-.cb-card code { background:var(--surface); padding:1px 4px; border-radius:3px; font-size:11px; }
-.cb-robots-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
-.cb-robots-head h3 { font-size:13px; font-weight:700; margin:0; color:var(--text); }
-.cb-copy-btn { font-size:var(--fs-xs); height:28px; padding:0 10px; background:var(--accent); color:var(--on-accent); border:none; border-radius:var(--radius-sm); cursor:pointer; font-weight:600; }
-.cb-pre { background:#0f172a; color:#e2e8f0; font-size:12px; font-family:monospace; padding:14px; border-radius:8px; overflow-x:auto; margin:0; }
-.cb-note { font-size:11px; color:var(--text-muted); margin-top:6px; }
-
 /* ── Form select: match the URL input instead of the native control ── */
 .sidebar select {
   width: 100%;
@@ -921,8 +873,6 @@ tbody:has(tr[data-url]) { user-select: none; }
 @media (max-width: 900px) {
   body { height: auto; min-height: 100vh; overflow: auto; }
   .topbar { flex-wrap: wrap; height: auto; padding: 8px 16px; gap: 8px; white-space: normal; }
-  .sc-view-btn { height: 36px; }
-  .sc-views { margin-left: 0; }
   .wrap, .wrap.nosb, .wrap:has(#issues-sidebar[style*="display:none"]) {
     grid-template-columns: 1fr;
     height: auto;
@@ -1303,7 +1253,6 @@ tbody:has(tr[data-url]) { user-select: none; }
 .crawler-empty-rich { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 40px 32px; max-width: 760px; }
 .crawler-empty-rich .ce-sub { margin: 0; }
 .crawler-empty-rich .ce-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
-.cb-view { flex: 1; min-height: 0; }
 
 /* Toasts: a neutral snackbar; the mark carries the kind. The colours are
    the other theme's, because the toast inverts the page. */

@@ -61,7 +61,6 @@ No account, no API key, no telemetry. Crawl the site here to find the pages with
 - **Malformed link href detection**: a scheme-less `href` containing a raw space (a street address or Google Maps Plus Code pasted straight into a link, e.g. `<a href="7FG4+8Q Springfield">Directions</a>`) used to resolve relative to every page carrying it and flood the crawl with phantom 404s. One broken footer link on a 300-page site meant ~300 fake 404 rows. Now it's skipped as a link and reported once per page as a **Malformed link href** issue naming the offending text.
 - **JS vs no-JS compare mode**: with Render JS on, tick *Compare with non-JS HTML* to crawl every page in BOTH modes (Playwright-rendered and raw HTML). The per-page diff shows exactly which content is invisible to AI crawlers (GPTBot, ClaudeBot, PerplexityBot, CCBot), which mostly don't execute JavaScript.
 - **Shared-instance support**: point the saved-crawls list at extra folders (`SITE_CRAWLER_EXTRA_CRAWL_DIRS`) so one office instance shows crawls from multiple tools, and label who ran each crawl by IP (`SITE_CRAWLER_USER_MAP`).
-- **Crawl Budget page**: scans the homepage + section pages, buckets every discovered URL by query parameter, classifies crawl-budget traps (Elementor `?e-page-` AJAX pagination, faceted filters, sort / tracking / session params) and generates ready-to-paste robots.txt `Disallow` rules. Shows the sitemap's real page count next to the phantom parameter URLs so the wasted crawl budget is obvious.
 - **Soft-404 / infinite-URL-trap detection**: after every crawl, two probe requests check whether the server returns 200 for URLs that cannot exist (`/<token>/` at the root, and nested under a real page). A 200 means the server soft-404s and mints an infinite crawlable URL space; flagged red in the issues sidebar with fix guidance.
 - **Images Missing Alt report**: an image-centric bulk report with one row per image missing alt text and every page that embeds it.
 - **robots.txt AI-crawler block detection**: flags, as a red error, when robots.txt blocks AI crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended, CCBot, Bytespider + 20 more), meaning the site can't be read or cited by ChatGPT, Perplexity or Google AI Overviews, or when classic search engines (Googlebot/Bingbot) are blocked. Also detects Cloudflare `Content-Signal: ai-train=no` opt-outs. Surfaces on the homepage row in the issues sidebar under **AI Crawlers Blocked** / **Search Engines Blocked**.
@@ -145,13 +144,6 @@ Every report exports to XLSX so you can hand it to a content team or dev:
 - **Images Missing Alt**: one row per image missing alt text, with every page that embeds it
 - **Hreflang**: extracted, validated, cross-page consistency checked
 - **Severity views**: All Errors / All Warnings / All Info, with irrelevant columns hidden per view
-
-### Crawl budget analysis
-
-- **On-demand Crawl Budget page** (topbar): no full crawl needed. It scans the homepage and section pages, buckets every discovered URL by query parameter, and classifies which parameters are crawl-budget traps, Elementor `?e-page-` AJAX pagination, faceted filters, sort orders, tracking and session IDs.
-- **Ready-to-paste robots.txt rules**: generates the exact `Disallow` lines to block each trap, and explains what each trap is and why robots.txt is the right fix.
-- **Waste made visible**: shows the sitemap's real page count next to the phantom parameter URLs, so you can see how much crawl budget is spent on URLs that shouldn't exist.
-- **Soft-404 / infinite-URL-trap probe**: runs automatically after every crawl; results land in a red **URL Traps** category in the issues sidebar with a detail panel and fix guidance.
 
 ### Auto-update + version badge
 
