@@ -5380,15 +5380,20 @@ def crawl_compare():
             elif r.get('indexable') is False: noindex += 1
             if r.get('schema_types'): with_schema += 1
             if r.get('redirect_url'): redirects += 1
-            if not r.get('title'): missing_title += 1
-            elif (r.get('title_len') or 0) > 60: title_too_long += 1
-            if not r.get('meta_description'): missing_meta += 1
-            elif (r.get('meta_len') or 0) > 160: meta_too_long += 1
-            if not r.get('h1'): missing_h1 += 1
-            if not r.get('canonical'): missing_canonical += 1
-            if (r.get('word_count') or 0) < 200: thin += 1
-            if (r.get('response_time') or 0) > 3: slow += 1
-            no_alt += int(r.get('images_no_alt') or 0)
+            # Count the issues the crawl raised, not raw empty fields, so these
+            # match the sidebar: a redirect, 404, noindex or canonicalised row
+            # has no title or meta to speak of and is not flagged for it.
+            low = [str(i).lower() for i in (r.get('issues') or [])]
+            has = lambda *prefixes: any(i.startswith(prefixes) for i in low)
+            if has('missing title'): missing_title += 1
+            if has('title too long'): title_too_long += 1
+            if has('missing meta description'): missing_meta += 1
+            if has('meta desc too long'): meta_too_long += 1
+            if has('missing h1'): missing_h1 += 1
+            if has('missing canonical'): missing_canonical += 1
+            if has('thin content'): thin += 1
+            if has('slow'): slow += 1
+            if any(('imgs missing alt' in i) or ('imgs with empty alt' in i) for i in low): no_alt += 1
         return {'pages':n,'codes':codes,'errors':errors,'warns_pages':warns,
                 'max_depth':max(depths) if depths else 0,
                 'avg_depth':round(sum(depths)/len(depths),2) if depths else 0,

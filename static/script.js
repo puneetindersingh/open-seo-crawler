@@ -6019,33 +6019,33 @@ function openCrawlLoader(opts) {
   const ov = document.getElementById('crawl-loader-overlay');
   const body = document.getElementById('crawl-loader-body');
   if (!ov || !body) return;
-  body.innerHTML = '<div style="padding:20px;text-align:center;color:#64748b;font-size:12px;">Loading saved crawls…</div>';
+  body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">Loading saved crawls…</div>';
   ov.style.display = 'flex';
   document.body.style.overflow = 'hidden';
   const hasCurrent = !!(crawlerResults && crawlerResults.length);
   fetch('/crawl/list').then(r => r.json()).then(d => {
     const crawls = d.crawls || [];
     if (!crawls.length) {
-      body.innerHTML = '<div style="padding:32px;text-align:center;color:#64748b;font-size:13px;">No saved crawls in the last 30 days. Every crawl auto-saves: run one and it will appear here.</div>';
+      body.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted);font-size:13px;">No saved crawls in the last 30 days. Every crawl auto-saves: run one and it will appear here.</div>';
       return;
     }
     let headerNote;
     if (compareOnly) {
       headerNote = hasCurrent
-        ? `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Pick a saved crawl to diff against the current crawl (${crawlerResults.length} pages).</div>`
+        ? `<div style="padding:10px 14px;font-size:11px;color:var(--text-muted);background:var(--bg);border-bottom:1px solid var(--border);">Pick a saved crawl to diff against the current crawl (${crawlerResults.length} pages).</div>`
         : `<div style="padding:10px 14px;font-size:12px;color:#b45309;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;margin:10px 14px;">Run or load a crawl first, then come back here to compare.</div>`;
     } else {
       headerNote = hasCurrent
-        ? `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Showing last 30 days · Current crawl loaded (${crawlerResults.length} pages): use <strong>Compare</strong> to diff against any saved crawl.</div>`
-        : `<div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-bottom:1px solid #e2e8f0;">Showing last 30 days · Load a crawl to view it, then open this list again to compare.</div>`;
+        ? `<div style="padding:10px 14px;font-size:11px;color:var(--text-muted);background:var(--bg);border-bottom:1px solid var(--border);">Showing last 30 days · Current crawl loaded (${crawlerResults.length} pages): use <strong>Compare</strong> to diff against any saved crawl.</div>`
+        : `<div style="padding:10px 14px;font-size:11px;color:var(--text-muted);background:var(--bg);border-bottom:1px solid var(--border);">Showing last 30 days · Load a crawl to view it, then open this list again to compare.</div>`;
     }
     const search = `
-      <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;background:#fff;">
-        <input type="search" id="crawl-loader-search" placeholder="Filter by domain, name, or saved by…" oninput="_filterCrawlLoader(this.value)" style="width:100%;padding:8px 12px;font-size:12.5px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;color:#0f172a;outline:none;" autocomplete="off" spellcheck="false" />
-        <div id="crawl-loader-search-count" style="font-size:11px;color:#64748b;margin-top:6px;display:none;"></div>
+      <div style="padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface);">
+        <input type="search" id="crawl-loader-search" placeholder="Filter by domain, name, or saved by…" oninput="_filterCrawlLoader(this.value)" style="width:100%;padding:8px 12px;font-size:12.5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);outline:none;" autocomplete="off" spellcheck="false" />
+        <div id="crawl-loader-search-count" style="font-size:11px;color:var(--text-muted);margin-top:6px;display:none;"></div>
       </div>`;
     const header = `
-      <div style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;color:#64748b;font-weight:600;">
+      <div style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-muted);font-weight:600;">
         <div>Date</div><div>Time</div><div>Website</div><div>Saved by</div><div style="text-align:right;">Pages</div><div></div>
       </div>`;
     const rows = crawls.map(c => {
@@ -6064,21 +6064,21 @@ function openCrawlLoader(opts) {
       // to delete them), so they get no delete button.
       const delBtn = (compareOnly || (c.source && c.source !== 'site-crawler'))
         ? ''
-        : `<button onclick="deleteSavedCrawl(${jsArg(c.file)})" title="Delete" aria-label="Delete saved crawl" style="padding:6px 8px;font-size:11px;background:transparent;color:#64748b;border:1px solid #e2e8f0;border-radius:4px;cursor:pointer;">✕</button>`;
+        : `<button onclick="deleteSavedCrawl(${jsArg(c.file)})" title="Delete" aria-label="Delete saved crawl" style="padding:6px 8px;font-size:11px;background:transparent;color:var(--text-muted);border:1px solid var(--border);border-radius:4px;cursor:pointer;">✕</button>`;
       const searchBlob = (`${seed} ${c.name || ''} ${savedBy}`).toLowerCase();
       return `
-        <div data-crawl-row="${escapeHtml(c.file)}" data-search="${escapeHtml(searchBlob)}" style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;">
-          <div style="color:#0f172a;font-variant-numeric:tabular-nums;">${dateStr}</div>
-          <div style="color:#64748b;font-variant-numeric:tabular-nums;font-family:'SF Mono','Menlo',monospace;">${timeStr}</div>
+        <div data-crawl-row="${escapeHtml(c.file)}" data-search="${escapeHtml(searchBlob)}" style="display:grid;grid-template-columns:95px 55px 1fr 100px 80px 200px;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;">
+          <div style="color:var(--text);font-variant-numeric:tabular-nums;">${dateStr}</div>
+          <div style="color:var(--text-muted);font-variant-numeric:tabular-nums;font-family:'SF Mono','Menlo',monospace;">${timeStr}</div>
           <div style="min-width:0;">
-            <div style="font-weight:600;color:#0f172a;word-break:break-all;">${escapeHtml(seed || c.name)}
+            <div style="font-weight:600;color:var(--text);word-break:break-all;">${escapeHtml(seed || c.name)}
               ${c.source && c.source !== 'site-crawler' ? '<span title="Saved by another local tool" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#ede9fe;color:#5b21b6;border-radius:3px;font-size:9.5px;font-weight:600;vertical-align:middle;">' + escapeHtml(c.source) + '</span>' : ''}
               ${c.source === 'site-crawler' ? '<span title="Saved in site-crawler" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#dbeafe;color:#1e40af;border-radius:3px;font-size:9.5px;font-weight:600;vertical-align:middle;">site-crawler</span>' : ''}
             </div>
-            <div style="font-size:10px;color:#64748b;word-break:break-all;">${escapeHtml(c.name)}</div>
+            <div style="font-size:10px;color:var(--text-muted);word-break:break-all;">${escapeHtml(c.name)}</div>
           </div>
-          <div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(savedBy)}">${escapeHtml(savedBy)}</div>
-          <div style="text-align:right;color:#0f172a;font-variant-numeric:tabular-nums;">${c.pages}</div>
+          <div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(savedBy)}">${escapeHtml(savedBy)}</div>
+          <div style="text-align:right;color:var(--text);font-variant-numeric:tabular-nums;">${c.pages}</div>
           <div style="display:flex;gap:6px;justify-content:flex-end;">
             ${compareBtn}
             ${loadBtn}
@@ -6089,7 +6089,7 @@ function openCrawlLoader(opts) {
     }).join('');
     body.innerHTML = headerNote + search + header + rows;
   }).catch(e => {
-    body.innerHTML = `<div style="padding:20px;color:#ef4444;font-size:12px;">Error: ${e.message}</div>`;
+    body.innerHTML = `<div style="padding:20px;color:var(--err-fg);font-size:12px;">Error: ${e.message}</div>`;
   });
 }
 
@@ -6242,17 +6242,17 @@ function _renderCompareModal(d, savedName) {
   if (!ov) {
     ov = document.createElement('div');
     ov.id = 'crawl-compare-overlay';
-    ov.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:10000;display:none;flex-direction:column;overflow:hidden;';
+    ov.style.cssText = 'position:fixed;inset:0;background:var(--surface);z-index:10000;display:none;flex-direction:column;overflow:hidden;';
     ov.innerHTML = `
-      <div style="display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0;">
-        <div style="font-size:13px;font-weight:600;color:#0f172a;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="crawl-compare-title">Compare crawls</div>
-        <button onclick="_closeCompareModal()" style="background:#fff;border:1px solid #e2e8f0;border-radius:5px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;color:#0f172a;flex-shrink:0;display:inline-flex;align-items:center;gap:6px;">
+      <div style="display:flex;align-items:center;gap:14px;padding:10px 18px;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0;">
+        <div style="font-size:13px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="crawl-compare-title">Compare crawls</div>
+        <button onclick="_closeCompareModal()" style="background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;color:var(--text);flex-shrink:0;display:inline-flex;align-items:center;gap:6px;">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           Exit Compare
         </button>
       </div>
-      <div id="crawl-compare-tabs" style="display:flex;gap:0;padding:0 18px;border-bottom:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0;overflow-x:auto;"></div>
-      <div id="crawl-compare-body" style="overflow:auto;flex:1;min-height:0;background:#fff;"></div>
+      <div id="crawl-compare-tabs" style="display:flex;gap:0;padding:0 18px;border-bottom:1px solid var(--border);background:var(--bg);flex-shrink:0;overflow-x:auto;"></div>
+      <div id="crawl-compare-body" style="overflow:auto;flex:1;min-height:0;background:var(--surface);"></div>
     `;
     document.body.appendChild(ov);
     document.addEventListener('keydown', e => {
@@ -6267,20 +6267,20 @@ function _renderCompareModal(d, savedName) {
 
   const delta = (a, b, opts = {}) => {
     const dlt = b - a;
-    if (dlt === 0) return `<span style="color:#94a3b8;">·</span>`;
+    if (dlt === 0) return `<span style="color:var(--text-muted);">·</span>`;
     const lessIsBetter = opts.lessIsBetter !== false;
     const good = lessIsBetter ? dlt < 0 : dlt > 0;
     const arrow = dlt > 0 ? '▲' : '▼';
     const sign = dlt > 0 ? '+' : '';
-    const color = good ? '#10b981' : '#ef4444';
+    const color = good ? 'var(--ok-fg)' : 'var(--err-fg)';
     return `<span style="color:${color};font-weight:600;">${arrow} ${sign}${dlt}</span>`;
   };
   const deltaTime = (a, b) => {
     const dlt = +(b - a).toFixed(2);
-    if (dlt === 0) return `<span style="color:#94a3b8;">·</span>`;
+    if (dlt === 0) return `<span style="color:var(--text-muted);">·</span>`;
     const good = dlt < 0;
     const sign = dlt > 0 ? '+' : '';
-    const color = good ? '#10b981' : '#ef4444';
+    const color = good ? 'var(--ok-fg)' : 'var(--err-fg)';
     return `<span style="color:${color};font-weight:600;">${sign}${dlt}s</span>`;
   };
 
@@ -6290,16 +6290,16 @@ function _renderCompareModal(d, savedName) {
   const codesB = aggB.codes || {'2xx':0,'3xx':0,'4xx':0,'5xx':0,'other':0};
 
   const kpi = (label, a, b, opts) => `
-    <div style="flex:1;min-width:130px;padding:12px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">
-      <div style="font-size:12px;color:#64748b;margin-bottom:4px;">${label}</div>
+    <div style="flex:1;min-width:130px;padding:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">${label}</div>
       <div style="display:flex;align-items:baseline;gap:8px;">
-        <div style="font-size:20px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums;">${b}</div>
-        <div style="font-size:11px;color:#64748b;">was ${a}</div>
+        <div style="font-size:20px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums;">${b}</div>
+        <div style="font-size:11px;color:var(--text-muted);">was ${a}</div>
         <div style="margin-left:auto;font-size:11px;">${(opts && opts.time) ? deltaTime(a, b) : delta(a, b, opts)}</div>
       </div>
     </div>`;
   const toplineHtml = `
-    <div style="padding:14px 18px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+    <div style="padding:14px 18px;background:var(--bg);border-bottom:1px solid var(--border);">
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;">
         ${kpi('Pages', aggA.pages || 0, aggB.pages || 0, { lessIsBetter: false })}
         ${kpi('Errors (4xx/5xx)', aggA.errors || 0, aggB.errors || 0)}
@@ -6315,27 +6315,27 @@ function _renderCompareModal(d, savedName) {
         ${kpi('Missing H1', aggA.missing_h1 || 0, aggB.missing_h1 || 0)}
         ${kpi('Thin content', aggA.thin || 0, aggB.thin || 0)}
         ${kpi('Slow (>3s)', aggA.slow || 0, aggB.slow || 0)}
-        ${kpi('Images no alt', aggA.images_no_alt || 0, aggB.images_no_alt || 0)}
+        ${kpi('Images missing alt', aggA.images_no_alt || 0, aggB.images_no_alt || 0)}
       </div>
     </div>`;
 
-  const codeColor = { '2xx': '#22c55e', '3xx': '#f59e0b', '4xx': '#ef4444', '5xx': '#dc2626', 'other': '#888' };
+  const codeColor = { '2xx': 'var(--ok-fg)', '3xx': 'var(--warn-fg)', '4xx': 'var(--err-fg)', '5xx': 'var(--err-fg)', 'other': 'var(--text-muted)' };
   const codeRow = (k) => `
-    <tr style="border-bottom:1px solid #e2e8f0;">
+    <tr style="border-bottom:1px solid var(--border);">
       <td style="padding:7px 14px;font-weight:600;color:${codeColor[k]};">${k}</td>
-      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b;">${codesA[k] || 0}</td>
+      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">${codesA[k] || 0}</td>
       <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${codesB[k] || 0}</td>
       <td style="padding:7px 14px;text-align:right;">${delta(codesA[k] || 0, codesB[k] || 0, { lessIsBetter: k !== '2xx' })}</td>
     </tr>`;
   const codesHtml = `
-    <details open style="border-bottom:1px solid #e2e8f0;">
+    <details open style="border-bottom:1px solid var(--border);">
       <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Status codes</summary>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead><tr style="background:#f8fafc;">
-          <th style="padding:7px 14px;text-align:left;font-weight:600;color:#64748b;font-size:12px;">Code</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">Old</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">New</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">Δ</th>
+        <thead><tr style="background:var(--bg);">
+          <th style="padding:7px 14px;text-align:left;font-weight:600;color:var(--text-muted);font-size:12px;">Code</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">Old</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">New</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">Δ</th>
         </tr></thead>
         <tbody>${['2xx','3xx','4xx','5xx','other'].map(codeRow).join('')}</tbody>
       </table>
@@ -6344,52 +6344,52 @@ function _renderCompareModal(d, savedName) {
   const issues = d.issues || [];
   const issueRow = (it, idx) => {
     const sev = (typeof sevOf === 'function' ? sevOf(it.issue) : 'warn');
-    const sevColor = sev === 'error' ? '#ef4444' : sev === 'warn' ? '#f59e0b' : '#3b82f6';
+    const sevColor = sev === 'error' ? 'var(--err-fg)' : sev === 'warn' ? 'var(--warn-fg)' : 'var(--info-fg)';
     const resolved = it.only_a_total != null ? it.only_a_total : (it.only_a || []).length;
     const introduced = it.only_b_total != null ? it.only_b_total : (it.only_b || []).length;
     const still = it.both_total != null ? it.both_total : (it.both || []).length;
     const hasDrill = (resolved + introduced + still) > 0;
-    return `<tr data-issue-idx="${idx}" data-expanded="0" style="border-bottom:1px solid #e2e8f0;${hasDrill ? 'cursor:pointer;' : ''}" ${hasDrill ? `onclick="_compareToggleIssueDrill(${idx})"` : ''}>
+    return `<tr data-issue-idx="${idx}" data-expanded="0" style="border-bottom:1px solid var(--border);${hasDrill ? 'cursor:pointer;' : ''}" ${hasDrill ? `onclick="_compareToggleIssueDrill(${idx})"` : ''}>
       <td style="padding:7px 14px;">
-        ${hasDrill ? `<span class="ci-arrow" style="display:inline-block;width:10px;color:#64748b;font-size:10px;margin-right:4px;transition:transform .12s;">▶</span>` : '<span style="display:inline-block;width:14px;"></span>'}
+        ${hasDrill ? `<span class="ci-arrow" style="display:inline-block;width:10px;color:var(--text-muted);font-size:10px;margin-right:4px;transition:transform .12s;">▶</span>` : '<span style="display:inline-block;width:14px;"></span>'}
         <span style="display:inline-block;padding:1px 6px;border-radius:3px;background:rgba(0,0,0,0.04);color:${sevColor};font-size:12px;font-weight:600;margin-right:6px;">${sev}</span><span style="font-size:12px;">${escHtml(it.issue)}</span>
       </td>
-      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b;">${it.a}</td>
+      <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">${it.a}</td>
       <td style="padding:7px 14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${it.b}</td>
       <td style="padding:7px 14px;text-align:right;">${delta(it.a, it.b)}</td>
     </tr>`;
   };
   const issuesHtml = `
-    <details open style="border-bottom:1px solid #e2e8f0;">
-      <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Issues (${issues.length}) <span style="font-weight:400;color:#64748b;font-size:11.5px;margin-left:6px;">click any row to see the URLs</span></summary>
-      ${issues.length === 0 ? `<div style="padding:14px 18px;color:#64748b;font-size:12px;">No issues seen in either crawl.</div>` : `
+    <details open style="border-bottom:1px solid var(--border);">
+      <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Issues (${issues.length}) <span style="font-weight:400;color:var(--text-muted);font-size:11.5px;margin-left:6px;">click any row to see the URLs</span></summary>
+      ${issues.length === 0 ? `<div style="padding:14px 18px;color:var(--text-muted);font-size:12px;">No issues seen in either crawl.</div>` : `
       <table id="cmp-issues-table" style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead><tr style="background:#f8fafc;">
-          <th style="padding:7px 14px;text-align:left;font-weight:600;color:#64748b;font-size:12px;">Issue</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">Old</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">New</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">Δ</th>
+        <thead><tr style="background:var(--bg);">
+          <th style="padding:7px 14px;text-align:left;font-weight:600;color:var(--text-muted);font-size:12px;">Issue</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">Old</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">New</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">Δ</th>
         </tr></thead>
         <tbody>${issues.map((it, i) => issueRow(it, i)).join('')}</tbody>
       </table>`}
     </details>`;
 
   const structure = d.structure || [];
-  const structRow = (s) => `<tr style="border-bottom:1px solid #e2e8f0;">
+  const structRow = (s) => `<tr style="border-bottom:1px solid var(--border);">
     <td style="padding:6px 14px;font-family:'SF Mono','Menlo',monospace;font-size:12px;">${escHtml(s.path)}</td>
-    <td style="padding:6px 14px;text-align:right;font-variant-numeric:tabular-nums;color:#64748b;">${s.a}</td>
+    <td style="padding:6px 14px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-muted);">${s.a}</td>
     <td style="padding:6px 14px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;">${s.b}</td>
     <td style="padding:6px 14px;text-align:right;">${delta(s.a, s.b, { lessIsBetter: false })}</td>
   </tr>`;
   const structureHtml = structure.length ? `
-    <details style="border-bottom:1px solid #e2e8f0;">
+    <details style="border-bottom:1px solid var(--border);">
       <summary style="padding:12px 18px;cursor:pointer;font-weight:600;font-size:13px;">Site structure (${structure.length} top-level directories)</summary>
       <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead><tr style="background:#f8fafc;">
-          <th style="padding:7px 14px;text-align:left;font-weight:600;color:#64748b;font-size:12px;">Directory</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">Old</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">New</th>
-          <th style="padding:7px 14px;text-align:right;font-weight:600;color:#64748b;font-size:12px;">Δ</th>
+        <thead><tr style="background:var(--bg);">
+          <th style="padding:7px 14px;text-align:left;font-weight:600;color:var(--text-muted);font-size:12px;">Directory</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">Old</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">New</th>
+          <th style="padding:7px 14px;text-align:right;font-weight:600;color:var(--text-muted);font-size:12px;">Δ</th>
         </tr></thead>
         <tbody>${structure.map(structRow).join('')}</tbody>
       </table>
@@ -6397,9 +6397,9 @@ function _renderCompareModal(d, savedName) {
 
   const s = d.summary || {};
   const urlRow = (x, sign, signColor) => {
-    const sc = x.status_code ? `<span style="font-size:10.5px;color:${x.status_code >= 400 ? '#ef4444' : x.status_code >= 300 ? '#f59e0b' : '#22c55e'};font-weight:600;font-variant-numeric:tabular-nums;margin-right:8px;">${x.status_code}</span>` : '';
-    const ti = x.title ? `<div style="font-size:11px;color:#64748b;margin-top:2px;">${escHtml(x.title.slice(0, 100))}</div>` : '';
-    return `<div style="padding:6px 14px;border-bottom:1px solid #e2e8f0;">
+    const sc = x.status_code ? `<span style="font-size:10.5px;color:${x.status_code >= 400 ? 'var(--err-fg)' : x.status_code >= 300 ? 'var(--warn-fg)' : 'var(--ok-fg)'};font-weight:600;font-variant-numeric:tabular-nums;margin-right:8px;">${x.status_code}</span>` : '';
+    const ti = x.title ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escHtml(x.title.slice(0, 100))}</div>` : '';
+    return `<div style="padding:6px 14px;border-bottom:1px solid var(--border);">
       <div style="display:flex;align-items:center;gap:6px;font-size:12px;font-family:'SF Mono','Menlo',monospace;">
         <span style="color:${signColor};font-weight:700;">${sign}</span>
         ${sc}
@@ -6423,14 +6423,14 @@ function _renderCompareModal(d, savedName) {
       if (f === 'body_hash') { oldv = oldv ? oldv.slice(0, 8) + '…' : '-'; newv = newv ? newv.slice(0, 8) + '…' : '-'; }
       else { oldv = (oldv == null ? '-' : String(oldv)).slice(0, 220); newv = (newv == null ? '-' : String(newv)).slice(0, 220); }
       return `<div style="display:grid;grid-template-columns:120px 1fr;gap:8px;margin-top:4px;">
-        <div style="font-size:12px;color:#64748b;">${FIELD_LABELS[f] || f}</div>
+        <div style="font-size:12px;color:var(--text-muted);">${FIELD_LABELS[f] || f}</div>
         <div style="font-size:12px;">
-          <div style="color:#ef4444;">− ${escHtml(oldv)}</div>
-          <div style="color:#10b981;">+ ${escHtml(newv)}</div>
+          <div style="color:var(--err-fg);">− ${escHtml(oldv)}</div>
+          <div style="color:var(--ok-fg);">+ ${escHtml(newv)}</div>
         </div>
       </div>`;
     }).join('');
-    return `<div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;">
+    return `<div style="padding:10px 14px;border-bottom:1px solid var(--border);">
       <div style="font-size:12px;font-family:'SF Mono','Menlo',monospace;word-break:break-all;margin-bottom:4px;">
         <a href="${safeHref(c.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(c.url)}</a>
       </div>
@@ -6438,9 +6438,9 @@ function _renderCompareModal(d, savedName) {
     </div>`;
   };
   const sliceList = (items, max, render) => {
-    if (!items || !items.length) return `<div style="padding:14px 18px;color:#64748b;font-size:12px;">None.</div>`;
+    if (!items || !items.length) return `<div style="padding:14px 18px;color:var(--text-muted);font-size:12px;">None.</div>`;
     return items.slice(0, max).map(render).join('') +
-      (items.length > max ? `<div style="padding:8px 14px;font-size:11px;color:#64748b;">…and ${items.length - max} more</div>` : '');
+      (items.length > max ? `<div style="padding:8px 14px;font-size:11px;color:var(--text-muted);">…and ${items.length - max} more</div>` : '');
   };
 
   const tabs = [
@@ -6448,68 +6448,68 @@ function _renderCompareModal(d, savedName) {
     { id: 'codes', label: 'Status Codes', count: null },
     { id: 'issues', label: 'Issues', count: (d.issues || []).length },
     { id: 'structure', label: 'Site Structure', count: (d.structure || []).length },
-    { id: 'added', label: 'Added', count: s.added || 0, color: '#10b981' },
-    { id: 'removed', label: 'Removed', count: s.removed || 0, color: '#ef4444' },
-    { id: 'changed', label: 'Changed', count: s.changed || 0, color: '#f59e0b' },
+    { id: 'added', label: 'Added', count: s.added || 0, color: 'var(--ok-fg)' },
+    { id: 'removed', label: 'Removed', count: s.removed || 0, color: 'var(--err-fg)' },
+    { id: 'changed', label: 'Changed', count: s.changed || 0, color: 'var(--warn-fg)' },
   ];
   const active = window._compareActiveTab || 'overview';
   document.getElementById('crawl-compare-tabs').innerHTML = tabs.map(t => {
     const isActive = t.id === active;
     const badge = (t.count != null && t.count > 0)
-      ? `<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:${t.color || (isActive ? 'var(--accent)' : '#f1f5f9')};color:${t.color || isActive ? '#fff' : '#64748b'};font-size:10.5px;font-variant-numeric:tabular-nums;font-weight:600;">${t.count}</span>`
-      : (t.count === 0 ? `<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:#f1f5f9;color:#64748b;font-size:10.5px;font-variant-numeric:tabular-nums;">0</span>` : '');
-    return `<button type="button" onclick="_compareSwitchTab('${t.id}')" style="background:none;border:0;border-bottom:2px solid ${isActive ? 'var(--accent)' : 'transparent'};padding:11px 16px;cursor:pointer;font-size:12.5px;font-weight:${isActive ? 700 : 500};color:${isActive ? '#0f172a' : '#64748b'};display:inline-flex;align-items:center;gap:0;flex-shrink:0;">${t.label}${badge}</button>`;
+      ? `<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:${t.color || (isActive ? 'var(--accent)' : 'var(--surface2)')};color:${t.color || isActive ? '#fff' : 'var(--text-muted)'};font-size:10.5px;font-variant-numeric:tabular-nums;font-weight:600;">${t.count}</span>`
+      : (t.count === 0 ? `<span style="margin-left:6px;padding:1px 7px;border-radius:10px;background:var(--surface2);color:var(--text-muted);font-size:10.5px;font-variant-numeric:tabular-nums;">0</span>` : '');
+    return `<button type="button" onclick="_compareSwitchTab('${t.id}')" style="background:none;border:0;border-bottom:2px solid ${isActive ? 'var(--accent)' : 'transparent'};padding:11px 16px;cursor:pointer;font-size:12.5px;font-weight:${isActive ? 700 : 500};color:${isActive ? 'var(--text)' : 'var(--text-muted)'};display:inline-flex;align-items:center;gap:0;flex-shrink:0;">${t.label}${badge}</button>`;
   }).join('');
 
   let bodyHtml = '';
   if (active === 'overview') {
     bodyHtml = toplineHtml +
       `<div style="padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        <div style="border:1px solid #e2e8f0;border-radius:8px;background:#fff;overflow:hidden;">
-          <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:600;color:#64748b;">Top moving issues</div>
-          ${(d.issues || []).slice(0, 8).length === 0 ? `<div style="padding:14px;color:#64748b;font-size:12px;">No issues changed.</div>` : `
+        <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;">
+          <div style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-muted);">Top moving issues</div>
+          ${(d.issues || []).slice(0, 8).length === 0 ? `<div style="padding:14px;color:var(--text-muted);font-size:12px;">No issues changed.</div>` : `
           <table style="width:100%;border-collapse:collapse;font-size:12px;">
-            <tbody>${(d.issues || []).slice(0, 8).map(it => `<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:7px 14px;">${escHtml(it.issue)}</td><td style="padding:7px 14px;text-align:right;color:#64748b;">${it.a}</td><td style="padding:7px 14px;text-align:right;font-weight:600;">${it.b}</td><td style="padding:7px 14px;text-align:right;">${delta(it.a, it.b)}</td></tr>`).join('')}</tbody>
+            <tbody>${(d.issues || []).slice(0, 8).map(it => `<tr style="border-bottom:1px solid var(--border);"><td style="padding:7px 14px;">${escHtml(it.issue)}</td><td style="padding:7px 14px;text-align:right;color:var(--text-muted);">${it.a}</td><td style="padding:7px 14px;text-align:right;font-weight:600;">${it.b}</td><td style="padding:7px 14px;text-align:right;">${delta(it.a, it.b)}</td></tr>`).join('')}</tbody>
           </table>`}
         </div>
-        <div style="border:1px solid #e2e8f0;border-radius:8px;background:#fff;overflow:hidden;">
-          <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:12px;font-weight:600;color:#64748b;">Top moving directories</div>
-          ${(d.structure || []).filter(x => x.delta !== 0).slice(0, 8).length === 0 ? `<div style="padding:14px;color:#64748b;font-size:12px;">No directory changes.</div>` : `
+        <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;">
+          <div style="padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-muted);">Top moving directories</div>
+          ${(d.structure || []).filter(x => x.delta !== 0).slice(0, 8).length === 0 ? `<div style="padding:14px;color:var(--text-muted);font-size:12px;">No directory changes.</div>` : `
           <table style="width:100%;border-collapse:collapse;font-size:12px;">
-            <tbody>${(d.structure || []).filter(x => x.delta !== 0).slice(0, 8).map(s2 => `<tr style="border-bottom:1px solid #e2e8f0;"><td style="padding:7px 14px;font-family:'SF Mono','Menlo',monospace;">${escHtml(s2.path)}</td><td style="padding:7px 14px;text-align:right;color:#64748b;">${s2.a}</td><td style="padding:7px 14px;text-align:right;font-weight:600;">${s2.b}</td><td style="padding:7px 14px;text-align:right;">${delta(s2.a, s2.b, { lessIsBetter: false })}</td></tr>`).join('')}</tbody>
+            <tbody>${(d.structure || []).filter(x => x.delta !== 0).slice(0, 8).map(s2 => `<tr style="border-bottom:1px solid var(--border);"><td style="padding:7px 14px;font-family:'SF Mono','Menlo',monospace;">${escHtml(s2.path)}</td><td style="padding:7px 14px;text-align:right;color:var(--text-muted);">${s2.a}</td><td style="padding:7px 14px;text-align:right;font-weight:600;">${s2.b}</td><td style="padding:7px 14px;text-align:right;">${delta(s2.a, s2.b, { lessIsBetter: false })}</td></tr>`).join('')}</tbody>
           </table>`}
         </div>
       </div>
       <div style="padding:0 18px 18px;">
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;">
-          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff;">
-            <div style="font-size:12px;color:#64748b;margin-bottom:6px;">URLs added</div>
-            <div style="font-size:24px;font-weight:700;color:#10b981;font-variant-numeric:tabular-nums;">${s.added || 0}</div>
+          <div style="border:1px solid var(--border);border-radius:8px;padding:14px;background:var(--surface);">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">URLs added</div>
+            <div style="font-size:24px;font-weight:700;color:var(--ok-fg);font-variant-numeric:tabular-nums;">${s.added || 0}</div>
             <button onclick="_compareSwitchTab('added')" style="margin-top:6px;background:none;border:0;color:var(--accent);font-size:12px;cursor:pointer;padding:0;">View →</button>
           </div>
-          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff;">
-            <div style="font-size:12px;color:#64748b;margin-bottom:6px;">URLs removed</div>
-            <div style="font-size:24px;font-weight:700;color:#ef4444;font-variant-numeric:tabular-nums;">${s.removed || 0}</div>
+          <div style="border:1px solid var(--border);border-radius:8px;padding:14px;background:var(--surface);">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">URLs removed</div>
+            <div style="font-size:24px;font-weight:700;color:var(--err-fg);font-variant-numeric:tabular-nums;">${s.removed || 0}</div>
             <button onclick="_compareSwitchTab('removed')" style="margin-top:6px;background:none;border:0;color:var(--accent);font-size:12px;cursor:pointer;padding:0;">View →</button>
           </div>
-          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#fff;">
-            <div style="font-size:12px;color:#64748b;margin-bottom:6px;">URLs changed</div>
-            <div style="font-size:24px;font-weight:700;color:#f59e0b;font-variant-numeric:tabular-nums;">${s.changed || 0}</div>
+          <div style="border:1px solid var(--border);border-radius:8px;padding:14px;background:var(--surface);">
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">URLs changed</div>
+            <div style="font-size:24px;font-weight:700;color:var(--warn-fg);font-variant-numeric:tabular-nums;">${s.changed || 0}</div>
             <button onclick="_compareSwitchTab('changed')" style="margin-top:6px;background:none;border:0;color:var(--accent);font-size:12px;cursor:pointer;padding:0;">View →</button>
           </div>
         </div>
-        <div style="margin-top:10px;font-size:11px;color:#64748b;">Unchanged: ${s.unchanged || 0} URLs (same on both crawls)</div>
+        <div style="margin-top:10px;font-size:11px;color:var(--text-muted);">Unchanged: ${s.unchanged || 0} URLs (same on both crawls)</div>
       </div>`;
   } else if (active === 'codes') {
     bodyHtml = codesHtml;
   } else if (active === 'issues') {
     bodyHtml = issuesHtml;
   } else if (active === 'structure') {
-    bodyHtml = structureHtml || `<div style="padding:18px;color:#64748b;font-size:12px;">No structural changes.</div>`;
+    bodyHtml = structureHtml || `<div style="padding:18px;color:var(--text-muted);font-size:12px;">No structural changes.</div>`;
   } else if (active === 'added') {
-    bodyHtml = `<div style="padding:0;">${sliceList(d.added, 1000, (x) => urlRow(x, '+', '#10b981'))}</div>`;
+    bodyHtml = `<div style="padding:0;">${sliceList(d.added, 1000, (x) => urlRow(x, '+', 'var(--ok-fg)'))}</div>`;
   } else if (active === 'removed') {
-    bodyHtml = `<div style="padding:0;">${sliceList(d.removed, 1000, (x) => urlRow(x, '−', '#ef4444'))}</div>`;
+    bodyHtml = `<div style="padding:0;">${sliceList(d.removed, 1000, (x) => urlRow(x, '−', 'var(--err-fg)'))}</div>`;
   } else if (active === 'changed') {
     bodyHtml = `<div style="padding:0;">${sliceList(d.changed, 1000, changedRow)}</div>`;
   }
@@ -6546,12 +6546,12 @@ window._compareToggleIssueDrill = function(idx) {
   const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const renderList = (urls, total, emptyMsg, color) => {
     const safeUrls = Array.isArray(urls) ? urls : [];
-    if (!safeUrls.length) return `<div style="padding:10px 12px;color:#64748b;font-size:11px;font-style:italic;">${emptyMsg}</div>`;
+    if (!safeUrls.length) return `<div style="padding:10px 12px;color:var(--text-muted);font-size:11px;font-style:italic;">${emptyMsg}</div>`;
     const more = (total != null && total > safeUrls.length)
-      ? `<div style="padding:6px 12px;font-size:10.5px;color:#64748b;">…and ${total - safeUrls.length} more</div>`
+      ? `<div style="padding:6px 12px;font-size:10.5px;color:var(--text-muted);">…and ${total - safeUrls.length} more</div>`
       : '';
     return safeUrls.map(u => `
-      <div style="padding:5px 12px;font-size:11.5px;font-family:'SF Mono','Menlo',monospace;border-bottom:1px solid #e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+      <div style="padding:5px 12px;font-size:11.5px;font-family:'SF Mono','Menlo',monospace;border-bottom:1px solid var(--border);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
         <span style="color:${color};font-weight:700;margin-right:6px;">●</span><a href="${safeHref(u)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(u)}</a>
       </div>`).join('') + more;
   };
@@ -6564,19 +6564,19 @@ window._compareToggleIssueDrill = function(idx) {
   const drill = document.createElement('tr');
   drill.className = 'cmp-issue-drill';
   drill.innerHTML = `
-    <td colspan="4" style="padding:0;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#e2e8f0;">
-        <div style="background:#fff;">
-          <div style="padding:8px 12px;font-size:12px;font-weight:600;color:#10b981;border-bottom:1px solid #e2e8f0;background:#f8fafc;">Resolved <span style="color:#64748b;font-weight:500;">(${oat})</span></div>
-          <div style="max-height:340px;overflow:auto;">${renderList(onlyA, oat, 'No URLs resolved', '#10b981')}</div>
+    <td colspan="4" style="padding:0;background:var(--bg);border-bottom:1px solid var(--border);">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border);">
+        <div style="background:var(--surface);">
+          <div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--ok-fg);border-bottom:1px solid var(--border);background:var(--bg);">Resolved <span style="color:var(--text-muted);font-weight:500;">(${oat})</span></div>
+          <div style="max-height:340px;overflow:auto;">${renderList(onlyA, oat, 'No URLs resolved', 'var(--ok-fg)')}</div>
         </div>
-        <div style="background:#fff;">
-          <div style="padding:8px 12px;font-size:12px;font-weight:600;color:#ef4444;border-bottom:1px solid #e2e8f0;background:#f8fafc;">Newly broken <span style="color:#64748b;font-weight:500;">(${obt})</span></div>
-          <div style="max-height:340px;overflow:auto;">${renderList(onlyB, obt, 'No new URLs broken', '#ef4444')}</div>
+        <div style="background:var(--surface);">
+          <div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--err-fg);border-bottom:1px solid var(--border);background:var(--bg);">Newly broken <span style="color:var(--text-muted);font-weight:500;">(${obt})</span></div>
+          <div style="max-height:340px;overflow:auto;">${renderList(onlyB, obt, 'No new URLs broken', 'var(--err-fg)')}</div>
         </div>
-        <div style="background:#fff;">
-          <div style="padding:8px 12px;font-size:12px;font-weight:600;color:#f59e0b;border-bottom:1px solid #e2e8f0;background:#f8fafc;">Still failing <span style="color:#64748b;font-weight:500;">(${bt})</span></div>
-          <div style="max-height:340px;overflow:auto;">${renderList(both, bt, 'None: issue cleared', '#f59e0b')}</div>
+        <div style="background:var(--surface);">
+          <div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--warn-fg);border-bottom:1px solid var(--border);background:var(--bg);">Still failing <span style="color:var(--text-muted);font-weight:500;">(${bt})</span></div>
+          <div style="max-height:340px;overflow:auto;">${renderList(both, bt, 'None: issue cleared', 'var(--warn-fg)')}</div>
         </div>
       </div>
     </td>`;
