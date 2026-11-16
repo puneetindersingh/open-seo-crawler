@@ -200,9 +200,9 @@ _PAGE_CHECK_WARN_RE = re.compile(
     r'^content needs javascript|^mobile page has less content|^mobile and desktop pages differ|'
     r'^host variant redirect is temporary|^www and non-www both answer')
 
-_ERR_RE = re.compile(r'^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content')
+_ERR_RE = re.compile(r'^missing (title|h1)\b|^http [45]|served over http|^mixed content')
 _WARN_RE = re.compile(
-    r'too (long|short)|imgs missing alt|imgs with empty alt|thin content|multiple h1|h1 same as title|'
+    r'^missing (canonical|meta description)|too (long|short)|imgs missing alt|imgs with empty alt|thin content|multiple h1|h1 same as title|'
     r'missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|'
     r'^redirect \(|www normalization|http→https')
 

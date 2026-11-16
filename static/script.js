@@ -62,7 +62,7 @@ const ISSUE_META = {
   'AI crawlers blocked': { sev: 'error', why: 'robots.txt is blocking AI answer-engine crawlers (GPTBot, ClaudeBot, PerplexityBot, Google-Extended and similar). These bots feed ChatGPT, Claude, Perplexity and Google AI Overviews, when they\'re blocked the site cannot be read, cited, or summarised in any AI answer. Often a CDN "Block AI bots" default rather than a deliberate decision, confirm intent, then unblock the search/citation bots (OAI-SearchBot, Claude-SearchBot, PerplexityBot, ChatGPT-User) if AI visibility is wanted.', sources: [['Cloudflare: Manage AI crawlers', 'https://developers.cloudflare.com/bots/concepts/bot/ai-bots/'], ['OpenAI: GPTBot', 'https://platform.openai.com/docs/bots'], ['Google: Google-Extended', 'https://developers.google.com/search/docs/crawling-indexing/overview-google-crawlers']] },
   'AI training bots blocked': { sev: 'info', why: 'robots.txt blocks training/data-collection-only crawlers (CCBot, Bytespider, Applebot-Extended and similar). These bots harvest content for model training or resale, they do not feed live AI answers, so blocking them does not affect visibility in ChatGPT, Claude, Perplexity or Google AI Overviews. Usually a deliberate content-protection choice; no action needed unless inclusion in training corpora is wanted.', sources: [['Cloudflare: Manage AI crawlers', 'https://developers.cloudflare.com/bots/concepts/bot/ai-bots/'], ['Common Crawl: CCBot', 'https://commoncrawl.org/ccbot']] },
   'Search engines blocked': { sev: 'error', why: 'robots.txt is disallowing a classic search crawler (Googlebot / Bingbot) or applies Disallow: / to all bots. This removes the site from normal search results entirely. Almost always a mistake: most often a staging Disallow: / rule left in place after launch. Fix immediately.', sources: [['Google: robots.txt intro', 'https://developers.google.com/search/docs/crawling-indexing/robots/intro']] },
-  'Missing meta description': { sev: 'error', why: 'Google falls back to scraping body copy for the SERP snippet, almost always worse CTR than a hand-written description.', sources: [['Ahrefs: Meta Description', 'https://ahrefs.com/blog/meta-description/'], ['Moz: Meta Description', 'https://moz.com/learn/seo/meta-description']] },
+  'Missing meta description': { sev: 'warn', why: 'Google falls back to scraping body copy for the SERP snippet, almost always worse CTR than a hand-written description.', sources: [['Ahrefs: Meta Description', 'https://ahrefs.com/blog/meta-description/'], ['Moz: Meta Description', 'https://moz.com/learn/seo/meta-description']] },
   'Meta desc too long': { sev: 'warn', why: 'Google truncates around 155-160 characters on desktop, shorter on mobile. Past that gets ellipsised.', sources: [['Moz: Meta Description', 'https://moz.com/learn/seo/meta-description'], ['Ahrefs: Meta Description', 'https://ahrefs.com/blog/meta-description/']] },
   'Meta desc too short': { sev: 'warn', why: 'Under ~120 characters wastes SERP real estate and gives Google less to match against queries.', sources: [['Ahrefs: Meta Description', 'https://ahrefs.com/blog/meta-description/'], ['Moz: Meta Description', 'https://moz.com/learn/seo/meta-description']] },
   'Missing title': { sev: 'error', why: 'The <title> is the strongest on-page ranking signal and the clickable SERP heading. Missing means Google invents one, usually badly.', sources: [['Moz: Title Tag', 'https://moz.com/learn/seo/title-tag'], ['Ahrefs: Title Tag', 'https://ahrefs.com/blog/title-tag/']] },
@@ -71,7 +71,7 @@ const ISSUE_META = {
   'Missing H1': { sev: 'error', why: 'The H1 tells users and search engines what the page is about. Missing H1s hurt accessibility (screen readers) and topical relevance.', sources: [['Ahrefs: H1 Tag', 'https://ahrefs.com/blog/h1-tag/']] },
   'Multiple H1s': { sev: 'warn', why: 'Dilutes topical signal and usually indicates a template issue. One clear H1 per page is the safe pattern.', sources: [['Ahrefs: H1 Tag', 'https://ahrefs.com/blog/h1-tag/']] },
   'H1 same as title': { sev: 'warn', why: 'Title and H1 serve different jobs: title is for SERP CTR (≤60 chars, keyword-first), H1 is for on-page clarity. Identical text wastes a chance to target a second keyword angle.', sources: [['Ahrefs: H1 Tag', 'https://ahrefs.com/blog/h1-tag/'], ['Moz: Title Tag', 'https://moz.com/learn/seo/title-tag']] },
-  'Missing canonical': { sev: 'error', why: 'Without a canonical, Google has to guess which URL variant to index. Picks non-deterministically and splits link equity.', sources: [['Ahrefs: Canonical Tags', 'https://ahrefs.com/blog/canonical-tags/'], ['Moz: Canonicalization', 'https://moz.com/learn/seo/canonicalization']] },
+  'Missing canonical': { sev: 'warn', why: 'Without a canonical, Google picks which URL variant to index itself. Usually fine on a site without duplicate URLs; add a self-referencing canonical where parameters, tracking tags or sorting create copies.', sources: [['Ahrefs: Canonical Tags', 'https://ahrefs.com/blog/canonical-tags/'], ['Moz: Canonicalization', 'https://moz.com/learn/seo/canonicalization']] },
   'Canonicalised': { sev: 'warn', why: 'The canonical points elsewhere, so Google will drop this URL from the index and keep the canonical target instead.', sources: [['Ahrefs: Canonical Tags', 'https://ahrefs.com/blog/canonical-tags/'], ['Moz: Canonicalization', 'https://moz.com/learn/seo/canonicalization']] },
   'imgs missing alt': { sev: 'warn', why: 'Alt text is required for accessibility and is how Google Images + AI engines understand visuals.', sources: [['Ahrefs: Image Alt Text', 'https://ahrefs.com/blog/image-alt-text/'], ['Moz: Alt Text', 'https://moz.com/learn/seo/alt-text']] },
   'No schema': { sev: 'warn', why: 'Without JSON-LD, Google can\'t award rich results and AI engines have to parse HTML to figure out entity/relationship signals.', sources: [['Ahrefs: Schema Markup', 'https://ahrefs.com/blog/schema-markup/'], ['Moz: Schema', 'https://moz.com/learn/seo/schema-structured-data']] },
@@ -239,9 +239,9 @@ function sevOf(issue) {
   const l = (issue || '').toLowerCase();
   // noindex / canonicalised are intentional states — surfaced in their
   // own dedicated tabs, not lumped into Errors.
-  if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content/.test(l)) return 'error';
+  if (/^missing (title|h1)\b|^http [45]|served over http|^mixed content/.test(l)) return 'error';
   if (_PAGE_CHECK_ERR_RE.test(l)) return 'error';
-  if (/too (long|short)|imgs missing alt|imgs with empty alt|thin content|multiple h1|h1 same as title|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
+  if (/^missing (canonical|meta description)|too (long|short)|imgs missing alt|imgs with empty alt|thin content|multiple h1|h1 same as title|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
   if (_PAGE_CHECK_WARN_RE.test(l)) return 'warn';
   return 'info';
 }
@@ -1669,9 +1669,9 @@ function matchesCategory(page, cat) {
   // a bug, and lumping it into "must fix" buries the real errors.
   const sev = (i) => {
     const l = i.toLowerCase();
-    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content|^ai crawlers blocked|^search engines blocked/.test(l)) return 'error';
+    if (/^missing (title|h1)\b|^http [45]|served over http|^mixed content|^ai crawlers blocked|^search engines blocked/.test(l)) return 'error';
     if (_PAGE_CHECK_ERR_RE.test(l)) return 'error';
-    if (/too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
+    if (/^missing (canonical|meta description)|too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     if (_PAGE_CHECK_WARN_RE.test(l)) return 'warn';
     return 'info';
   };
@@ -2065,7 +2065,17 @@ window.analyseSitemap = async function(opts) {
       return;
     }
     crawlerSitemap = d;
-    const r0 = d.reports || {};
+    _scShowSitemapCats(d);
+    _smSetStatus('success', d.totals || {});
+  } catch (e) {
+    _smSetStatus('prompt', { reason: 'Network error: ' + (e && e.message || 'fetch failed') + '.', prefill: domain.replace(/\/$/, '') + '/sitemap.xml' });
+  }
+};
+
+// Reveal the sitemap sidebar entries with their counts. Used after a live
+// analysis and when a saved crawl that carries one is loaded.
+function _scShowSitemapCats(d) {
+    const r0 = (d && d.reports) || {};
     const setCat = (id, key) => {
       const el = document.getElementById(id);
       const cnt = (el || {}).querySelector ? el.querySelector('.ci-count') : null;
@@ -2089,11 +2099,31 @@ window.analyseSitemap = async function(opts) {
     setCat('sm-cat-non200',     'non_200_in_sitemap');
     setCat('sm-cat-redirects',  'redirects_in_sitemap');
     setCat('sm-cat-pagination', 'pagination_in_sitemap');
-    _smSetStatus('success', d.totals || {});
-  } catch (e) {
-    _smSetStatus('prompt', { reason: 'Network error: ' + (e && e.message || 'fetch failed') + '.', prefill: domain.replace(/\/$/, '') + '/sitemap.xml' });
-  }
-};
+}
+
+// Near-duplicate pairs: store them and reveal the sidebar entry.
+function _scShowNearDup(pairs, stats) {
+    window._ndPairs = pairs || [];
+    window._ndStats = stats || {};
+    const header = document.getElementById('nd-section-header');
+    const cat = document.getElementById('nd-cat-content');
+    const cnt = document.querySelector('#nd-cat-content [data-count="__nd_content"]');
+    const n = window._ndPairs.length;
+    if (header) header.style.display = (n > 0) ? '' : 'none';
+    if (cat) cat.style.display = (n > 0) ? '' : 'none';
+    if (cnt) cnt.textContent = String(n);
+}
+
+// The sitemap and near-duplicate analyses run after the crawl and live
+// outside crawlerReports; a saved crawl carries them under reports.sitemap
+// and reports.near_dup (the same keys the MCP crawl path writes), so loading
+// it brings those views back.
+function _scReportsForSave() {
+  const reps = Object.assign({}, window.crawlerReports || {});
+  if (typeof crawlerSitemap !== 'undefined' && crawlerSitemap) reps.sitemap = crawlerSitemap;
+  if (Array.isArray(window._ndPairs) && (window._ndPairs.length || Object.keys(window._ndStats || {}).length)) reps.near_dup = { pairs: window._ndPairs, stats: window._ndStats || {} };
+  return reps;
+}
 
 // All Images panel — every meaningful <img> seen during the crawl, grouped
 // by canonical src so a logo used on every page is one row with a "N pages"
@@ -2510,6 +2540,16 @@ function _scAllImagesFilter(want) {
 // auto-flagged — dofollow is correct for genuine citations, and same-window
 // is fine for some relationships. The user filters to find what to fix.
 // =============================================================================
+// Test for "a subdomain of the crawled site" (docs., shop., blog.), so links
+// there are not reported as risky external links.
+function _scOwnSubdomainTest() {
+  const rows = crawlerResults || [];
+  const start = rows.find(r => !(r.depth || 0)) || rows[0];
+  let root = '';
+  try { root = new URL(start.url).hostname.toLowerCase().replace(/^www\./, ''); } catch {}
+  return (u) => { try { const h = new URL(u).hostname.toLowerCase(); return !!root && (h === root || h.endsWith('.' + root)); } catch { return false; } };
+}
+
 function _scRenderExternalLinksPanel() {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
   if (!main) return;
@@ -2519,6 +2559,9 @@ function _scRenderExternalLinksPanel() {
   panel.id = 'external-links-panel';
   panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
 
+  // Links to the site's own subdomains (docs., shop., blog.) are outside
+  // the crawl's host but pass equity within the same site: not "risky".
+  const _ownSub = _scOwnSubdomainTest();
   const allLinks = [];
   for (const r of (crawlerResults || [])) {
     const list = Array.isArray(r.external_link_urls) ? r.external_link_urls : [];
@@ -2531,7 +2574,8 @@ function _scRenderExternalLinksPanel() {
       const target    = (entry[4] || '').toString();
       const nofollow  = /\bnofollow\b/.test(rel);
       const newTab    = target === '_blank';
-      const risk = (!nofollow && !newTab) ? 'high'
+      const risk = _ownSub(url) ? 'own'
+                 : (!nofollow && !newTab) ? 'high'
                  : (!nofollow ? 'follow'
                  : (!newTab  ? 'samewindow' : 'ok'));
       allLinks.push({source: r.url || '', url, anchor, rel, target, placement, nofollow, newTab, risk});
@@ -2547,6 +2591,7 @@ function _scRenderExternalLinksPanel() {
   const counts = {
     all:        allLinks.length,
     high:       allLinks.filter(l => l.risk === 'high').length,
+    own:        allLinks.filter(l => l.risk === 'own').length,
     follow:     allLinks.filter(l => !l.nofollow).length,
     nofollow:   allLinks.filter(l => l.nofollow).length,
     samewindow: allLinks.filter(l => !l.newTab).length,
@@ -2566,6 +2611,7 @@ function _scRenderExternalLinksPanel() {
         ${counts.high
           ? ` <b style="color:#991b1b;">${counts.high} risky</b> <span>(follow + same-window: leaks SEO equity AND loses the visitor)</span>`
           : ` <b style="color:#166534;">No risky links found.</b>`}
+        ${counts.own ? ` <span>${counts.own} go to the site's own subdomains, which is not a risk.</span>` : ''}
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
         <button type="button" class="sc-el-chip sc-el-chip-active" data-filter="all" onclick="_scExternalLinksFilter('all')" style="padding:4px 12px;border-radius:14px;border:1px solid var(--text);background:var(--text);color:var(--surface);font-size:11.5px;cursor:pointer;font-weight:600;">All <span style="opacity:.75;font-weight:400;">${counts.all}</span></button>
@@ -2607,6 +2653,7 @@ function _scRenderExternalLinksPanel() {
             follow:     '<span style="color:#92400e;">follow</span>',
             samewindow: '<span style="color:#92400e;">same window</span>',
             ok:         '<span style="color:#166534;">ok</span>',
+            own:        '<span style="color:var(--text-muted);" title="A subdomain of this site">own subdomain</span>',
           }[l.risk] || '';
           return `
             <tr data-risk="${l.risk}" data-follow="${l.nofollow ? 'nofollow' : 'follow'}" data-window="${l.newTab ? 'newtab' : 'samewindow'}" style="border-bottom:1px solid var(--border);">
@@ -2716,13 +2763,7 @@ function _scRenderAllValuesPanel(cat) {
   // those skip noindex/redirected/non-200 URLs by design, so including
   // them here created confusing mismatches between "47 short titles"
   // in All Titles vs "7" in Title Too Short.
-  const filtered = crawlerResults.filter(r => {
-    if (r.is_pagination) return false;
-    if (r.indexable === false) return false;
-    if (_scIsRedirectSource(r)) return false;
-    if (r.status_code && (r.status_code < 200 || r.status_code >= 300)) return false;
-    return true;
-  });
+  const filtered = crawlerResults.filter(_scIsRealPage);
   const rows = filtered.slice().sort((a, b) => {
     const av = (a[spec.field] || '').toLowerCase();
     const bv = (b[spec.field] || '').toLowerCase();
@@ -3102,19 +3143,19 @@ function _scRenderResponseCodesPanel() {
   panel.id = 'response-codes-panel';
   panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
 
-  const pages = crawlerResults || [];
+  // Every requested URL with the status it answered: a followed redirect
+  // counts once as its 3xx and once as the page it landed on.
+  const entries = (crawlerResults || []).flatMap(_scStatusEntries);
   const byCode = new Map();
-  for (const r of pages) {
-    const c = r.status_code || 0;
+  for (const [c0, u] of entries) {
+    const c = c0 || 0;
     if (!byCode.has(c)) byCode.set(c, []);
-    byCode.get(c).push(r.url || '');
+    byCode.get(c).push(u || '');
   }
   const buckets = Array.from(byCode.entries()).sort((a, b) => a[0] - b[0]);
-  const total = pages.length;
-  const ok = pages.filter(r => r.status_code >= 200 && r.status_code < 300).length;
-  const redir = pages.filter(r => r.status_code >= 300 && r.status_code < 400).length;
-  const err4 = pages.filter(r => r.status_code >= 400 && r.status_code < 500).length;
-  const err5 = pages.filter(r => r.status_code >= 500 && r.status_code < 600).length;
+  const total = entries.length;
+  const inRange = (lo, hi) => entries.filter(([c]) => c >= lo && c < hi).length;
+  const ok = inRange(200, 300), redir = inRange(300, 400), err4 = inRange(400, 500), err5 = inRange(500, 600);
 
   const summary = `
     <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
@@ -3170,7 +3211,20 @@ function _scIsRealPage(r) {
   if (r.indexable === false) return false;
   if (_scIsRedirectSource(r)) return false;
   if (r.status_code && (r.status_code < 200 || r.status_code >= 300)) return false;
+  // A checksum file, a tarball or a feed is not a page: no title, canonical
+  // or schema to fix. Rows saved before content_type was recorded pass.
+  const ct = String(r.content_type || '').toLowerCase();
+  if (ct && !ct.includes('text/html') && !ct.includes('application/xhtml')) return false;
   return true;
+}
+
+// [status, url] for each URL a row stands for. A row whose original_url
+// redirected to it is two URLs: the requested one (its 3xx) and the page.
+function _scStatusEntries(r) {
+  const via = r && r.original_url && r.original_url !== r.url ? r.original_url : '';
+  const rs = via ? _scRedirectStatus(r) : null;
+  if (via && rs && !r.redirect_only) return [[rs, via], [r.status_code || 0, r.url]];
+  return [[r.status_code || 0, r.url]];
 }
 
 function _scRenderDeepPagesPanel() {
@@ -3324,10 +3378,14 @@ function _scRenderSummaryPanel() {
   const total = pages.length;
   const { rows, affected } = _scIssueTally(pages);
 
-  // Crawled pages by status class, the bar Semrush and Ahrefs lead with.
+  // Requested URLs by status class, the bar Semrush and Ahrefs lead with.
+  // A row reached through a redirect stands for two URLs, the one that
+  // answered 3xx and the page it landed on, so both count.
   const cls = { ok: 0, redirect: 0, client: 0, server: 0, none: 0 };
-  for (const r of pages) {
-    const c = r.status_code || 0;
+  const _entries = pages.flatMap(_scStatusEntries);
+  const urlTotal = _entries.length;
+  for (const [c0] of _entries) {
+    const c = c0 || 0;
     if (c >= 200 && c < 300) cls.ok++;
     else if (c >= 300 && c < 400) cls.redirect++;
     else if (c >= 400 && c < 500) cls.client++;
@@ -3339,7 +3397,7 @@ function _scRenderSummaryPanel() {
     ['client', '4xx client error', 'var(--err-fg)'], ['server', '5xx server error', 'var(--warn-fg)'],
     ['none', 'No response', 'var(--text-muted)'],
   ].filter(([k]) => cls[k]);
-  const indexable = pages.filter(r => (r.status_code || 0) === 200 && r.indexable !== false).length;
+  const indexable = pages.filter(_scIsRealPage).length;
 
   const maxAff = Math.max(1, affected.error, affected.warn, affected.info);
   const sevRows = ['error', 'warn', 'info'].map(sev => `
@@ -3374,12 +3432,12 @@ function _scRenderSummaryPanel() {
       </div>
       <div class="sum-cards">
         <section class="card">
-          <h3 class="card-title">Crawled pages <button type="button" class="link-btn" onclick="selectCategory('__response_codes')">Response codes</button></h3>
-          <div class="sum-big">${total.toLocaleString()}</div>
-          <div class="stackbar">${statusRows.map(([k, , c]) => `<span style="width:${(cls[k] / total) * 100}%;background:${c};" title="${cls[k]}"></span>`).join('')}</div>
+          <h3 class="card-title">Crawled URLs <button type="button" class="link-btn" onclick="selectCategory('__response_codes')">Response codes</button></h3>
+          <div class="sum-big">${urlTotal.toLocaleString()}</div>
+          <div class="stackbar">${statusRows.map(([k, , c]) => `<span style="width:${(cls[k] / urlTotal) * 100}%;background:${c};" title="${cls[k]}"></span>`).join('')}</div>
           <ul class="kv-rows">
             ${statusRows.map(([k, label, c]) => `<li><span class="dot" style="background:${c};"></span>${label}<span class="v">${cls[k].toLocaleString()}</span></li>`).join('')}
-            <li><span class="dot" style="background:transparent;"></span>Indexable 200s<span class="v">${indexable.toLocaleString()}</span></li>
+            <li><span class="dot" style="background:transparent;"></span>Indexable HTML pages<span class="v">${indexable.toLocaleString()}</span></li>
           </ul>
         </section>
         <section class="card">
@@ -3767,15 +3825,7 @@ window.runNearDupAnalysis = async function() {
     });
     const data = await resp.json();
     if (!resp.ok || data.error) throw new Error(data.error || 'failed');
-    window._ndPairs = data.pairs || [];
-    window._ndStats = data.stats || {};
-    const header = document.getElementById('nd-section-header');
-    const cat = document.getElementById('nd-cat-content');
-    const cnt = document.querySelector('#nd-cat-content [data-count="__nd_content"]');
-    const n = window._ndPairs.length;
-    if (header) header.style.display = (n > 0) ? '' : 'none';
-    if (cat) cat.style.display = (n > 0) ? '' : 'none';
-    if (cnt) cnt.textContent = String(n);
+    _scShowNearDup(data.pairs, data.stats);
   } catch (e) {
     console.warn('[near-dup] analysis failed:', e);
     showToast(`Near-duplicate check failed: ${e && e.message ? e.message : 'unknown error'}`, 'error');
@@ -3996,9 +4046,9 @@ function updateCounts() {
     const l = i.toLowerCase();
     // noindex / canonicalised are intentional states, not errors —
     // surfaced in their own tabs instead of polluting the Errors badge.
-    if (/^missing (title|h1|canonical|meta description)|^http [45]|served over http|^mixed content|^ai crawlers blocked|^search engines blocked/.test(l)) return 'error';
+    if (/^missing (title|h1)\b|^http [45]|served over http|^mixed content|^ai crawlers blocked|^search engines blocked/.test(l)) return 'error';
     if (_PAGE_CHECK_ERR_RE.test(l)) return 'error';
-    if (/too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
+    if (/^missing (canonical|meta description)|too (long|short)|imgs missing alt|imgs with empty alt|images missing alt|thin content|multiple h1|h1 same as title|h1 identical|missing viewport|no schema|missing open graph|missing og:image|^slow |^url:|trailing slash|^redirect \(|www normalization|http→https/.test(l)) return 'warn';
     if (_PAGE_CHECK_WARN_RE.test(l)) return 'warn';
     return 'info';
   };
@@ -4080,8 +4130,19 @@ function updateCounts() {
   // are derived per-page client-side so they work without server reports.
   if ('__redir_chains'   in counts) counts.__redir_chains   = (_reps.redirect_chains || (_pages.filter(r => (r.redirect_hops || 0) >= 2))).length;
   if ('__traps'          in counts) counts.__traps          = ((_reps.url_traps || {}).soft_404 ? 1 : 0) + ((_reps.url_traps || {}).nested_trap ? 1 : 0);
-  if ('__response_codes' in counts) counts.__response_codes = (_pages.filter(r => r.status_code)).length;
+  if ('__response_codes' in counts) counts.__response_codes = (crawlerResults || []).flatMap(_scStatusEntries).length;
   if ('__deep'           in counts) counts.__deep           = _pages.filter(r => (r.depth || 0) >= 4).length;
+  // Sitemap and near-duplicate counts come from their own analyses. Every
+  // badge with a data-count is reset above, so without these the sidebar
+  // read 0 next to a panel listing hundreds of URLs.
+  const _smr = (typeof crawlerSitemap !== 'undefined' && crawlerSitemap && crawlerSitemap.reports) || null;
+  if (_smr) {
+    const _smKeys = { __sm_missing: 'missing_from_sitemap', __sm_orphan: 'orphan_in_sitemap', __sm_only: 'sitemap_only',
+      __sm_noindex: 'non_indexable_in_sitemap', __sm_non200: 'non_200_in_sitemap', __sm_redirects: 'redirects_in_sitemap',
+      __sm_pagination: 'pagination_in_sitemap' };
+    for (const [k, key] of Object.entries(_smKeys)) if (k in counts) counts[k] = (_smr[key] || []).length;
+  }
+  if ('__nd_content' in counts && Array.isArray(window._ndPairs)) counts.__nd_content = window._ndPairs.length;
   if ('__bots' in counts) {
     const bc = _reps.bot_check;
     counts.__bots = bc ? Object.keys(bc.page_issues || {}).length : '-';
@@ -4313,6 +4374,7 @@ function _buildExportForCategory(cat) {
   // External Links — every off-domain link with rel + target.
   if (cat === '__external_links') {
     const rows = [];
+    const _ownSub = _scOwnSubdomainTest();
     for (const r of crawlerResults) {
       const list = Array.isArray(r.external_link_urls) ? r.external_link_urls : [];
       for (const entry of list) {
@@ -4325,7 +4387,8 @@ function _buildExportForCategory(cat) {
         const nofollow  = /\bnofollow\b/.test(rel);
         const newTab    = target === '_blank';
         const noopener  = /\bnoopener\b/.test(rel);
-        const risk = (!nofollow && !newTab) ? 'high'
+        const risk = _ownSub(url) ? 'own'
+                   : (!nofollow && !newTab) ? 'high'
                    : (!nofollow ? 'follow'
                    : (!newTab  ? 'samewindow' : 'ok'));
         rows.push([
@@ -4460,7 +4523,7 @@ function _buildExportForCategory(cat) {
       '__all_canonicals': { field: 'canonical',        label: 'Canonical' },
     }[cat];
     const rows = crawlerResults
-      .filter(r => !r.is_pagination)
+      .filter(_scIsRealPage)
       .map(r => { const v = r[spec.field] || ''; return [r.url || '', v, v.length, r.status_code || '']; });
     return { header: ['URL', spec.label, 'Length', 'Status'], rows };
   }
@@ -4519,9 +4582,14 @@ function _buildExportForCategory(cat) {
   // Response codes: one row per page, sorted by status, so the sheet can be
   // filtered by code (the panel shows the distribution).
   if (cat === '__response_codes') {
-    const rows = crawlerResults
-      .map(r => [r.status_code || 0, r.url || '', r.title || '', r.redirect_url || ''])
-      .sort((a, b) => a[0] - b[0]);
+    const rows = [];
+    for (const r of crawlerResults) {
+      for (const [code, u] of _scStatusEntries(r)) {
+        const isHop = u !== r.url;
+        rows.push([code || 0, u || '', isHop ? '' : (r.title || ''), isHop ? (r.url || '') : (r.redirect_url && r.redirect_url !== r.url ? r.redirect_url : '')]);
+      }
+    }
+    rows.sort((a, b) => a[0] - b[0]);
     return { header: ['Status', 'URL', 'Title', 'Redirects to'], rows };
   }
 
@@ -5585,19 +5653,24 @@ function crawlFinished() {
     const _smCheckbox = document.getElementById('crawler-run-sitemap');
     if (_smCheckbox && _smCheckbox.checked && typeof window.analyseSitemap === 'function') {
       _scPhase('sitemap', 'Checking the sitemap');
-      setTimeout(() => {
+      // A promise, so the auto-save waits for it and keeps the results.
+      window._scPostCrawlSitemap = new Promise(res => setTimeout(() => {
         _scPhaseRun('sitemap', 'Checking the sitemap', () => window.analyseSitemap())
-          .catch(e => console.warn('auto-analyseSitemap failed:', e));
-      }, 1500);
+          .catch(e => console.warn('auto-analyseSitemap failed:', e)).then(res, res);
+      }, 1500));
+    } else {
+      window._scPostCrawlSitemap = null;
     }
     // Near-duplicate content analysis — opt-in via 'Near-duplicate content' checkbox.
     const _ndCheckbox = document.getElementById('crawler-run-neardup');
     if (_ndCheckbox && _ndCheckbox.checked && typeof window.runNearDupAnalysis === 'function') {
       _scPhase('neardup', 'Finding near duplicates');
-      setTimeout(() => {
+      window._scPostCrawlNearDup = new Promise(res => setTimeout(() => {
         _scPhaseRun('neardup', 'Finding near duplicates', () => window.runNearDupAnalysis())
-          .catch(e => console.warn('auto-runNearDup failed:', e));
-      }, 1800);
+          .catch(e => console.warn('auto-runNearDup failed:', e)).then(res, res);
+      }, 1800));
+    } else {
+      window._scPostCrawlNearDup = null;
     }
     // Bot readability check, on by default.
     const _botCheckbox = document.getElementById('crawler-run-bots');
@@ -6249,7 +6322,7 @@ function saveCurrentCrawl() {
   fetch('/crawl/save', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ name, results: crawlerResults, inlinks: crawlerInlinks, reports: window.crawlerReports || {} })
+    body: JSON.stringify({ name, results: crawlerResults, inlinks: crawlerInlinks, reports: _scReportsForSave() })
   }).then(r => r.json()).then(d => {
     if (d.error) { showToast('Save failed: ' + d.error, 'error'); return; }
     showToast(`Saved "${d.name}"`, 'success');
@@ -6410,6 +6483,12 @@ function loadSavedCrawl(file) {
     crawlerResults = d.results || [];
     crawlerInlinks = d.inlinks || {};
     window.crawlerReports = d.reports || {};
+    // Bring back the sitemap and near-duplicate views a saved crawl carries.
+    if (window.crawlerReports.sitemap && window.crawlerReports.sitemap.reports) {
+      crawlerSitemap = window.crawlerReports.sitemap;
+      _scShowSitemapCats(crawlerSitemap);
+    }
+    if (window.crawlerReports.near_dup) _scShowNearDup(window.crawlerReports.near_dup.pairs, window.crawlerReports.near_dup.stats);
     const urlField = document.getElementById('crawler-url');
     if (urlField && (d.seed || d.name)) urlField.value = d.seed || d.name;
     setTimeout(() => {
@@ -6838,10 +6917,15 @@ window._compareToggleIssueDrill = function(idx) {
     // Wait for the bot check (up to 5 minutes) so the saved crawl carries its
     // findings, and save this crawl's own objects, so a crawl started in the
     // meantime is not what gets saved.
-    const results = crawlerResults, inlinks = crawlerInlinks, reports = window.crawlerReports || {};
-    const wait = window._scPostCrawlBotCheck || Promise.resolve();
+    const results = crawlerResults, inlinks = crawlerInlinks, reportsAtFinish = window.crawlerReports || {};
+    const wait = Promise.all([window._scPostCrawlBotCheck, window._scPostCrawlSitemap, window._scPostCrawlNearDup]
+      .map(p => p || Promise.resolve()));
     Promise.race([wait, new Promise(r => setTimeout(r, 300000))]).then(() => {
     try {
+      // Read the reports now, not at finish: the sitemap and near-duplicate
+      // analyses land after the crawl ends. Only while this crawl is still
+      // the one on screen, so a newer crawl's analyses are never mixed in.
+      const reports = (crawlerResults === results) ? _scReportsForSave() : reportsAtFinish;
       const host = (results[0].url || '').replace(/^https?:\/\//,'').replace(/\/.*$/,'');
       const d = new Date();
       const stamp = d.getFullYear() + '-' +

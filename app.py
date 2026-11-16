@@ -1770,7 +1770,12 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
         challenge_status = None
         for attempt in range(3):  # 1 primary + 2 retries
             try:
-                resp = session.get(url, timeout=15, allow_redirects=True)
+                # stream=True: headers first, the body only when something reads
+                # it. A link with no file extension can land on a tarball or a
+                # PDF; the content-type check below then skips it without
+                # downloading the file (a crawl of a download page pulled 26
+                # full release archives before this).
+                resp = session.get(url, timeout=15, allow_redirects=True, stream=True)
                 last_exc = None
             except requests.exceptions.SSLError as e:
                 # Broken/incomplete certificate chain (most often a missing
@@ -1786,7 +1791,7 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
                 except Exception:
                     pass
                 try:
-                    resp = session.get(url, timeout=15, allow_redirects=True, verify=False)
+                    resp = session.get(url, timeout=15, allow_redirects=True, verify=False, stream=True)
                     last_exc = None
                     ssl_bypassed = True
                     session.verify = False
@@ -1814,6 +1819,7 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
                     result['_retry_hint'] = wait
                     if attempt < 2:
                         retries_done += 1
+                        resp.close()
                         time.sleep(wait)
                         continue
                     result['_rate_limited'] = True
@@ -1827,6 +1833,7 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
                         break
                     if attempt < 2:
                         retries_done += 1
+                        resp.close()
                         time.sleep(0.5 * (2 ** attempt))  # 0.5s, 1s, 2s
                         continue
                 elif resp.status_code == 403:
@@ -1867,11 +1874,12 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
                         ):
                             try:
                                 alt = session.get(url, timeout=15, allow_redirects=True,
-                                                  headers={'User-Agent': _alt_ua})
+                                                  headers={'User-Agent': _alt_ua}, stream=True)
                                 if alt.status_code not in (403, 429):
                                     resp = alt
                                     result['ua_fallback'] = _alt_ua.split(')')[0] + ')'
                                     break
+                                alt.close()
                             except Exception:
                                 continue
                 # Response is either final (2xx/3xx/4xx non-403/429) or exhausted retries.
@@ -2027,12 +2035,14 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
         if result['status_code'] >= 400:
             result['error'] = f"HTTP {result['status_code']}"
             result['issues'].append(f"HTTP {result['status_code']} error")
+            resp.close()
             return result
 
         # Skip non-HTML
         ctype = result['content_type'].lower()
         if 'text/html' not in ctype and 'application/xhtml' not in ctype:
             result['issues'].append(f'Non-HTML ({ctype.split(";")[0]})')
+            resp.close()  # streamed: drop the body unread
             return result
 
         # Limit body size
