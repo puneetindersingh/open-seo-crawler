@@ -753,6 +753,7 @@ body.is-col-resizing * { cursor: col-resize !important; }
    columns (e.g. H1 (2), H1 (3) in the Multiple H1s view) don't shift
    nth-child indices and silently break the hide rules. */
 #crawler-table.hide-col-redirto [data-col="redirto"] { display: none; }
+#crawler-table.hide-col-canon [data-col="canon"] { display: none; }
 #crawler-table.hide-col-inlinks [data-col="inlinks"] { display: none; }
 #crawler-table.hide-col-title [data-col="title"] { display: none; }
 #crawler-table.hide-col-tlen [data-col="tlen"] { display: none; }

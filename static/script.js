@@ -334,6 +334,7 @@ function renderRow(d) {
     </td>
     <td data-col="status">${(d.status_code || 0) >= 300 || !d.status_code ? `<span class="badge ${(d.status_code || 0) >= 400 || !d.status_code ? 'error' : 'warn'}">${d.status_code || 'none'}</span>` : d.status_code}</td>
     ${_scRedirToCell(d)}
+    ${_scCanonCell(d)}
     ${_scInlinksCell(d)}
     <td data-col="title" title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:var(--err-fg)">missing</em>'}</td>
     <td data-col="tlen">${d.title_len || 0}</td>
@@ -351,7 +352,7 @@ function renderRow(d) {
 // Double-click handle to auto-fit column to content (icons included).
 // Widths persist in localStorage.
 // =============================================================================
-const _SC_COL_KEY = 'sc_crawler_col_widths_v1';
+const _SC_COL_KEY = 'sc_crawler_col_widths_v2';
 // table-layout:fixed only honours col widths when the table has an explicit
 // pixel width. We set table.style.width = sum of visible col widths so
 // dragging a handle resizes that column (and the table) without other
@@ -4480,14 +4481,24 @@ function _buildExportForCategory(cat) {
     return { header: ['Page URL', 'Crawler', 'Kind', 'Runs JavaScript', 'robots.txt', 'Result', 'Detail', 'Status'], rows };
   }
 
+  // Canonicalised: where each page points and what that target is.
+  if (cat === 'Canonicalised') {
+    const rows = crawlerResults.filter(d => matchesCategory(d, cat)).map(d => {
+      const t = _scCanonTarget(d) || {};
+      return [d.url || '', d.status_code || '', t.url || d.canonical || '', t.state || '', _scLookupInlinks(d.url).length, d.title || '', (d.issues || []).join(' | ')];
+    });
+    return { header: ['URL', 'Status', 'Canonical target', 'Target status', 'Inlinks', 'Title', 'Issues'], rows };
+  }
+
   // Default: page-level summary using matchesCategory.
   const filtered = (cat === 'all')
     ? crawlerResults.slice()
     : crawlerResults.filter(d => (typeof matchesCategory === 'function') ? matchesCategory(d, cat) : true);
-  const header = ['URL', 'Status', 'Title', 'Title Length', 'Meta Description', 'Meta Length', 'H1', 'Word Count', 'Response (s)', 'Issues'];
+  const header = ['URL', 'Status', 'Inlinks', 'Title', 'Title Length', 'Meta Description', 'Meta Length', 'H1', 'Word Count', 'Response (s)', 'Issues'];
   const rows = filtered.map(d => [
     d.url || '',
     d.status_code || '',
+    _scLookupInlinks((d.original_url && d.original_url !== d.url) ? d.original_url : d.url).length,
     d.title || '',
     d.title_len || 0,
     d.meta_description || '',
@@ -5688,7 +5699,7 @@ window.scBulkRecrawlVisible = async function(btn) {
 // Column sort: click any header to sort ASC, click again to flip DESC.
 let _scSortCol = null;
 let _scSortAsc = true;
-const _SC_SORT_KEYS = ['url','status_code','redirect_url','__inlinks_count','title','title_len','meta_description','h1','word_count','response_time','issues'];
+const _SC_SORT_KEYS = ['url','status_code','redirect_url','canonical','__inlinks_count','title','title_len','meta_description','h1','word_count','response_time','issues'];
 function _scSortRows(rows) {
   const key = _SC_SORT_KEYS[_scSortCol];
   if (!key) return rows;
@@ -5696,6 +5707,7 @@ function _scSortRows(rows) {
     let va = a[key], vb = b[key];
     if (key === 'issues') { va = (va||[]).length; vb = (vb||[]).length; }
     if (key === '__inlinks_count') { va = _scLookupInlinks(a.url).length; vb = _scLookupInlinks(b.url).length; }
+    if (key === 'canonical') { va = a.canonical_kind === 'canonicalised' ? (a.canonical || '') : ''; vb = b.canonical_kind === 'canonicalised' ? (b.canonical || '') : ''; }
     if (typeof va === 'string') return _scSortAsc ? (va||'').localeCompare(vb||'') : (vb||'').localeCompare(va||'');
     return _scSortAsc ? (va||0) - (vb||0) : (vb||0) - (va||0);
   });
@@ -5760,10 +5772,10 @@ function _scApplyMultiH1Columns(n) {
   colgroup.querySelectorAll('col[data-h1-extra="1"]').forEach(el => el.remove());
   headerRow.querySelectorAll('th[data-h1-extra="1"]').forEach(el => el.remove());
   const h1Col = colgroup.querySelector('col[data-col="h1"]');
-  const h1Th = headerRow.querySelector('th[data-col-idx="7"]');
+  const h1Th = headerRow.querySelector('th[data-col="h1"]:not([data-h1-extra])');
   if (!h1Col || !h1Th) return;
   if (want > 1) {
-    h1Th.querySelector('.th-label').innerHTML = 'H1 (1) <span class="sc-sort-ind" data-col="7"></span>';
+    h1Th.querySelector('.th-label').innerHTML = 'H1 (1) <span class="sc-sort-ind" data-col="8"></span>';
     for (let i = 2; i <= want; i++) {
       const col = document.createElement('col');
       col.setAttribute('data-col', 'h1');
@@ -5777,7 +5789,7 @@ function _scApplyMultiH1Columns(n) {
       h1Th.insertAdjacentElement('afterend', th);
     }
   } else {
-    h1Th.querySelector('.th-label').innerHTML = 'H1 <span class="sc-sort-ind" data-col="7"></span>';
+    h1Th.querySelector('.th-label').innerHTML = 'H1 <span class="sc-sort-ind" data-col="8"></span>';
   }
   if (typeof _scSyncTableWidth === 'function') _scSyncTableWidth();
 }
@@ -5810,6 +5822,35 @@ function _scRedirectStatusMeta(code) {
 }
 // Redirect destination cell. Shows the real 3xx code (301/302) plus the full
 // target URL. Default-hidden for most categories; shown in the Redirect view.
+// Where a canonicalised page points, and what that target is in this crawl:
+// a target that 404s, redirects or is noindex is the real problem to fix.
+function _scCanonTarget(d) {
+  if (!d || d.canonical_kind !== 'canonicalised' || !d.canonical) return null;
+  const k = (u) => String(u || '').replace(/#.*$/, '').replace(/\/+$/, '');
+  const want = k(d.canonical);
+  const hit = (crawlerResults || []).find(r => k(r.url) === want || (r.original_url && k(r.original_url) === want));
+  let state = 'not crawled', sev = 'warn';
+  if (hit) {
+    const viaRedirect = k(hit.url) !== want || _scIsRedirectSource(hit);
+    const rs = viaRedirect ? (_scRedirectStatus(hit) || 301) : 0;
+    const sc = hit.status_code || 0;
+    if (rs) { state = `${rs} redirect`; sev = 'warn'; }
+    else if (sc >= 400 || !sc) { state = sc ? `${sc}` : 'no response'; sev = 'error'; }
+    else if (hit.indexable === false) { state = `${sc} noindex`; sev = 'error'; }
+    else { state = `${sc}`; sev = 'ok'; }
+  }
+  return { url: d.canonical, state, sev };
+}
+function _scCanonCell(d) {
+  const t = _scCanonTarget(d);
+  if (!t) return '<td data-col="canon"><em style="color:#94a3b8">-</em></td>';
+  const pill = t.sev === 'ok'
+    ? `<span style="color:var(--ok-fg);font-weight:700;margin-right:5px;font-size:11px;">${escapeHtml(t.state)}</span>`
+    : `<span class="badge ${t.sev}" style="margin-right:5px;">${escapeHtml(t.state)}</span>`;
+  const path = String(t.url).replace(/^https?:\/\/[^\/]+/, '') || '/';
+  return `<td data-col="canon" title="${escapeHtml(t.url)} (target: ${escapeHtml(t.state)})" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${pill}${escapeHtml(path)}</td>`;
+}
+
 function _scRedirToCell(d) {
   const to = d.redirect_url || '';
   const hops = d.redirect_hops || 0;
@@ -5846,7 +5887,7 @@ function _scH1Cells(d) {
 function _scSetColumns(cat) {
   const table = document.getElementById('crawler-table');
   if (!table) return;
-  const all = ['redirto','inlinks','title','tlen','meta','h1','words','speed'];
+  const all = ['redirto','canon','inlinks','title','tlen','meta','h1','words','speed'];
   table.classList.remove(...all.map(c => 'hide-col-' + c));
   const show = (cols) => {
     // Inlinks count in every view: on an error or issue list it says how
@@ -5864,6 +5905,7 @@ function _scSetColumns(cat) {
   if (cat === 'Thin content') return show(['url','status','words','issues']);
   if (cat === 'Slow') return show(['url','status','speed','issues']);
   if (cat === 'Redirect') return show(['url','status','redirto','inlinks','issues']);
+  if (cat === 'Canonicalised') return show(['url','status','canon','inlinks','title','issues']);
   // Image alt is image-level, not page-level — page Title is just noise on
   // this view.
   if (cat === 'imgs missing alt') return show(['url','status','issues']);
