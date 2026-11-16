@@ -4925,7 +4925,9 @@ function _scBuildAiBrief(opts) {
     for (const issue of (r.issues || [])) {
       const [label, slug] = _scIssueGroup(issue);
       let g = groups.get(label);
-      if (!g) { g = { sev: sevOf(issue), slug, pages: new Map() }; groups.set(label, g); }
+      // A redirect is a property of an address, not a page problem: it gets
+      // its own section, so it no longer swells the warnings.
+      if (!g) { g = { sev: REDIRECT_ISSUE.test(issue) ? 'redirect' : sevOf(issue), slug, pages: new Map() }; groups.set(label, g); }
       // Keep the raw text only when it carries detail (a count, a value, a
       // target); a bare restatement of the heading is noise.
       let detail = issue !== label && /[(\d:]/.test(issue) ? issue : '';
@@ -4937,7 +4939,8 @@ function _scBuildAiBrief(opts) {
       if (!g.pages.has(r.url)) g.pages.set(r.url, detail);
     }
   }
-  const SEV = [['error', 'Errors (must fix)'], ['warn', 'Warnings (should fix)'], ['info', 'Info (often intentional)']];
+  const SEV = [['error', 'Errors (must fix)'], ['warn', 'Warnings (should fix)'],
+    ['redirect', 'Redirects (not page issues: point the internal links at the final URL)'], ['info', 'Info (often intentional)']];
   for (const [key, heading] of SEV) {
     const weights = _scPageWeights(rows, inlinks);
     const score = (g) => _scGroupScore([...g.pages.keys()], rows.length, weights);
@@ -4972,10 +4975,22 @@ function _scBuildAiBrief(opts) {
   // Duplicates, from the server reports.
   const dupSections = [['duplicate_titles', 'Duplicate titles'], ['duplicate_metas', 'Duplicate meta descriptions'],
                        ['duplicate_h1s', 'Duplicate H1s'], ['duplicate_bodies', 'Duplicate body content']];
+  // Groups whose pages all list each other as hreflang alternates are one
+  // page in several languages or regions: expected, so not listed as
+  // duplicates (on a multi-region site they were every group).
+  const hlKey = (u) => urlKey(u).toLowerCase().replace('://www.', '://');
+  const hlOf = new Map(rows.map(r => [r.url, new Set((r.hreflang || []).filter(h => h && h.href).map(h => hlKey(h.href)))]));
+  const isLangGroup = (urls) => urls.length > 1 && urls.every(u => {
+    const alts = hlOf.get(u);
+    return !!alts && urls.every(o => o === u || alts.has(hlKey(o)));
+  });
   for (const [key, heading] of dupSections) {
-    const gs = reports[key] || [];
-    if (!gs.length) continue;
+    const all = reports[key] || [];
+    if (!all.length) continue;
+    const gs = all.filter(g => !isLangGroup(g.urls || []));
+    const lang = all.length - gs.length;
     add(`## ${heading} (${gs.length} group${gs.length === 1 ? '' : 's'})`, '');
+    if (lang) add(`- Not listed: ${lang} group${lang === 1 ? '' : 's'} of language or region versions of one page that link to each other with hreflang (expected).`);
     gs.slice(0, 10).forEach(g => {
       const urls = g.urls || [];
       const shown = key === 'duplicate_bodies' ? '' : `"${_scMdCell(g.value, 120)}" `;

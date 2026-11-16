@@ -501,7 +501,8 @@ def build_brief(crawl, prompt=None, page_table=True, page_limit=200, max_urls=10
             label, slug = issue_group(issue)
             g = groups.get(label)
             if g is None:
-                g = groups[label] = {'sev': sev_of(issue), 'slug': slug, 'pages': OrderedDict()}
+                sev = 'redirect' if _REDIRECT_ISSUE.match(issue) else sev_of(issue)
+                g = groups[label] = {'sev': sev, 'slug': slug, 'pages': OrderedDict()}
             detail = issue if (issue != label and re.search(r'[(\d:]', issue)) else ''
             origin = r.get('original_url')
             if _REDIRECT_ISSUE.match(issue) and origin and _url_key(origin) != _url_key(r.get('url')):
@@ -510,6 +511,7 @@ def build_brief(crawl, prompt=None, page_table=True, page_limit=200, max_urls=10
             if r.get('url') not in g['pages']:
                 g['pages'][r.get('url')] = detail
     for key, heading in (('error', 'Errors (must fix)'), ('warn', 'Warnings (should fix)'),
+                         ('redirect', 'Redirects (not page issues: point the internal links at the final URL)'),
                          ('info', 'Info (often intentional)')):
         weights = page_weights(rows, inlinks)
         found = sorted([(label, g) for label, g in groups.items() if g['sev'] == key],
@@ -537,12 +539,34 @@ def build_brief(crawl, prompt=None, page_table=True, page_limit=200, max_urls=10
                     add([f'- and {n - max_urls} more'])
             add([''])
 
+    # Groups whose pages all list each other as hreflang alternates are one
+    # page in several languages or regions (isLangGroup in script.js).
+    def hl_key(u):
+        return _url_key(u).lower().replace('://www.', '://', 1)
+    hl_of = {}
+    for r in rows:
+        hl_of[r.get('url')] = {hl_key(h.get('href')) for h in (r.get('hreflang') or [])
+                               if isinstance(h, dict) and h.get('href')}
+
+    def is_lang_group(urls):
+        if len(urls) <= 1:
+            return False
+        for u in urls:
+            alts = hl_of.get(u)
+            if alts is None or not all(o == u or hl_key(o) in alts for o in urls):
+                return False
+        return True
+
     for key, heading in (('duplicate_titles', 'Duplicate titles'), ('duplicate_metas', 'Duplicate meta descriptions'),
                          ('duplicate_h1s', 'Duplicate H1s'), ('duplicate_bodies', 'Duplicate body content')):
-        gs = reports.get(key) or []
-        if not gs:
+        all_groups = reports.get(key) or []
+        if not all_groups:
             continue
+        gs = [g for g in all_groups if not is_lang_group(g.get('urls') or [])]
+        lang = len(all_groups) - len(gs)
         add([f'## {heading} ({len(gs)} group{"" if len(gs) == 1 else "s"})', ''])
+        if lang:
+            add([f'- Not listed: {lang} group{"" if lang == 1 else "s"} of language or region versions of one page that link to each other with hreflang (expected).'])
         for g in gs[:10]:
             urls = g.get('urls') or []
             shown = '' if key == 'duplicate_bodies' else f'"{md_cell(g.get("value"), 120)}" '
