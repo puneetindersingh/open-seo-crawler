@@ -701,6 +701,14 @@ body.is-col-resizing * { cursor: col-resize !important; }
   border-radius: 3px;
 }
 
+/* Inlinks for several selected pages, one group per page */
+.dock-pane .link-group { padding: 6px 0 8px; border-bottom: 1px solid var(--border); }
+.dock-pane .link-group:last-child { border-bottom: 0; }
+.dock-pane .link-group-head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.dock-pane .link-group-url { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dock-pane .link-group-n { color: var(--text-muted); font-weight: 400; font-size: 11px; flex-shrink: 0; }
+.dock-pane .link-group .link-row { padding-left: 12px; }
+
 /* SEO Side Panel tip: one muted line along the foot of the dock */
 .dock-tip {
   display: flex;

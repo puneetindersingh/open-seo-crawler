@@ -651,13 +651,65 @@ window.copyUrl = function(btn, url) {
 window.openDock = function(url) {
   if (!url) return;
   dockUrl = url;
+  dockMultiUrls = null;
+  _scDockMultiMode(false);
   document.getElementById('crawler-dock').hidden = false;
   renderDock();
 };
 window.closeDock = function() {
   dockUrl = null;
+  dockMultiUrls = null;
+  _scDockMultiMode(false);
   document.getElementById('crawler-dock').hidden = true;
 };
+
+// Selected rows: the dock lists every inlink to any of them, grouped by page.
+let dockMultiUrls = null;
+let _scDockWasMulti = false;
+function _scDockMultiMode(on) {
+  document.querySelectorAll('.dock-tab').forEach(b => { if (b.dataset.tab !== 'inlinks') b.style.display = on ? 'none' : ''; });
+  if (!on && _scDockWasMulti) dockSwitchTab('details');
+  _scDockWasMulti = on;
+}
+function _scInlinksFor(url) {
+  const page = crawlerResults.find(r => r.url === url) || {};
+  const lookup = (page.original_url && page.original_url !== page.url) ? page.original_url : url;
+  return _scLookupInlinks(lookup).map(e => typeof e === 'string' ? { source: e, anchor: '', placement: '' } : e);
+}
+window.openDockMulti = function(urls) {
+  if (!urls || !urls.length) return;
+  dockUrl = null;
+  dockMultiUrls = urls.slice();
+  document.getElementById('crawler-dock').hidden = false;
+  _scDockMultiMode(true);
+  dockSwitchTab('inlinks');
+  renderDockMulti();
+};
+function renderDockMulti() {
+  const urls = dockMultiUrls || [];
+  const groups = urls.map(u => ({ url: u, links: _scInlinksFor(u) }));
+  const total = groups.reduce((n, g) => n + g.links.length, 0);
+  const sources = new Set();
+  groups.forEach(g => g.links.forEach(e => sources.add(e.source)));
+  const urlEl = document.getElementById('dock-url');
+  if (urlEl) {
+    urlEl.textContent = `${urls.length} selected page${urls.length === 1 ? '' : 's'} · ${total} inlink${total === 1 ? '' : 's'} from ${sources.size} page${sources.size === 1 ? '' : 's'}`;
+    urlEl.title = '';
+  }
+  const inCount = document.getElementById('dock-in-count');
+  if (inCount) inCount.textContent = total;
+  const path = (u) => String(u).replace(/^https?:\/\/[^\/]+/, '') || '/';
+  document.getElementById('dock-pane-inlinks').innerHTML = groups.map(g => `
+    <div class="link-group">
+      <div class="link-group-head"><span class="link-group-url" title="${escapeHtml(g.url)}">${escapeHtml(path(g.url))}</span> <span class="link-group-n">${g.links.length} inlink${g.links.length === 1 ? '' : 's'}</span></div>
+      ${g.links.length ? g.links.map(e => `<div class="link-row">
+          <a href="${safeHref(e.source)}" target="_blank" rel="noopener">${escapeHtml(path(e.source))}</a>
+          <button class="copy-icon" onclick="copyUrl(this,${jsArg(e.source)})" title="Copy URL" aria-label="Copy URL">⧉</button>
+          ${e.anchor ? `<span class="anchor">"${escapeHtml(e.anchor.slice(0,60))}${e.anchor.length > 60 ? '…' : ''}"</span>` : ''}
+          ${e.placement ? `<span class="placement">${escapeHtml(e.placement)}</span>` : ''}
+        </div>`).join('') : '<div class="empty">No inbound links discovered.</div>'}
+    </div>`).join('');
+}
 window.dockSwitchTab = function(tab) {
   document.querySelectorAll('.dock-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   document.querySelectorAll('.dock-pane').forEach(p => p.style.display = p.dataset.tab === tab ? '' : 'none');
@@ -859,6 +911,7 @@ let crawlerLastCrawlId = null;
 // carry over, so a new crawl could show the previous site's findings until
 // its own arrived, and a loaded crawl kept the old site's sitemap tabs.
 function _scResetPerCrawlState() {
+  _scSummaryShowAllOn = false;
   window.crawlerReports = null;
   _scBotGen++;
   if (typeof crawlerSitemap !== 'undefined') crawlerSitemap = null;
@@ -1238,7 +1291,7 @@ function startCrawl(opts) {
               } else if (activeCategory === '__summary' && !window._scSummaryRerenderT) {
                 window._scSummaryRerenderT = setTimeout(() => {
                   window._scSummaryRerenderT = null;
-                  if (activeCategory === '__summary' && typeof _scRenderSummaryPanel === 'function') _scRenderSummaryPanel();
+                  if (activeCategory === '__summary' && typeof _scRenderSummaryPanel === 'function') _scRerenderSummaryKeepScroll();
                 }, 800);
               }
               // Refresh dock if the open URL got fresh data (new inlinks or its own page row)
@@ -3156,6 +3209,16 @@ function _scSummaryPanelShell(id) {
   return panel;
 }
 
+// The live re-render replaces the panel, which is its own scroll box, so
+// without this the Summary jumped back to the top every 0.8s mid-crawl.
+function _scRerenderSummaryKeepScroll() {
+  const old = document.getElementById('summary-panel');
+  const top = old ? old.scrollTop : 0;
+  _scRenderSummaryPanel();
+  const panel = document.getElementById('summary-panel');
+  if (panel && top) panel.scrollTop = top;
+}
+
 function _scRenderSummaryPanel() {
   const panel = _scSummaryPanelShell('summary-panel');
   if (!panel) return;
@@ -3245,14 +3308,17 @@ function _scRenderSummaryPanel() {
       </div>
       <section class="card">
         <h3 class="card-title">Issues <span class="muted" title="Inside each severity, issues that reach more of the site and touch more central pages (the start page, pages a click or two away, pages with many internal links) come first.">${rows.length} type${rows.length === 1 ? '' : 's'}, biggest reach first</span></h3>
-        ${rows.length ? `<div class="card-flush" id="sum-issues">${_scIssuesTable(rows, total, LIMIT)}</div>
-          ${rows.length > LIMIT ? `<div class="sum-more"><button type="button" class="link-btn" onclick="_scSummaryShowAll(this)">Show all ${rows.length} issues</button></div>` : ''}`
+        ${rows.length ? `<div class="card-flush" id="sum-issues">${_scIssuesTable(rows, total, _scSummaryShowAllOn ? undefined : LIMIT)}</div>
+          ${rows.length > LIMIT && !_scSummaryShowAllOn ? `<div class="sum-more"><button type="button" class="link-btn" onclick="_scSummaryShowAll(this)">Show all ${rows.length} issues</button></div>` : ''}`
           : '<div class="sum-empty">No issues found on the crawled pages.</div>'}
       </section>
     </div>`;
 }
 
+// Remembered so the live re-render during a crawl keeps the full list open.
+let _scSummaryShowAllOn = false;
 function _scSummaryShowAll(btn) {
+  _scSummaryShowAllOn = true;
   const pages = crawlerResults || [];
   const box = document.getElementById('sum-issues');
   if (box) box.innerHTML = _scIssuesTable(_scIssueTally(pages).rows, pages.length);
@@ -5783,6 +5849,9 @@ function _scSetColumns(cat) {
   const all = ['redirto','inlinks','title','tlen','meta','h1','words','speed'];
   table.classList.remove(...all.map(c => 'hide-col-' + c));
   const show = (cols) => {
+    // Inlinks count in every view: on an error or issue list it says how
+    // many pages point at the problem, which decides what to fix first.
+    if (!cols.includes('inlinks')) cols = cols.slice(0, 2).concat('inlinks', cols.slice(2));
     table.classList.add(...all.filter(c => !cols.includes(c)).map(c => 'hide-col-' + c));
     _scSyncTableWidth();
   };
@@ -5877,6 +5946,21 @@ function _scSetColumns(cat) {
 
   document.addEventListener('mouseup', () => { dragging = false; });
 
+  // Ctrl+A / Cmd+A over the page table selects every visible row, ready
+  // for the right-click menu. Typing in a field keeps its own select-all.
+  document.addEventListener('keydown', e => {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return;
+    const t = e.target;
+    if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+    const tbody = document.getElementById('crawler-tbody');
+    if (!tbody || !tbody.offsetParent) return;
+    const rows = Array.from(tbody.querySelectorAll('tr[data-url]')).filter(r => r.style.display !== 'none');
+    if (!rows.length) return;
+    e.preventDefault();
+    rows.forEach(r => r.classList.add('cr-selected'));
+    scToast(`Selected ${rows.length} row${rows.length > 1 ? 's' : ''}. Right-click for inlinks and copy options.`);
+  });
+
   // Double-click any cell in a selectable tbody to expand it (wrap the
   // full value, drop the ellipsis) and auto-select for easy copy.
   document.addEventListener('dblclick', e => {
@@ -5955,6 +6039,12 @@ function _scSetColumns(cat) {
     const items = [
       { label: `Copy ${urls.length} URL${urls.length > 1 ? 's' : ''}`, action: () => copyText(urls.join('\n'), `Copied ${urls.length} URL${urls.length > 1 ? 's' : ''}.`) },
       { label: 'Copy as comma-separated', action: () => copyText(urls.join(', '), 'Copied as comma-separated.') },
+      { label: `Show inlinks for ${urls.length} page${urls.length > 1 ? 's' : ''}`, action: () => openDockMulti(urls) },
+      { label: 'Copy inlinks (target, source, anchor)', action: () => {
+          const lines = ['Target\tLinked from\tAnchor\tPlacement'];
+          urls.forEach(u => _scInlinksFor(u).forEach(e => lines.push([u, e.source, e.anchor || '', e.placement || ''].map(v => String(v).replace(/[\t\n]+/g, ' ')).join('\t'))));
+          copyText(lines.join('\n'), `Copied ${lines.length - 1} inlink${lines.length === 2 ? '' : 's'}.`);
+        } },
       { label: 'Clear selection', action: () => clearSelection(targetTbody) },
     ];
 
