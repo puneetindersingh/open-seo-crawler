@@ -308,6 +308,23 @@ function _scWireRowClick() {
   _scRowClickWired = true;
 }
 
+// Title and meta length views show the whole text, with the part past the
+// limit marked, so it is clear how much to cut. Limits match app.py.
+const _SC_LEN_LIMIT = { title: 60, meta: 160 };
+function _scLenView(cat) {
+  if (cat === 'Title too long' || cat === 'Title too short') return 'title';
+  if (cat === 'Meta desc too long' || cat === 'Meta desc too short') return 'meta';
+  return '';
+}
+function _scLenText(text, cat, kind) {
+  const t = String(text || '');
+  if (_scLenView(cat) !== kind) return escapeHtml(t);
+  const lim = _SC_LEN_LIMIT[kind];
+  const count = kind === 'meta' ? `<span class="sc-len">${t.length}</span>` : '';
+  if (t.length <= lim) return count + escapeHtml(t);
+  return count + escapeHtml(t.slice(0, lim)) + `<span class="sc-over" title="Past ${lim} characters">${escapeHtml(t.slice(lim))}</span>`;
+}
+
 function renderRow(d) {
   const tbody = document.getElementById('crawler-tbody');
   if (!_scRowClickWired) _scWireRowClick();
@@ -322,13 +339,30 @@ function renderRow(d) {
   // we want the user to see the URL they (or an internal link) actually
   // hit — otherwise "URL" and "Redirect To" both show the destination and
   // look identical in the Redirects view.
-  const displayUrl = (d.original_url && d.original_url !== d.url) ? d.original_url : d.url;
+  // Content issues belong to the page that answered, so issue views show
+  // that page; the redirecting address is a note. Redirects and URL hygiene
+  // are about the requested address itself, so they keep it.
+  const _via = (d.original_url && d.original_url !== d.url) ? d.original_url : '';
+  const _keepRequested = !!_via && (activeCategory === 'Redirect' || activeCategory === 'URL:' || activeCategory === 'all' || _scIsRedirectSource(d));
+  const displayUrl = _keepRequested ? _via : d.url;
   const path = displayUrl.replace(/^https?:\/\/[^\/]+/, '') || '/';
-  const issues = (d.issues || []).map(i => `<span class="badge ${sevOf(i)}" title="${sevOf(i).toUpperCase()}">${escapeHtml(i)}</span>`).join('');
+  const viaNote = (_via && !_keepRequested)
+    ? `<span class="sc-via" title="Reached through ${escapeHtml(_via)}">via redirect</span>` : '';
+  // The issue that put this row in the current view goes first, marked, so
+  // it is never the one hidden behind the ellipsis.
+  const _cat = activeCategory;
+  const _isMatch = (i) => {
+    if (!_cat || _cat === 'all' || _cat.startsWith('__')) return false;
+    if (_cat === 'HTTP') return /^http [45]\d\d/i.test(i);
+    if (_cat === 'Redirect') return /^redirect/i.test(i);
+    return matchesCategory({ issues: [i], status_code: 0 }, _cat);
+  };
+  const _ordered = (d.issues || []).slice().sort((a, b) => _isMatch(b) - _isMatch(a));
+  const issues = _ordered.map(i => `<span class="badge ${sevOf(i)}${_isMatch(i) ? ' is-match' : ''}" title="${sevOf(i).toUpperCase()}">${escapeHtml(i)}</span>`).join('');
   tr.innerHTML = `
     <td data-col="url" title="${escapeHtml(displayUrl)}">
       <span style="display:flex;align-items:center;gap:2px;min-width:0;">
-        <span class="url-cell" role="button" tabindex="0" onclick="openDock(${jsArg(d.url)})" style="flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(path)}</span>
+        <span class="url-cell" role="button" tabindex="0" onclick="openDock(${jsArg(d.url)})" style="flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(path)}</span>${viaNote}
         <span class="cs-cell-actions" style="display:inline-flex;align-items:center;gap:2px;flex-shrink:0;">${_scOpenIcon(d.url)}${_scRefetchIcon(d.url)}</span>
       </span>
     </td>
@@ -336,9 +370,9 @@ function renderRow(d) {
     ${_scRedirToCell(d)}
     ${_scCanonCell(d)}
     ${_scInlinksCell(d)}
-    <td data-col="title" title="${escapeHtml(d.title||'')}">${d.title ? escapeHtml(d.title) : '<em style="color:var(--err-fg)">missing</em>'}</td>
+    <td data-col="title" title="${escapeHtml(d.title||'')}"${_scLenView(_cat) === 'title' ? ' class="sc-full"' : ''}>${d.title ? _scLenText(d.title, _cat, 'title') : '<em style="color:var(--err-fg)">missing</em>'}</td>
     <td data-col="tlen">${d.title_len || 0}</td>
-    <td data-col="meta" title="${escapeHtml(d.meta_description||'')}">${d.meta_description ? escapeHtml(d.meta_description) : '<em style="color:var(--err-fg)">missing</em>'}</td>
+    <td data-col="meta" title="${escapeHtml(d.meta_description||'')}"${_scLenView(_cat) === 'meta' ? ' class="sc-full"' : ''}>${d.meta_description ? _scLenText(d.meta_description, _cat, 'meta') : '<em style="color:var(--err-fg)">missing</em>'}</td>
     ${_scH1Cells(d)}
     <td data-col="words">${d.word_count || 0}</td>
     <td data-col="speed">${d.response_time || 0}s</td>
@@ -420,7 +454,7 @@ function _scSaveColWidths() {
   try {
     const cols = document.querySelectorAll('#crawler-table colgroup col');
     const widths = Array.from(cols).map(c =>
-      parseInt(c.dataset.savedWidth, 10) || parseInt(c.style.width, 10) || c.offsetWidth);
+      parseInt(c.dataset.lenOrig, 10) || parseInt(c.dataset.savedWidth, 10) || parseInt(c.style.width, 10) || c.offsetWidth);
     localStorage.setItem(_SC_COL_KEY, JSON.stringify(widths));
   } catch {}
   _scSyncTableWidth();
@@ -1616,6 +1650,15 @@ window.crawlerShowQueue = crawlerShowQueue;
 // =============================================================================
 // Issue category selection + per-category counts
 // =============================================================================
+// A redirect is a property of an address, not something wrong on a page:
+// 906 locale-switch 302s made "1,836 of 1,948 pages have warnings". The
+// severity counts leave these out; the Summary reports them on their own
+// line (the fix is the internal links that point at them).
+const _SC_REDIRECT_ISSUE_RE = /^(Redirect|HTTP→HTTPS redirect|www normalization redirect|Trailing slash redirect) \(/;
+function _scSevIssues(page) {
+  return (page.issues || []).filter(i => !_SC_REDIRECT_ISSUE_RE.test(i));
+}
+
 function matchesCategory(page, cat) {
   if (cat === 'all') return true;
   const issues = page.issues || [];
@@ -1636,9 +1679,9 @@ function matchesCategory(page, cat) {
   // appears in that filter. A page with both errors and warnings appears in
   // BOTH the Errors and Warnings filters — that matches Screaming Frog and
   // what users expect when they want to see "all pages with warnings".
-  if (cat === '__err') return issues.some(i => sev(i) === 'error');
-  if (cat === '__warn') return issues.some(i => sev(i) === 'warn');
-  if (cat === '__info') return issues.some(i => sev(i) === 'info');
+  if (cat === '__err') return _scSevIssues(page).some(i => sev(i) === 'error');
+  if (cat === '__warn') return _scSevIssues(page).some(i => sev(i) === 'warn');
+  if (cat === '__info') return _scSevIssues(page).some(i => sev(i) === 'info');
   if (cat === 'HTTP') return (page.status_code >= 400 && page.status_code < 600);
   if (cat === 'Redirect') return !!page.redirect_url;
   if (cat === 'noindex') return issues.some(i => i.toLowerCase() === 'noindex' || i.toLowerCase().startsWith('page set to noindex'));
@@ -2776,6 +2819,68 @@ window._scCopyValuesOnly = function(cat) {
 // title / meta / H1 / body hash. Server-computed in app.py and
 // shipped on the 'complete' event; falls back to client-side
 // grouping for saved crawls missing the reports payload.
+// Duplicate groups for one field, from the crawled pages (uncapped, so old
+// saved crawls whose server list stopped at 100 are counted in full).
+// Mirrors app.py _group_by: noindex, redirect, non-2xx and canonicalised-
+// elsewhere pages are out. Groups whose pages all list each other as
+// hreflang alternates are language versions of one page, kept apart.
+const _SC_DUP_SPEC = {
+  '__dup_titles': { field: 'title',            ci: true,  label: 'Title' },
+  '__dup_metas':  { field: 'meta_description', ci: true,  label: 'Meta Description' },
+  '__dup_h1s':    { field: 'h1',               ci: true,  label: 'H1' },
+  '__dup_bodies': { field: 'body_hash',        ci: false, label: 'Body Hash' },
+};
+function _scDupNorm(u) {
+  if (!u) return '';
+  let p;
+  try { p = new URL(u); } catch { return String(u).toLowerCase(); }
+  const host = (p.hostname || '').toLowerCase().replace(/^www\./, '');
+  let path = p.pathname || '/';
+  path = path.replace(/\/page\/\d+\/?$/, '/').replace(/\/comment-page-\d+\/?$/, '/');
+  while (path && path !== '/') {
+    const low = path.toLowerCase();
+    if (low.endsWith('%20')) path = path.slice(0, -3);
+    else if (path.endsWith(' ') || path.endsWith('/')) path = path.slice(0, -1);
+    else break;
+  }
+  return 'https://' + host + (path || '/');
+}
+function _scDupGroups(cat) {
+  const spec = _SC_DUP_SPEC[cat];
+  if (!spec) return { real: [], locale: [] };
+  const m = new Map();
+  const rowByUrl = new Map();
+  for (const r of (crawlerResults || [])) {
+    if (r.is_pagination) continue;
+    if (r.indexable === false) continue;
+    if (_scIsRedirectSource(r)) continue;
+    if (r.status_code && r.status_code >= 300) continue;
+    const url = r.url || '';
+    const canon = (r.canonical || '').trim();
+    if (canon && _scDupNorm(canon) !== _scDupNorm(url)) continue;
+    const v = String(r[spec.field] || '').trim();
+    if (!v) continue;
+    const k = spec.ci ? v.toLowerCase() : v;
+    const bucket = m.get(k) || new Map();
+    const nu = _scDupNorm(url);
+    if (!bucket.has(nu)) bucket.set(nu, url);
+    m.set(k, bucket);
+    rowByUrl.set(url, r);
+  }
+  const real = [], locale = [];
+  const groups = [...m.entries()].filter(([, b]) => b.size > 1).sort((a, b) => b[1].size - a[1].size);
+  for (const [k, bucket] of groups) {
+    const urls = [...bucket.values()];
+    const keys = [...bucket.keys()];
+    const isLocale = urls.every(u => {
+      const alts = new Set(((rowByUrl.get(u) || {}).hreflang || []).map(h => _scDupNorm(h && h.href)));
+      return keys.every(o => o === _scDupNorm(u) || alts.has(o));
+    });
+    (isLocale ? locale : real).push({ value: k, urls });
+  }
+  return { real, locale };
+}
+
 function _scRenderDuplicatesPanel(cat) {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
   if (!main) return;
@@ -2793,59 +2898,10 @@ function _scRenderDuplicatesPanel(cat) {
   }[cat];
   if (!spec) return;
 
-  let groups = ((window.crawlerReports || {})[spec.key]) || [];
-  // Fallback: compute from crawlerResults when the server payload is absent
-  // (saved crawls predating the reports field, or in-progress views).
-  // Mirrors app.py:_normalize_url_for_dup so two crawl rows for the same
-  // page (trailing-slash, http/https, www variants, pagination tails)
-  // collapse to one entry — otherwise the user sees "duplicate group"
-  // alerts that are really one page reached two ways.
-  if (!groups.length && Array.isArray(crawlerResults) && crawlerResults.length) {
-    const normUrl = (u) => {
-      if (!u) return '';
-      let p;
-      try { p = new URL(u); } catch { return u.toLowerCase(); }
-      let host = (p.hostname || '').toLowerCase().replace(/^www\./, '');
-      let path = p.pathname || '/';
-      path = path.replace(/\/page\/\d+\/?$/, '/').replace(/\/comment-page-\d+\/?$/, '/');
-      while (path && path !== '/') {
-        const low = path.toLowerCase();
-        if (low.endsWith('%20')) path = path.slice(0, -3);
-        else if (path.endsWith(' ') || path.endsWith('/')) path = path.slice(0, -1);
-        else break;
-      }
-      if (!path) path = '/';
-      return 'https://' + host + path;
-    };
-    const m = new Map();
-    for (const r of crawlerResults) {
-      if (r.is_pagination) continue;
-      if (r.indexable === false) continue;                       // noindex — out of scope per user request
-      if (_scIsRedirectSource(r)) continue;                      // a redirect, not a page
-      if (r.status_code && r.status_code >= 300) continue;       // non-200 — not indexable
-      const canon = (r.canonical || '').trim();
-      const url = r.url || '';
-      if (canon && normUrl(canon) !== normUrl(url)) continue;    // canonicalised elsewhere
-      const v = (r[spec.field] || '').trim();
-      if (!v) continue;
-      const k = (cat === '__dup_bodies') ? v : v.toLowerCase();
-      const bucket = m.get(k) || new Map();                      // {normUrl: originalUrl}
-      const nu = normUrl(url);
-      if (!bucket.has(nu)) bucket.set(nu, url);
-      m.set(k, bucket);
-    }
-    groups = Array.from(m.entries())
-      .filter(([, bucket]) => bucket.size > 1)
-      .sort((a, b) => b[1].size - a[1].size)
-      .map(([k, bucket]) => ({
-        value: (cat === '__dup_bodies') ? k.slice(0, 8) : k,
-        urls: Array.from(bucket.values()),
-      }));
-  }
-
+  const { real: groups, locale } = _scDupGroups(cat);
   const pageCount = groups.reduce((n, g) => n + (g.urls || []).length, 0);
 
-  if (!groups.length) {
+  if (!groups.length && !locale.length) {
     panel.innerHTML = `
       <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
         <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">No duplicate ${escapeHtml(spec.label)}s found</div>
@@ -2855,37 +2911,50 @@ function _scRenderDuplicatesPanel(cat) {
     return;
   }
 
+  const localePages = locale.reduce((n, g) => n + g.urls.length, 0);
   const summary = `
     <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
       <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Duplicate ${escapeHtml(spec.label)}s</div>
       <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
-        <b>${groups.length}</b> duplicate group${groups.length === 1 ? '' : 's'} covering <b>${pageCount}</b> page${pageCount === 1 ? '' : 's'}.
-        Pages sharing the same ${escapeHtml(spec.label)} compete with each other for the same query. Pick one canonical version or rewrite to differentiate.
+        ${groups.length
+          ? `<b>${groups.length}</b> duplicate group${groups.length === 1 ? '' : 's'} covering <b>${pageCount}</b> page${pageCount === 1 ? '' : 's'}.
+             Pages sharing the same ${escapeHtml(spec.label)} compete with each other for the same query. Pick one canonical version or rewrite to differentiate.`
+          : `No duplicates to fix.`}
+        ${locale.length ? `<br><b>${locale.length}</b> more group${locale.length === 1 ? ' is' : 's are'} language or region versions of one page (${localePages} pages) that link to each other with hreflang. That is expected; they are listed last.` : ''}
+        Noindex, canonicalised and redirected pages are left out.
       </div>
     </div>`;
 
+  const card = (g, i, isLocale) => {
+    const head = (cat === '__dup_bodies')
+      ? `<span style="color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;font-size:.7rem;">hash ${escapeHtml(String(g.value || '').slice(0, 8))}…</span>`
+      : escapeHtml(g.value || '<empty>');
+    return `
+      <div class="sc-dup-card${isLocale ? ' is-locale' : ''}">
+        <div class="sc-dup-head">
+          <b>#${i + 1}</b> · ${head}
+          <span style="color:var(--text-muted);margin-left:8px;">${g.urls.length} pages share this ${escapeHtml(spec.label)}</span>
+          ${isLocale ? '<span class="sc-dup-tag">hreflang versions</span>' : ''}
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:.76rem;">
+          <tbody>
+            ${g.urls.map(u => {
+              const n = _scInlinksFor(u).length;
+              return `<tr data-url="${escapeHtml(u)}"><td style="padding:5px 12px;border-top:1px solid var(--border);"><a href="${safeHref(u)}" target="_blank" style="color:var(--accent);">${escapeHtml(u)}</a></td>
+                <td style="padding:5px 12px;border-top:1px solid var(--border);width:110px;white-space:nowrap;text-align:right;color:var(--text-muted);" title="Internal links pointing at this page">${n} inlink${n === 1 ? '' : 's'}</td></tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  };
   const body = `
     <div style="padding:0 16px 16px;">
-      ${groups.map((g, i) => {
-        const head = (cat === '__dup_bodies')
-          ? `<span style="color:var(--text-muted);font-family:'SF Mono','Menlo',monospace;font-size:.7rem;">hash ${escapeHtml(g.value || '')}…</span>`
-          : escapeHtml(g.value || '<empty>');
-        return `
-          <div style="margin-top:12px;border:1px solid var(--border);border-radius:6px;overflow:hidden;background:var(--surface);">
-            <div style="padding:8px 12px;background:var(--surface2);border-bottom:1px solid var(--border);font-size:.78rem;">
-              <b>#${i + 1}</b> · ${head}
-              <span style="color:var(--text-muted);margin-left:8px;">${g.urls.length} pages share this ${escapeHtml(spec.label)}</span>
-            </div>
-            <table style="width:100%;border-collapse:collapse;font-size:.76rem;">
-              <tbody>
-                ${g.urls.map(u => {
-                  const safe = escapeHtml(u);
-                  return `<tr data-url="${safe}"><td style="padding:5px 12px;border-top:1px solid var(--border);"><a href="${safe}" target="_blank" style="color:var(--accent);">${safe}</a></td></tr>`;
-                }).join('')}
-              </tbody>
-            </table>
-          </div>`;
-      }).join('')}
+      ${groups.map((g, i) => card(g, i, false)).join('')}
+      ${locale.length ? `
+        <details class="sc-dup-locale"${groups.length ? '' : ' open'}>
+          <summary>Language and region versions: ${locale.length} group${locale.length === 1 ? '' : 's'} (expected with hreflang)</summary>
+          ${locale.map((g, i) => card(g, i, true)).join('')}
+        </details>` : ''}
     </div>`;
 
   panel.innerHTML = summary + body;
@@ -2949,6 +3018,12 @@ function _scRenderRedirChainsPanel() {
               <b>#${i + 1}</b> · <span style="color:var(--text-muted);">starting URL</span>
               <a href="${escapeHtml(c.url || '')}" target="_blank" style="color:var(--accent);margin-left:6px;">${escapeHtml(c.url || '')}</a>
               <span style="color:var(--text-muted);margin-left:8px;">${c.hops} hop${c.hops === 1 ? '' : 's'}</span>
+              ${(() => {
+                // The pages to edit are the ones linking to the first URL.
+                const first = ((c.chain || [])[0] && (c.chain[0].url || c.chain[0])) || c.url || '';
+                const n = _scLookupInlinks(first).length;
+                return `<button type="button" class="link-btn" style="margin-left:10px;" onclick="openDockMulti([${jsArg(first)}])" title="Pages that link to the start of this chain: point them at the final URL">linked from ${n} page${n === 1 ? '' : 's'}</button>`;
+              })()}
             </div>
             <div style="padding:8px 14px;">${hops || '<span style="color:var(--text-muted);font-size:.72rem;">no chain detail captured</span>'}</div>
           </div>`;
@@ -3086,6 +3161,18 @@ function _scRenderResponseCodesPanel() {
 // Deep Pages — pages 4+ clicks from the homepage. Hard for crawlers to
 // discover, and a sign of weak internal linking. Suggests adding a link
 // from a higher-traffic page to flatten the depth.
+// A page a fixer can act on: answers 2xx itself, indexable, not pagination,
+// not a redirect. The sidebar counts and the report panels share this so a
+// badge and its list never disagree.
+function _scIsRealPage(r) {
+  if (!r) return false;
+  if (r.is_pagination) return false;
+  if (r.indexable === false) return false;
+  if (_scIsRedirectSource(r)) return false;
+  if (r.status_code && (r.status_code < 200 || r.status_code >= 300)) return false;
+  return true;
+}
+
 function _scRenderDeepPagesPanel() {
   const main = document.querySelector('.results-panel') || document.getElementById('crawler-results');
   if (!main) return;
@@ -3095,7 +3182,7 @@ function _scRenderDeepPagesPanel() {
   panel.id = 'deep-pages-panel';
   panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0;font-size:12px;';
 
-  const deep = (crawlerResults || []).filter(r => (r.depth || 0) >= 4)
+  const deep = (crawlerResults || []).filter(r => (r.depth || 0) >= 4 && _scIsRealPage(r))
     .sort((a, b) => (b.depth || 0) - (a.depth || 0));
   if (!deep.length) {
     panel.innerHTML = `
@@ -3112,22 +3199,26 @@ function _scRenderDeepPagesPanel() {
       <div style="font-size:.75rem;color:var(--text-muted);line-height:1.55;">
         <b>${deep.length}</b> page${deep.length === 1 ? '' : 's'} buried 4 or more clicks deep. Search engines crawl deep pages less often
         and pass less PageRank to them. Add internal links from higher-traffic pages to flatten the site structure.
+        Select rows and right-click to see the pages that link to them now.
       </div>
     </div>`;
   const body = `
     <table class="crawler-grid" style="font-size:.78rem;">
-      <colgroup><col style="width:90px"><col><col style="width:240px"></colgroup>
+      <colgroup><col style="width:90px"><col><col style="width:80px"><col style="width:240px"></colgroup>
       <thead><tr>
         <th><span class="th-label">Depth</span></th>
         <th><span class="th-label">URL</span></th>
+        <th><span class="th-label">Inlinks</span></th>
         <th><span class="th-label">Title</span></th>
       </tr></thead>
       <tbody>
         ${deep.map(r => {
           const u = escapeHtml(r.url || '');
+          const n = _scInlinksFor(r.url).length;
           return `<tr data-url="${u}">
             <td style="text-align:center;font-weight:700;color:${r.depth >= 6 ? '#ef4444' : '#f59e0b'};">${r.depth || 0}</td>
-            <td><a href="${u}" target="_blank" style="color:var(--accent);">${u}</a></td>
+            <td><a href="${safeHref(r.url)}" target="_blank" style="color:var(--accent);">${u}</a></td>
+            <td style="text-align:center;font-weight:600;"><button type="button" class="link-btn" onclick="openDockMulti([${jsArg(r.url)}])" title="Show the pages that link here">${n}</button></td>
             <td style="color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(r.title || '')}</td>
           </tr>`;
         }).join('')}
@@ -3163,7 +3254,7 @@ function _scIssueTally(pages) {
   for (const r of pages) {
     const seenSev = new Set();
     const seen = new Set();
-    for (const issue of (r.issues || [])) {
+    for (const issue of _scSevIssues(r)) {
       const sev = sevOf(issue);
       if (!(sev in affected)) continue;
       const [label, slug] = _scIssueGroup(issue);
@@ -3312,8 +3403,23 @@ function _scRenderSummaryPanel() {
         ${rows.length ? `<div class="card-flush" id="sum-issues">${_scIssuesTable(rows, total, _scSummaryShowAllOn ? undefined : LIMIT)}</div>
           ${rows.length > LIMIT && !_scSummaryShowAllOn ? `<div class="sum-more"><button type="button" class="link-btn" onclick="_scSummaryShowAll(this)">Show all ${rows.length} issues</button></div>` : ''}`
           : '<div class="sum-empty">No issues found on the crawled pages.</div>'}
+        ${_scSummaryRedirectNote(pages)}
       </section>
     </div>`;
+}
+
+// Redirects sit outside the severity counts; this line keeps them visible
+// with the number that matters: internal links still pointing at them.
+function _scSummaryRedirectNote(pages) {
+  const redirs = pages.filter(r => matchesCategory(r, 'Redirect'));
+  if (!redirs.length) return '';
+  let links = 0;
+  for (const r of redirs) links += _scInlinksFor(r.url).length;
+  return `<div class="sum-redirects">
+    <span class="sev-mark warn"></span>
+    <span><button type="button" class="link-btn" onclick="selectCategory('Redirect')">${redirs.length.toLocaleString()} redirecting URL${redirs.length === 1 ? '' : 's'}</button>,
+    linked ${links.toLocaleString()} time${links === 1 ? '' : 's'} from crawled pages. Not counted as page warnings: the fix is to point those links at the final URL.</span>
+  </div>`;
 }
 
 // Remembered so the live re-render during a crawl keeps the full list open.
@@ -3403,32 +3509,49 @@ function _scRenderHreflangPanel() {
     }
   }
 
+  // One card per page, pages Google indexes first. A noindex, canonicalised
+  // or redirected page drops out of the index, so its hreflang errors are
+  // low priority; they sit folded below. No cap: the old list stopped at 200.
+  const kindLabel = (k) => ({ invalid_code: 'Invalid code', dup_x_default: 'Duplicate x-default', no_return_tag: 'Missing return tag' }[k] || k);
+  const byPage = new Map();
+  for (const it of issues) {
+    if (!byPage.has(it.url)) byPage.set(it.url, []);
+    byPage.get(it.url).push(it);
+  }
+  const rowOf = new Map((crawlerResults || []).map(r => [r.url, r]));
+  const why = (r) => !r ? '' : r.indexable === false ? 'noindex' : _scIsRedirectSource(r) ? 'redirect' : r.canonical_kind === 'canonicalised' ? 'canonicalised' : '';
+  const main1 = [], low = [];
+  for (const [u, list] of byPage) (why(rowOf.get(u)) ? low : main1).push([u, list]);
+  const pageCard = ([u, list]) => {
+    const r = rowOf.get(u);
+    const tag = why(r);
+    const kinds = [...new Set(list.map(i => kindLabel(i.kind)))].join(', ');
+    return `<details class="sc-hl-page">
+      <summary><a href="${safeHref(u)}" target="_blank" style="color:var(--accent);" onclick="event.stopPropagation()">${escapeHtml(u)}</a>
+        <span class="sc-hl-kinds">${escapeHtml(kinds)}: ${list.length}</span>${tag ? `<span class="sc-dup-tag">${tag}</span>` : ''}</summary>
+      <ul>${list.map(i => `<li>${escapeHtml(i.detail)}</li>`).join('')}</ul>
+    </details>`;
+  };
+  const mainIssues = main1.reduce((n, [, l]) => n + l.length, 0);
+  const lowIssues = issues.length - mainIssues;
   const summary = `
     <div style="padding:14px 16px;border-bottom:1px solid var(--border);background:var(--surface2);">
       <div style="font-size:.9rem;font-weight:600;color:var(--text);margin-bottom:4px;">Hreflang implementation</div>
       <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:.78rem;align-items:center;line-height:1.55;">
         <span><b style="color:var(--text);font-size:1.05rem;font-variant-numeric:tabular-nums;">${pages.length}</b> <span style="color:var(--text-muted);">pages with hreflang</span></span>
-        <span><b style="color:${issues.length ? '#ef4444' : '#22c55e'};font-size:1.05rem;font-variant-numeric:tabular-nums;">${issues.length}</b> <span style="color:var(--text-muted);">validation issues</span></span>
+        <span><b style="color:${mainIssues ? '#ef4444' : '#22c55e'};font-size:1.05rem;font-variant-numeric:tabular-nums;">${mainIssues}</b> <span style="color:var(--text-muted);">validation issue${mainIssues === 1 ? '' : 's'} on pages Google indexes</span></span>
+        ${lowIssues ? `<span style="color:var(--text-muted);">${lowIssues} more on noindex, canonicalised or redirected pages</span>` : ''}
       </div>
     </div>`;
 
   const issuesBlock = issues.length ? `
     <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
-      <div style="font-size:.8rem;font-weight:600;color:#991b1b;margin-bottom:8px;">Validation issues</div>
-      <table style="width:100%;border-collapse:collapse;font-size:.74rem;">
-        <thead><tr style="background:var(--surface2);">
-          <th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);">URL</th>
-          <th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);">Issue</th>
-          <th style="text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);">Detail</th>
-        </tr></thead>
-        <tbody>
-          ${issues.slice(0, 200).map(it => {
-            const u = escapeHtml(it.url);
-            const kindLabel = ({invalid_code:'Invalid code', dup_x_default:'Duplicate x-default', no_return_tag:'Missing return tag'}[it.kind]) || it.kind;
-            return `<tr><td style="padding:5px 10px;border-bottom:1px solid var(--border);"><a href="${u}" target="_blank" style="color:var(--accent);">${u}</a></td><td style="padding:5px 10px;border-bottom:1px solid var(--border);color:#991b1b;font-weight:600;">${kindLabel}</td><td style="padding:5px 10px;border-bottom:1px solid var(--border);color:var(--text-muted);">${escapeHtml(it.detail)}</td></tr>`;
-          }).join('')}
-        </tbody>
-      </table>
+      <div style="font-size:.8rem;font-weight:600;color:#991b1b;margin-bottom:8px;">Validation issues on ${byPage.size} page${byPage.size === 1 ? '' : 's'}</div>
+      ${main1.length ? main1.map(pageCard).join('') : '<div style="font-size:.75rem;color:var(--ok-fg);">None on pages Google indexes.</div>'}
+      ${low.length ? `<details class="sc-dup-locale"${main1.length ? '' : ' open'}>
+        <summary>Lower priority: ${low.length} noindex, canonicalised or redirected page${low.length === 1 ? '' : 's'} (${low.reduce((n, [, l]) => n + l.length, 0)} issues)</summary>
+        ${low.map(pageCard).join('')}
+      </details>` : ''}
     </div>` : '';
 
   const declsBlock = `
@@ -3476,7 +3599,10 @@ function _renderSchemaByPagePanel() {
   const panel = document.createElement('div');
   panel.id = 'schema-by-page-panel';
   panel.style.cssText = 'flex:1;overflow:auto;min-height:0;padding:0 14px 14px;font-size:12px;';
-  const rows = (crawlerResults || []).filter(r => !r.error);
+  // Real pages only: a redirect, an error or a noindex page carries no
+  // schema of its own, and counting them made "without" read like 700
+  // pages to fix when every one was a redirect.
+  const rows = (crawlerResults || []).filter(r => !r.error && _scIsRealPage(r));
   if (!rows.length) {
     panel.innerHTML = '<div style="padding:20px;color:var(--text-muted);">No crawled pages yet.</div>';
     main.appendChild(panel);
@@ -3883,7 +4009,7 @@ function updateCounts() {
   });
 
   for (const page of crawlerResults) {
-    const issues = page.issues || [];
+    const issues = _scSevIssues(page);
     // Inclusive severity counts: a page contributes to every severity bucket
     // for which it has at least one issue. Matches the filter behaviour so
     // "Warnings: N" always equals the number of rows shown when clicked.
@@ -3902,7 +4028,7 @@ function updateCounts() {
   // not a per-page filter.
   if ('__schema_by_page' in counts) {
     counts.__schema_by_page = (crawlerResults || []).filter(
-      r => !r.error && Array.isArray(r.schema_types) && r.schema_types.length
+      r => !r.error && _scIsRealPage(r) && Array.isArray(r.schema_types) && r.schema_types.length
     ).length;
   }
   // __all_images count: total unique image srcs across the crawl, with
@@ -3936,59 +4062,18 @@ function updateCounts() {
   // only. Noindex/redirected/non-200 pages don't belong in the "All *"
   // bulk reports — the per-issue tabs ignore them too, so including them
   // here made the sidebar badge inconsistent with the panel row count.
-  const _pages = (crawlerResults || []).filter(r => {
-    if (r.is_pagination) return false;
-    if (r.indexable === false) return false;
-    if (_scIsRedirectSource(r)) return false;
-    if (r.status_code && (r.status_code < 200 || r.status_code >= 300)) return false;
-    return true;
-  });
+  const _pages = (crawlerResults || []).filter(_scIsRealPage);
   if ('__all_titles' in counts)     counts.__all_titles     = _pages.filter(r => r.title).length;
   if ('__all_metas' in counts)      counts.__all_metas      = _pages.filter(r => r.meta_description).length;
   if ('__all_h1s' in counts)        counts.__all_h1s        = _pages.filter(r => r.h1).length;
   if ('__all_canonicals' in counts) counts.__all_canonicals = _pages.filter(r => r.canonical).length;
   const _reps = window.crawlerReports || {};
-  // Mirror app.py:_normalize_url_for_dup so trailing-slash and www
-  // variants of the same page don't inflate duplicate counts.
-  const _normForDup = (u) => {
-    if (!u) return '';
-    let p;
-    try { p = new URL(u); } catch { return u.toLowerCase(); }
-    let host = (p.hostname || '').toLowerCase().replace(/^www\./, '');
-    let path = (p.pathname || '/').replace(/\/page\/\d+\/?$/, '/').replace(/\/comment-page-\d+\/?$/, '/');
-    while (path && path !== '/') {
-      const low = path.toLowerCase();
-      if (low.endsWith('%20')) path = path.slice(0, -3);
-      else if (path.endsWith(' ') || path.endsWith('/')) path = path.slice(0, -1);
-      else break;
-    }
-    return 'https://' + host + (path || '/');
-  };
-  const _dupCount = (serverKey, field, ci) => {
-    const fromServer = (_reps[serverKey] || []).length;
-    if (fromServer) return fromServer;
-    const m = new Map();  // value -> Set(normalised URLs)
-    for (const r of _pages) {
-      if (r.indexable === false) continue;
-      if (_scIsRedirectSource(r)) continue;
-      if (r.status_code && r.status_code >= 300) continue;
-      const canon = (r.canonical || '').trim();
-      const url = r.url || '';
-      if (canon && _normForDup(canon) !== _normForDup(url)) continue;
-      const v = (r[field] || '').trim();
-      if (!v) continue;
-      const k = ci ? v.toLowerCase() : v;
-      if (!m.has(k)) m.set(k, new Set());
-      m.get(k).add(_normForDup(url));
-    }
-    let n = 0;
-    for (const s of m.values()) if (s.size > 1) n++;
-    return n;
-  };
-  if ('__dup_titles' in counts) counts.__dup_titles = _dupCount('duplicate_titles', 'title',            true);
-  if ('__dup_metas'  in counts) counts.__dup_metas  = _dupCount('duplicate_metas',  'meta_description', true);
-  if ('__dup_h1s'    in counts) counts.__dup_h1s    = _dupCount('duplicate_h1s',    'h1',               true);
-  if ('__dup_bodies' in counts) counts.__dup_bodies = _dupCount('duplicate_bodies', 'body_hash',        false);
+  // Real duplicates only; language versions joined by hreflang are expected.
+  const _dupCount = (cat) => _scDupGroups(cat).real.length;
+  if ('__dup_titles' in counts) counts.__dup_titles = _dupCount('__dup_titles');
+  if ('__dup_metas'  in counts) counts.__dup_metas = _dupCount('__dup_metas');
+  if ('__dup_h1s'    in counts) counts.__dup_h1s = _dupCount('__dup_h1s');
+  if ('__dup_bodies' in counts) counts.__dup_bodies = _dupCount('__dup_bodies');
 
   // Redirects & Status report counts. Redirect Chains and Response Codes
   // come straight from the server reports payload; Deep Pages and Hreflang
@@ -4304,7 +4389,7 @@ function _buildExportForCategory(cat) {
   // Schema by page
   if (cat === '__schema_by_page') {
     const rows = crawlerResults
-      .filter(r => !r.error)
+      .filter(r => !r.error && _scIsRealPage(r))
       .map(r => [
         r.url || '',
         Array.isArray(r.schema_types) ? r.schema_types.join(', ') : '',
@@ -4354,12 +4439,12 @@ function _buildExportForCategory(cat) {
   // Duplicate titles / metas / H1s / bodies — one row per URL, carrying the
   // shared value and its group so the export reads like the on-screen report.
   if (cat === '__dup_titles' || cat === '__dup_metas' || cat === '__dup_h1s' || cat === '__dup_bodies') {
-    const key = {'__dup_titles':'duplicate_titles','__dup_metas':'duplicate_metas','__dup_h1s':'duplicate_h1s','__dup_bodies':'duplicate_bodies'}[cat];
-    const valLabel = {'__dup_titles':'Title','__dup_metas':'Meta Description','__dup_h1s':'H1','__dup_bodies':'Body Hash'}[cat];
-    const groups = ((window.crawlerReports || {})[key]) || [];
+    const valLabel = _SC_DUP_SPEC[cat].label;
+    const { real, locale } = _scDupGroups(cat);
     const rows = [];
-    groups.forEach((g, i) => (g.urls || []).forEach(u => rows.push([i + 1, g.value || '', (g.urls || []).length, u])));
-    return { header: ['Group', valLabel, 'Pages in Group', 'URL'], rows };
+    real.forEach((g, i) => g.urls.forEach(u => rows.push([i + 1, g.value || '', g.urls.length, 'Duplicate', u, _scInlinksFor(u).length])));
+    locale.forEach((g, i) => g.urls.forEach(u => rows.push([real.length + i + 1, g.value || '', g.urls.length, 'Language versions (hreflang)', u, _scInlinksFor(u).length])));
+    return { header: ['Group', valLabel, 'Pages in Group', 'Type', 'URL', 'Inlinks'], rows };
   }
 
   // The report tabs below render from their own data, not from
@@ -4443,10 +4528,10 @@ function _buildExportForCategory(cat) {
   // Deep pages: 4+ clicks from the home page, deepest first.
   if (cat === '__deep') {
     const rows = crawlerResults
-      .filter(r => (r.depth || 0) >= 4)
+      .filter(r => (r.depth || 0) >= 4 && _scIsRealPage(r))
       .sort((a, b) => (b.depth || 0) - (a.depth || 0))
       .map(r => [r.url || '', r.depth || 0, r.status_code || '', r.title || '',
-                 (_scLookupInlinks(r.url) || []).length]);
+                 _scInlinksFor(r.url).length]);
     return { header: ['URL', 'Clicks from home', 'Status', 'Title', 'Inlinks'], rows };
   }
 
@@ -5889,6 +5974,17 @@ function _scSetColumns(cat) {
   if (!table) return;
   const all = ['redirto','canon','inlinks','title','tlen','meta','h1','words','speed'];
   table.classList.remove(...all.map(c => 'hide-col-' + c));
+  // Length views widen the title or meta column for that view only; the
+  // user's saved width comes back on every other view.
+  table.querySelectorAll('col[data-len-orig]').forEach(c => {
+    c.dataset.savedWidth = c.dataset.lenOrig; c.style.width = c.dataset.lenOrig + 'px'; delete c.dataset.lenOrig;
+  });
+  const _lv = _scLenView(cat);
+  if (_lv) {
+    const c = table.querySelector(`col[data-col="${_lv}"]`);
+    const w = parseInt(c && (c.dataset.savedWidth || c.style.width), 10) || 0;
+    if (c && w < 460) { c.dataset.lenOrig = String(w || 200); c.dataset.savedWidth = '460'; c.style.width = '460px'; }
+  }
   const show = (cols) => {
     // Inlinks count in every view: on an error or issue list it says how
     // many pages point at the problem, which decides what to fix first.

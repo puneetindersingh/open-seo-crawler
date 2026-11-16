@@ -551,6 +551,14 @@ body.is-col-resizing * { cursor: col-resize !important; }
 .badge.error { background: var(--err-bg); color: var(--err-fg); }
 .badge.warn  { background: var(--warn-bg); color: var(--warn-fg); }
 .badge.info  { background: var(--info-bg); color: var(--info-fg); }
+/* The issue that put a row in the current view */
+.badge.is-match { font-weight: 600; box-shadow: inset 0 0 0 1px currentColor; }
+
+/* Issue-view row helpers */
+.sc-via { flex-shrink: 0; margin-left: 6px; font-size: 10px; color: var(--text-muted); background: var(--surface2); border-radius: 3px; padding: 0 5px; line-height: 16px; }
+#crawler-table td.sc-full { white-space: normal !important; overflow: visible !important; text-overflow: clip !important; line-height: 1.4; }
+.sc-over { background: var(--err-bg); color: var(--err-fg); border-radius: 2px; }
+.sc-len { display: inline-block; min-width: 26px; margin-right: 6px; font-size: 10.5px; font-weight: 700; color: var(--warn-fg); }
 
 /* CMS banner + issue info */
 #crawler-cms-banner, #issue-info-box { padding: 10px 14px; }
@@ -1318,6 +1326,9 @@ tbody:has(tr[data-url]) { user-select: none; }
 .card-flush .issues-table th:first-child, .card-flush .issues-table td:first-child { padding-left: 16px; }
 .card-flush .issues-table th:last-child, .card-flush .issues-table td:last-child { padding-right: 16px; }
 .sum-more { padding: 10px 16px; border-top: 1px solid var(--border-subtle); margin: 0 -16px -16px; }
+.sum-redirects { display: flex; gap: 8px; align-items: baseline; padding: 10px 16px; border-top: 1px solid var(--border-subtle); margin: 0 -16px -16px; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.sum-redirects .link-btn { font-weight: 600; }
+.sum-more + .sum-redirects { margin-top: 16px; }
 .sum-empty { padding: 24px; color: var(--text-muted); text-align: center; }
 .sum-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 @media (max-width: 1100px) { .sum-grid2 { grid-template-columns: 1fr; } }
@@ -1380,3 +1391,15 @@ tbody:has(tr[data-url]) { user-select: none; }
   vertical-align: 1px;
 }
 .info-box .conv-line { margin-top: 4px; }
+
+/* Duplicate groups: real duplicates first, hreflang language versions folded below */
+.sc-dup-card { margin-top: 12px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface); }
+.sc-dup-card.is-locale { opacity: .85; }
+.sc-dup-head { padding: 8px 12px; background: var(--surface2); border-bottom: 1px solid var(--border); font-size: .78rem; }
+.sc-dup-tag { margin-left: 8px; font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--info-bg); color: var(--info-fg); }
+.sc-dup-locale { margin-top: 16px; }
+.sc-dup-locale > summary { cursor: pointer; font-size: .8rem; font-weight: 600; color: var(--text-muted); padding: 6px 0; }
+.sc-hl-page { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px; background: var(--surface); font-size: .74rem; }
+.sc-hl-page > summary { cursor: pointer; padding: 6px 10px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.sc-hl-page ul { margin: 0; padding: 4px 14px 8px 30px; color: var(--text-muted); }
+.sc-hl-kinds { color: #991b1b; font-weight: 600; }
