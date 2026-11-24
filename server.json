@@ -17,13 +17,13 @@
       ]
     }
   ],
-  "version": "1.0.0",
+  "version": "1.1.0",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/puneetindersingh/open-seo-crawler/releases/download/mcp-v1.0.0/open-seo-crawler-mcp.mcpb",
-      "version": "1.0.0",
-      "fileSha256": "b858e554bd585e919f3eefe4e74dfb37324dba9ddc29c37fbcf86d6e25c836e3",
+      "identifier": "https://github.com/puneetindersingh/open-seo-crawler/releases/download/mcp-v1.1.0/open-seo-crawler-mcp.mcpb",
+      "version": "1.1.0",
+      "fileSha256": "e6a4f61f0ce814ceb401ee56b307d3d30a9fffd429f1e36d7d88364164fd2f5f",
       "transport": {
         "type": "stdio"
       }

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "open-seo-crawler",
   "display_name": "Open SEO Crawler",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Run technical SEO crawls and AI crawler readability checks with the free, self-hosted Open SEO Crawler, then read the results.",
   "long_description": "Lets your AI assistant drive Open SEO Crawler, the free self-hosted SEO crawler: start a crawl and follow it, read the issue summary grouped into errors, warnings and info, filter pages by issue, open one page with its inlinks, compare two crawls, check how Googlebot, Bingbot and the AI crawlers see any URL, read robots.txt and export to Excel.\n\nNeeds Open SEO Crawler installed and running on this computer (one-line installers for Linux, macOS and Windows in the repository). The extension talks only to that local crawler; the crawler fetches the sites you ask it to crawl and calls no AI itself.",
   "author": {
@@ -47,7 +47,7 @@
   },
   "tools": [
     {"name": "start_crawl", "description": "Crawl a website with the crawler's engine and defaults; returns a job id"},
-    {"name": "crawl_status", "description": "Progress of a crawl, and the saved crawl once it is done"},
+    {"name": "crawl_status", "description": "Progress of a crawl (can wait for its next step), and the saved crawl once it is done"},
     {"name": "stop_crawl", "description": "Stop a crawl and keep the pages fetched so far"},
     {"name": "list_crawls", "description": "Saved crawls from the last 30 days"},
     {"name": "crawl_summary", "description": "Issues by severity with page counts, duplicates, redirects, sitemap gaps, bot readability"},

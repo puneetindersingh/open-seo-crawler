@@ -32,7 +32,7 @@ from collections import OrderedDict
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 DEFAULT_URL = 'http://127.0.0.1:5002'
 
 # The browser's defaults (templates/index.html), so a crawl started from here
