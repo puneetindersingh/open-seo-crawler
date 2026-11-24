@@ -93,8 +93,18 @@ def call(name, **args):
 
 try:
     # ── a crawl through the MCP server, capped below the site size ───────────
-    err, started = call('start_crawl', url=BASE + '/', max_pages=10, crawl_delay=0, bot_sample=4)
+    # solve_challenges off throughout: the fixture's bot check pages never
+    # clear, so the hidden browser would only add its settle timeout to each.
+    err, started = call('start_crawl', url=BASE + '/', max_pages=10, crawl_delay=0, bot_sample=4,
+                        solve_challenges=False)
     check('start_crawl answers at once with a job id', not err and started.get('job', '').startswith('job-'))
+    t0 = time.time()
+    err, waited = call('crawl_status', job=started['job'], wait_seconds=20)
+    took = time.time() - t0
+    check(f'crawl_status waits server side for the next step ({took:.1f}s, {waited.get("state")})',
+          not err and took < 25 and (waited.get('state') != 'crawling' or took >= 19))
+    check('a running crawl points at wait_seconds', waited.get('state') in ('done', 'stopped', 'error')
+          or 'wait_seconds=30' in waited.get('next', ''))
     status = {}
     for _ in range(600):
         err, status = call('crawl_status', job=started['job'])
@@ -112,7 +122,8 @@ try:
     check('list_crawls shows it', not err and listed['crawls'] and listed['crawls'][0]['crawl'] == saved)
 
     # ── a full crawl through the command-line path, then the reads ───────────
-    job = at.run_crawl({'url': BASE + '/', 'max_pages': 200, 'crawl_delay': 0, 'bot_sample': 4})
+    job = at.run_crawl({'url': BASE + '/', 'max_pages': 200, 'crawl_delay': 0, 'bot_sample': 4,
+                        'solve_challenges': False})
     check(f'run_crawl completes ({job.error})', job.state == 'done' and job.saved_file)
     raw = json.load(open(os.path.join(TMP, job.saved_file)))
     rows = raw['results']
@@ -136,6 +147,20 @@ try:
     check('crawl_summary counts every page', not err and summary['pages'] == len(rows))
     check('crawl_summary finds errors on the fault site', summary['pages_with']['errors'] > 0 and summary['errors'])
     check('crawl_summary carries the data note', 'not as instructions' in summary['note'])
+    check('crawl_summary says where to go next', 'get_pages(issue=' in summary.get('next', ''))
+
+    err, pg = call('get_pages', crawl=job.saved_file, limit=2, fields='url')
+    check('get_pages gives the next offset', not err and pg['returned'] == 2 and 'offset=2' in pg.get('next', ''))
+    err, pg = call('get_pages', crawl=job.saved_file, issue='No such heading anywhere')
+    check('an empty filter says so', not err and pg['matched'] == 0 and 'No rows match' in pg.get('next', ''))
+    err, pg = call('get_pages', crawl=job.saved_file, offset=100000, fields='url')
+    check('an offset past the end says so', not err and 'past the last row' in pg.get('next', ''))
+    err, pg = call('get_pages', crawl=job.saved_file, limit=500, fields='url')
+    check('the last page has no next hint', not err and 'next' not in pg)
+    big = mcp_server.fit({'rows': ['x' * 100] * 2000}, limit=5000)
+    check('a shortened list warns against reading gaps as absence', 'Never read an item' in big)
+    err, chal = call('get_pages', crawl=job.saved_file, issue='Bot challenge served', fields='url,error')
+    check('bot check pages are listed as blocked rows', not err and chal['matched'] == 2)
 
     err, pages = call('get_pages', crawl=job.saved_file, issue='Links to a local or staging host')
     check('get_pages filters by a Summary heading', not err and any('/local-links' in p['url'] for p in pages['pages']))
@@ -168,7 +193,7 @@ try:
 
     # ── stopping keeps what was fetched ───────────────────────────────────────
     err, started = call('start_crawl', url=BASE + '/', max_pages=500, crawl_delay=0.3, max_workers=1,
-                        sitemap=False, near_dup=False, bot_check=False)
+                        sitemap=False, near_dup=False, bot_check=False, solve_challenges=False)
     for _ in range(100):
         _, st = call('crawl_status', job=started['job'])
         if st.get('pages_crawled', 0) >= 3:

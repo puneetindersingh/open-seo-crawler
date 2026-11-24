@@ -48,6 +48,29 @@ No account, no API key, no telemetry. Crawl the site here to find the pages with
 
 ## What's new (recent additions)
 
+**November 2026**
+
+- **Bot check pages served as a normal page are caught**: some firewalls answer a crawler with a check page and a 200 or 202 status instead of a 403 (Imunify360's "One moment, please...", a Cloudflare "Just a moment..." interstitial, SiteGround's sgcaptcha). Read as a page, it raised missing title, missing H1 and thin content on every URL of the site. Those rows are now marked **Bot challenge served instead of the page** as an error, skip the content checks, and go through the challenge browser when *Solve bot challenges* is on. The match is on the exact page title, so ordinary Cloudflare pages that load its challenge scripts are not flagged.
+- **Redirect loops**: a URL whose redirects never reach a page used to be retried three times, following up to 30 redirects each time (up to about 90 requests at one host), then shown as a generic error. The crawler now follows at most 10 hops, does not retry, and reports **Redirect loop** as an error naming the hops, e.g. `/a/ -> /b/ -> /a/`.
+- **Shopify search tracking parameters** (`_pos`, `_sid`, `_ss`, `_kx`) are stripped like `utm_*`, so a product linked from search results is one row, not one per result position.
+- **MCP tools say what to do next**: `crawl_status` takes `wait_seconds` (up to 50) and waits for the crawl's next step instead of being polled in a loop; `get_pages` gives the offset of the next page, and says when a filter matches nothing or the offset is past the end; `crawl_summary` points at the tools that open the pages behind an issue; every tool description names the sibling tool for the neighbouring job; a reply shortened to fit says that items left out are still in the crawl.
+- **Host variant check**: after the crawl, `http://` and the www or bare twin of the start page are requested (up to 3 requests). A temporary host redirect, an http version that never reaches https, and www and non-www both answering 200 are flagged.
+- **Issues ranked by what they touch**: inside each severity, issues sort by how many pages they hit times the most central page among them (click depth and internal links), in the Summary, the AI brief and `crawl_summary`.
+- **Convention tag**: findings that rest on a common guideline rather than a search engine rule (title and meta lengths, heading habits, word counts, speed and depth thresholds) are tagged *Convention* in the Summary, the issue views and the AI brief.
+- **Issue views built around fixing the site**: duplicate groups are uncapped, hreflang language versions of one page fold into an "expected" section instead of counting as duplicates, redirects get their own line in the Summary (with the internal links still pointing at them) instead of inflating Warnings, issue views show the page that answered with a "via redirect" note, the issue that put a row in a view comes first, and title and meta length views mark the part past the limit.
+- **Inlinks everywhere**: an Inlinks column in every view and every page export; Ctrl+A selects the visible rows, and the right-click menu shows or copies all their inlinks. The Canonicalised view shows where each page points and that target's status in the crawl.
+- **Fixes from real-site crawls**: sitemap and near-duplicate counts no longer reset to 0 during a crawl and are saved with the crawl; a link that lands on a tarball or PDF is skipped at the content-type check without downloading it; checksum files, archives and feeds no longer count as pages; Response codes count a followed redirect as its 3xx plus the page it landed on; a meta description made only of whitespace counts as missing; missing canonical and missing meta description are warnings, not errors.
+- **Crawl Budget page removed**. The soft-404 and URL-trap probe that ran beside it still runs after every crawl.
+- **Latency-aware pacing**: a host that answers slowly gets its requests spaced out; Retry-After dates are read as well as seconds; a robots.txt starting with a byte order mark no longer loses its first group.
+
+**October 2026**
+
+- **Links to redirects are always reported**: a redirect that landed on a page the crawl already held used to vanish, so links to 301s went missing and Response codes read 0 redirects. Each such redirect now has its own row (the requested URL, its 3xx and where it goes). Query strings are kept as written, so a bare `?view` is no longer rewritten to `?view=` and reported as a redirect the site never links to.
+- **Inert markup is not a fault**: SVG icon titles, `<template>` contents, strings inside scripts and quick-view dialogs no longer raise "Title outside head" or "page starts at H2", and an `alt=""` copy of an image the page already describes is not flagged.
+- **Link placement**: copy, nav, header and footer links are told apart by the elements they sit in, not by classes on `<body>` (theme settings such as `et-tb-has-footer` labelled every copy link as footer).
+
+**Earlier**
+
 - **Use with AI, two ways**: the top bar button now opens on a choice. *Paste a brief* copies the crawl as a Markdown brief for any AI chat. *Connect an AI app* gives a setup prompt with this computer's exact command and paths: paste it into an AI app that can run commands and it adds the MCP server itself. The command and the settings block are there to copy too, for setting it up by hand.
 - **A plainer look, modelled on the crawlers people already use**: measured against the desktop and hosted crawlers. A light grey canvas with white panels, one blue, sentence case throughout, Lighthouse-style severity marks, a Summary laid out like an audit overview (crawled pages by status, pages with issues by severity, crawl details, one table of issues), plain 200s with badges only for redirects and errors, row actions on hover, and a dark mode in neutral greys. The settings column folds away once a crawl is on screen (Settings in the top bar brings it back), and Start crawl stays visible however long the settings get.
 - **Crawl progress and a live Summary**: a bar under the top bar shows how far a crawl has got (pages crawled against crawled plus queued, capped at the page limit), the queue, the time so far and an estimate of the time left. A new crawl opens on the Summary, which fills in as pages arrive.
@@ -78,7 +101,8 @@ No account, no API key, no telemetry. Crawl the site here to find the pages with
 
 - **Concurrent crawling**: 5 workers by default, 1-20 configurable. Per-host politeness keeps you under target rate limits while still moving fast.
 - **CMS detection + one-click recommendations**: auto-detects Shopify, WordPress (+ Yoast / Rank Math), Webflow, Wix, Squarespace, Kajabi, Ghost, Drupal, HubSpot, Joomla. Applies sensible exclude patterns and JS-render settings per platform.
-- **Smart retry**: exponential backoff on 429 / 5xx / connection errors. Respects `Retry-After`, as seconds or as a date. Per-host adaptive back-off doubles when a server starts rate-limiting, decays back when it recovers.
+- **Smart retry**: exponential backoff on 429 / 5xx / connection errors. Respects `Retry-After`, as seconds or as a date. Per-host adaptive back-off doubles when a server starts rate-limiting, decays back when it recovers. Redirect loops are not retried: at most 10 hops are followed, then the URL is reported as a loop.
+- **Bot challenges**: a firewall check page is recognised whether it arrives as a 403, a 503 or a 200/202 page. With *Solve bot challenges* on (the default), a real Chrome gets the page instead: on Linux on a private virtual display (needs `xvfb`), on Windows off-screen, so nothing opens on your screen. Unsolved, the row is reported as a challenge and skips the content checks, so the site is not buried in missing titles and thin content.
 - **Latency-aware pacing**: a host that answers slowly without ever returning an error gets its requests spaced out (about two in flight instead of one per worker), and goes back to full speed when it recovers. On by default; send `auto_throttle: false` to `/crawl` to switch it off.
 - **Sitemap analysis**: fetches sitemap.xml, cross-checks against the crawl: flags missing from sitemap, orphans, sitemap-only URLs, non-200 in sitemap, redirects in sitemap.
 - **Near-duplicate content**: shingle-based Jaccard similarity flags pairs of pages that are 90%+ similar (tweakable 80 / 85 / 90 or custom).
@@ -87,6 +111,8 @@ No account, no API key, no telemetry. Crawl the site here to find the pages with
 - **Optional JS rendering via Playwright**: install separately for SPA sites (React, Vue, Wix). With **Compare with non-JS HTML** ticked, every page is crawled in both modes and the diff flags content invisible to non-JS crawlers.
 - **Built-in crawler-trap protection**: bad links and infinite URL spaces are filtered before they poison your reports, no config needed:
   - Non-page paths skipped (`/feed/`, `/wp-json/`, `/wp-admin/`, `/cdn-cgi/`, sitemap XML, cart/checkout AJAX endpoints)
+  - Tracking and action parameters stripped before a URL is queued: `utm_*`, `gclid`, `fbclid`, `srsltid` and other click IDs, Shopify search tracking (`_pos`, `_sid`, `_ss`, `_kx`), WooCommerce cart actions (`add-to-cart`, `wc-ajax` and the rest)
+  - Links to downloads with no file extension (a tarball, a PDF) are dropped at the content-type check without fetching the file
   - Repeating-segment guard: refuses `/our-team/our-team/`-style URLs minted by path-relative nav hrefs
   - Page-builder pagination/filter params (`?e-page-*`, `?e-filter-*` Elementor AJAX, `?infinity` Jetpack) never enqueued (the classic "26k queued on a 9k-page site" blow-up)
   - Bare emails written without `mailto:` (`<a href="sales@example.com">`) dropped instead of becoming fake `/contact/sales@example.com` URLs
@@ -108,16 +134,27 @@ The requests come from your machine with each crawler's user agent. CDNs and fir
 
 ### What gets checked per page
 
-- **Titles**: missing, too long (>60 chars), too short, duplicate across pages, identical to H1
-- **Meta descriptions**: missing, too long (>160 chars), too short, duplicate across pages
-- **H1 tags**: missing, multiple H1s, identical to title, duplicate across pages
-- **Canonical tags**: missing, points elsewhere (canonicalised), self-referencing
+Missing title, missing H1, HTTP 4xx/5xx, bot challenge pages and redirect loops are errors. Missing canonical and missing meta description are warnings, since search engines treat both as optional. Findings that rest on a common guideline rather than a search engine rule carry a *Convention* tag.
+
+- **Titles**: missing, too long (>60 chars), too short, wider than the results page shows (measured in pixels), duplicate across pages, identical to H1
+- **Meta descriptions**: missing (including whitespace only), too long (>160 chars), too short, wider than the results page shows, duplicate across pages
+- **H1 tags**: missing, multiple H1s, too long, identical to title, duplicate across pages; heading levels that skip (H2 to H4) and pages whose first heading is not an H1, ignoring dialogs, templates and hidden markup
+- **Canonical tags**: missing, points elsewhere (canonicalised), self-referencing; malformed, relative, pointing to http, to another host, to a URL with a fragment, to a redirect, to a non-200 or a noindex page; conflicting canonicals, and an HTML canonical that disagrees with the `Link` header
+- **Head and document**: title, canonical, meta robots or meta description outside `<head>`; duplicate title, canonical, meta description or viewport tags; no `<head>` or `<body>`, no doctype, no charset, no `lang` attribute; HTML documents over 2 MB; no compression
+- **Robots directives**: noindex in the HTML or the X-Robots-Tag header, noindex aimed at one crawler only, `none`, `unavailable_after`, conflicting directives, nosnippet and max-snippet, and a noindex that JavaScript removes
+- **Soft 404s**: a 200 page that reads as "not found"
+- **Host variants**: http that does not redirect to https, a temporary host redirect, www and non-www both answering 200
+- **Bot challenge pages**: a firewall check served instead of the page, as a 403, 503, 200 or 202
+- **Placeholders and leaks**: lorem ipsum copy, links to a local or staging host, forms that submit over http
 - **Schema.org structured data**: presence + types detected from both JSON-LD and microdata (`itemtype`) markup
 - **Open Graph + Twitter Card**: missing `og:title`, `og:image`, `twitter:card`
 - **Content**: thin content (<200 words), near-duplicate bodies (Jaccard similarity)
 - **Performance**: slow response time (>3 s)
 - **Redirects**: real redirects vs trailing-slash / www / HTTPS normalisations (classified separately so trailing-slash 301s don't pollute your Redirect Chain report)
-- **Redirect chains**: multi-hop redirects flagged with full hop list
+- **Redirect chains**: multi-hop redirects flagged with full hop list, and the pages that link to each one
+- **Redirect loops**: redirects that never reach a page, with the hops that repeat
+- **Internal links**: links to redirects, internal links to http, internal nofollow links, on-page `#anchors` that point to nothing, pagination declared by `rel` but never linked, pages with no internal outlinks, pages linked only from noindex pages
+- **Image detail**: images with no width or height, alt text over 150 characters
 - **HTTP errors**: 4xx / 5xx with retry counts
 - **Indexability**: `noindex` in meta robots or X-Robots-Tag
 - **Hreflang**: extracted, validated, missing return-tags flagged
@@ -157,6 +194,8 @@ Every report exports to XLSX so you can hand it to a content team or dev:
 - **Severity sidebar**: All Pages / Errors / Warnings / Info, each with live counts.
 - **Issue grouping**: click any severity and see issues grouped by type with the worst-affected pages listed under each.
 - **Page detail dock**: click any URL for full page metadata, all issues for that page, inlinks (with anchor text), outlinks.
+- **Inlinks in every view**: an Inlinks column on every table and export; Ctrl+A selects the visible rows, and right-click shows or copies all their inlinks, ready to paste into a sheet.
+- **Ranked issues**: inside each severity, issues are ordered by how many pages they touch and how central those pages are, so the fixes that reach the most important pages come first.
 - **Dark mode**: toggle in the topbar, persists per user.
 - **Saved crawls**: every crawl auto-saved, reopenable from the Load Saved modal, with the date it was saved shown when you open one.
 - **Use with AI**: copy or download a compact brief of the crawl, with an editable prompt, for any AI assistant; or copy a setup prompt that connects an AI app to the crawler over MCP.
@@ -392,7 +431,7 @@ If the crawler runs on another port or another machine, set `OSC_URL` (for examp
 | Tool | What it does |
 |---|---|
 | `start_crawl` | Crawl a site with the app's engine, settings and defaults. Returns a job id straight away |
-| `crawl_status`, `stop_crawl` | Follow a crawl; stop it and keep what was fetched, like the Stop button |
+| `crawl_status`, `stop_crawl` | Follow a crawl (`wait_seconds` waits up to 50 s for its next step, so the assistant need not poll); stop it and keep what was fetched, like the Stop button |
 | `list_crawls` | Saved crawls from the last 30 days, from the app or from here |
 | `crawl_summary` | The Summary tab as data: issues by severity with page counts and sample URLs, duplicates, redirect chains, sitemap gaps, near duplicates, bot readability |
 | `get_pages`, `get_page` | Filter pages by issue, severity, status code, URL or indexability; open one URL in full with its inlinks |
@@ -403,6 +442,8 @@ If the crawler runs on another port or another machine, set `OSC_URL` (for examp
 | `export_xlsx` | The .xlsx export, written to a path you choose |
 
 There is also an `seo_audit` prompt that loads the AI brief for a saved crawl. Apps that support MCP prompts show it as a slash command.
+
+Replies are shaped for an assistant: each one says what to call next (the next page of results, the tool that opens the pages behind an issue), an empty filter says so instead of returning a bare empty list, and a reply cut down to fit says which list was shortened and that the items left out are still in the crawl.
 
 A crawl started from an AI app runs exactly like one started in the browser: the same engine and defaults, then sitemap analysis, near-duplicate detection and the bot readability check, then the same auto-save, so it appears under **Load** in the app. robots.txt is respected unless you, or the AI at your request, turn it off. Read [Responsible use](#responsible-use) before letting an assistant crawl sites you don't own.
 

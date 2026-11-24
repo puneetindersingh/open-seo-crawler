@@ -45,7 +45,17 @@ import threading
 import time
 from concurrent.futures import Future
 
-_CHALLENGE_TITLE = re.compile(r"just a moment|attention required|checking your browser|verifying you are human", re.I)
+_CHALLENGE_TITLE = re.compile(r"just a moment|attention required|checking your browser|verifying you are human|one moment, please", re.I)
+
+# Bot checks that arrive as a normal 2xx page: Cloudflare's interstitial,
+# Imunify360 ("One moment, please..."), "Checking your browser" pages and
+# SiteGround's sgcaptcha redirect. Matched on the exact <title> only: real
+# Cloudflare pages carry /cdn-cgi/challenge-platform/ scripts too, so body
+# markers would flag ordinary pages.
+_CHALLENGE_2XX = re.compile(
+    r"<title>\s*(?:just a moment\.\.\.|attention required! \| cloudflare|"
+    r"one moment, please\.\.\.|checking your browser[^<]{0,40})\s*</title>|/\.well-known/sgcaptcha/",
+    re.I)
 
 # Screaming-Frog-style identity presets for the crawl session. These do not
 # defeat a challenge (see above) but do change what a server chooses to serve,
@@ -98,6 +108,20 @@ def is_challenge_response(status_code, headers, body):
     if 'cloudflare' in hdrs.get('server', '').lower() and _CHALLENGE_TITLE.search(head):
         return True
     return False
+
+
+def is_challenge_2xx(status_code, body):
+    """True if a 2xx response is a bot check page rather than the real page.
+
+    A 202 is how SiteGround and AWS WAF serve their checks; real pages are not
+    served as 202 Accepted. Any other 2xx counts only when the head of the body
+    carries one of the interstitial titles or the sgcaptcha path.
+    """
+    if not status_code or not (200 <= status_code < 300):
+        return False
+    if status_code == 202:
+        return True
+    return bool(_CHALLENGE_2XX.search((body or '')[:20000]))
 
 
 class ChallengeBrowser:

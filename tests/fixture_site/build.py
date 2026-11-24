@@ -91,6 +91,13 @@ def build(base='http://127.0.0.1:8099'):
         '<a href="/inert-markup/">Inert markup</a> '
         '<a href="/noindex-target/">A noindex page</a> '
         '<a href="/accents/">Accented title</a> '
+        # Bot checks served as 2xx pages, a redirect loop, and a link
+        # carrying Shopify's search tracking parameters (same page as
+        # /services/, so it must not become a second row).
+        '<a href="/challenge-200/">Bot check with a 200</a> '
+        '<a href="/challenge-202/">Bot check with a 202</a> '
+        '<a href="/loop-a/">Redirect loop</a> '
+        '<a href="/services/?_pos=2&amp;_sid=a1b2c3&amp;_ss=r&amp;_kx=zz">Services from search</a> '
         # Bot readability pages: serve.py answers some crawler user agents
         # differently, which is the fault each one carries.
         '<a href="/bot-blocked/">Blocked for one bot</a> '

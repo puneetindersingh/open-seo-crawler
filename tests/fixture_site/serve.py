@@ -22,6 +22,18 @@ REDIRECTS = {'/old-url/': (301, '/redirect-target/'),
              # Lands on a page the nav links, so the crawl holds it already.
              '/moved/': (301, '/services/')}
 GONE = {'/gone/', '/gone'}
+# Two pages that redirect to each other: a loop with no page at the end.
+REDIRECTS['/loop-a/'] = (302, '/loop-b/')
+REDIRECTS['/loop-b/'] = (302, '/loop-a/')
+LOOP_HITS = [0]   # GET requests to the loop, so the test can bound retries
+# Bot checks served as a 2xx page instead of the real one: Imunify360's
+# "One moment, please..." with a 200, SiteGround's sgcaptcha with a 202.
+CHALLENGES = {
+    '/challenge-200/': (200, '<!doctype html><html><head><title>One moment, please...</title></head>'
+                             '<body><p>Please wait while your request is being verified...</p></body></html>'),
+    '/challenge-202/': (202, '<html><head><meta http-equiv="refresh" '
+                             'content="0;/.well-known/sgcaptcha/?r=%2Fchallenge-202%2F"></head></html>'),
+}
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -83,6 +95,12 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split('?')[0]
         if self._bot_fault(path) or self._bare_param_fault():
+            return
+        if path.startswith('/loop-'):
+            LOOP_HITS[0] += 1
+        if path in CHALLENGES:
+            status, html = CHALLENGES[path]
+            self._send_html(html, status)
             return
         if path in REDIRECTS:
             status, location = REDIRECTS[path]

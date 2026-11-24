@@ -83,8 +83,14 @@ TOOLS = [
         'name': 'crawl_status',
         'title': 'Crawl progress',
         'description': ('Progress of a crawl started in this session: state (crawling, sitemap, near_dup, bot_check, '
-                        'saving, done, stopped, error), pages so far, queue, and the saved crawl name once done.'),
-        'inputSchema': _schema({'job': {'type': 'string', 'description': 'Job id from start_crawl (default: the latest).'}}),
+                        'saving, done, stopped, error), pages so far, queue, and the saved crawl name once done. '
+                        'Pass wait_seconds to wait for the next step here instead of calling it in a loop. '
+                        'For a crawl that is already saved, use list_crawls.'),
+        'inputSchema': _schema({
+            'job': {'type': 'string', 'description': 'Job id from start_crawl (default: the latest).'},
+            'wait_seconds': {'type': 'integer', 'minimum': 0, 'maximum': 50,
+                             'description': 'Wait up to this long for the crawl to reach its next state or finish (default 0).'},
+        }),
         'annotations': {'readOnlyHint': True},
     },
     {
@@ -97,7 +103,8 @@ TOOLS = [
     {
         'name': 'list_crawls',
         'title': 'Saved crawls',
-        'description': 'Saved crawls from the last 30 days, newest first (crawls from the app and from here).',
+        'description': ('Saved crawls from the last 30 days, newest first (crawls from the app and from here). '
+                        'For a crawl still running, use crawl_status.'),
         'inputSchema': _schema({
             'site': {'type': 'string', 'description': 'Only crawls whose start URL or name contains this.'},
             'limit': {'type': 'integer', 'minimum': 1, 'maximum': 200, 'description': 'Default 20.'},
@@ -109,7 +116,8 @@ TOOLS = [
         'title': 'Crawl summary',
         'description': ('What the Summary tab shows, as data: pages, status codes, indexable pages, every issue '
                         'grouped into errors, warnings and info with page counts and sample URLs, duplicates, '
-                        'redirect chains, sitemap gaps, near duplicates and the bot readability results.'),
+                        'redirect chains, sitemap gaps, near duplicates and the bot readability results. '
+                        'For the pages behind one issue, use get_pages; for one URL in full, use get_page.'),
         'inputSchema': _schema({
             'crawl': _CRAWL,
             'sample_urls': {'type': 'integer', 'minimum': 0, 'maximum': 50, 'description': 'Sample URLs per issue (default 5).'},
@@ -123,7 +131,8 @@ TOOLS = [
                         '"Missing H1", or any text from the issue), severity, status (404, 3xx), URL text or '
                         'indexability. Default fields: url, status_code, title, title_len, meta_description, '
                         'meta_len, h1, word_count, depth, indexable, canonical, canonical_kind, response_time, issues. '
-                        'fields="all" returns every field (large).'),
+                        'fields="all" returns every field (large). For the issue headings and counts, use '
+                        'crawl_summary; for everything about one URL, use get_page.'),
         'inputSchema': _schema({
             'crawl': _CRAWL,
             'issue': {'type': 'string'},
@@ -143,7 +152,8 @@ TOOLS = [
         'name': 'get_page',
         'title': 'One page in detail',
         'description': ('Everything the crawl holds for one URL (meta, headings, canonical, hreflang, schema types, '
-                        'links, images, issues) plus the internal links pointing at it.'),
+                        'links, images, issues) plus the internal links pointing at it. To find a URL by part '
+                        'of its address, use get_pages with url_contains.'),
         'inputSchema': _schema({'crawl': _CRAWL, 'url': {'type': 'string'}}, ['url']),
         'annotations': {'readOnlyHint': True},
     },
@@ -151,7 +161,8 @@ TOOLS = [
         'name': 'get_brief',
         'title': 'Crawl brief (Markdown)',
         'description': ('The app\'s AI brief for a crawl: a Markdown report grouped by severity with capped URL '
-                        'lists and a page table, under an audit prompt. Good as one read of a whole crawl.'),
+                        'lists and a page table, under an audit prompt. Good as one read of a whole crawl. '
+                        'For counts only, crawl_summary is smaller.'),
         'inputSchema': _schema({
             'crawl': _CRAWL,
             'page_table': {'type': 'boolean', 'description': 'Include the page table (default true).'},
@@ -220,7 +231,7 @@ def _call(name, a):
     if name == 'start_crawl':
         return at.start_crawl(a)
     if name == 'crawl_status':
-        return at.crawl_status(a.get('job'))
+        return at.crawl_status(a.get('job'), a.get('wait_seconds') or 0)
     if name == 'stop_crawl':
         return at.stop_crawl(a.get('job'))
     if name == 'list_crawls':
@@ -259,7 +270,9 @@ def fit(result, limit=MAX_TEXT):
     if isinstance(result, str):
         if len(result) <= limit:
             return result
-        return result[:limit] + f'\n\n[Cut at {limit} characters of {len(result)}. Ask for less, e.g. page_table=false or a lower page_limit.]'
+        return result[:limit] + (f'\n\n[Cut at {limit} characters of {len(result)}. Ask for less, e.g. page_table=false '
+                                 'or a lower page_limit. Anything after the cut is still in the crawl: do not read '
+                                 'it as absent.]')
     text = json.dumps(result, ensure_ascii=False, default=str)
     if len(text) <= limit or not isinstance(result, dict):
         return text
@@ -274,7 +287,8 @@ def fit(result, limit=MAX_TEXT):
         result[key] = biggest[:-cut]
         dropped += cut
         result['truncated'] = (f'{dropped} items left out of "{key}" to fit one reply. '
-                               'Narrow the request (filters, fields, limit, offset).')
+                               'Narrow the request (filters, fields, limit, offset). Never read an item that '
+                               'is missing from this shortened list as missing from the crawl.')
         text = json.dumps(result, ensure_ascii=False, default=str)
     if len(text) > limit:
         text = text[:limit]

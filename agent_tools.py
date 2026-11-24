@@ -185,7 +185,8 @@ _PAGE_CHECK_ERR_RE = re.compile(
     r'^\d+ link\(s\) to a local or staging host|^\d+ form\(s\) submit over http|^no <head> element|'
     r'^canonical points to a non-200|^canonical points to a non-indexable|'
     r'^(search|ai search|ai assistant) bot (blocked|challenged):|^noindex only for |'
-    r'^noindex in the html is removed by javascript|^http version does not redirect to https')
+    r'^noindex in the html is removed by javascript|^http version does not redirect to https|'
+    r'^bot challenge served|^redirect loop')
 
 _PAGE_CHECK_WARN_RE = re.compile(
     r'^multiple (title tags|canonical tags|meta descriptions|viewport tags|head elements|body elements)|'
@@ -995,7 +996,8 @@ class CrawlJob:
             out['crawl'] = self.saved_file
             out['saved_as'] = self.saved_name
         if not done:
-            out['next'] = 'Call crawl_status again in a little while; crawls take minutes.'
+            out['next'] = (f'Call crawl_status(job="{self.id}", wait_seconds=30) to wait for the next step '
+                           'instead of polling; crawls take minutes.')
         elif self.saved_file:
             out['next'] = f'Read it with crawl_summary(crawl="{self.saved_file}").'
         return out
@@ -1027,8 +1029,24 @@ def _job(job_id):
     return job
 
 
-def crawl_status(job_id=None):
-    return _job(job_id).status()
+STATUS_WAIT_MAX = 50
+
+
+def crawl_status(job_id=None, wait_seconds=0):
+    """Progress of a crawl. With wait_seconds, hold the reply until the crawl
+    moves to its next state or finishes, or the wait runs out (at most 50 s), so
+    an agent that cannot sleep does not spin on this call."""
+    job = _job(job_id)
+    try:
+        wait = max(0.0, min(float(wait_seconds or 0), STATUS_WAIT_MAX))
+    except (TypeError, ValueError):
+        raise ToolError('wait_seconds must be a number of seconds (0 to 50).')
+    start_state = job.state
+    deadline = time.time() + wait
+    while time.time() < deadline and job.state == start_state \
+            and job.state not in ('done', 'stopped', 'error'):
+        time.sleep(1)
+    return job.status()
 
 
 def stop_crawl(job_id=None):
@@ -1172,6 +1190,8 @@ def crawl_summary(ref='latest', sample_urls=5):
     bots = reports.get('bot_check') or {}
     if bots.get('sample'):
         out['bot_check'] = _bot_summary(bots)
+    out['next'] = ('List the pages behind an issue with get_pages(issue="<heading>"), read one URL in full '
+                   'with get_page, or get the whole crawl as Markdown with get_brief.')
     out['note'] = DATA_NOTE
     return out
 
@@ -1254,8 +1274,20 @@ def get_pages(ref='latest', issue=None, severity=None, status=None, url_contains
     for r in page:
         keys = fields or [k for k in r.keys() if not k.startswith('_')]
         out_rows.append({k: _trim_value(k, r.get(k)) for k in keys if k in r or fields})
-    return {'crawl': d['file'], 'matched': len(rows), 'offset': offset, 'returned': len(out_rows),
-            'pages': out_rows, 'note': DATA_NOTE}
+    out = {'crawl': d['file'], 'matched': len(rows), 'offset': offset, 'returned': len(out_rows),
+           'pages': out_rows}
+    if not rows:
+        if issue or severity or status not in (None, '') or url_contains or indexable is not None:
+            out['next'] = ('No rows match these filters. Check the issue name against the headings in '
+                           'crawl_summary, or call again without a filter.')
+    elif offset >= len(rows):
+        out['next'] = f'offset {offset} is past the last row ({len(rows)} matched). Call again with a lower offset.'
+    elif offset + len(out_rows) < len(rows):
+        nxt = offset + len(out_rows)
+        out['next'] = (f'Call again with offset={nxt} for the next {min(limit, len(rows) - nxt)} '
+                       f'of {len(rows) - nxt} remaining.')
+    out['note'] = DATA_NOTE
+    return out
 
 
 def get_page(ref, url):

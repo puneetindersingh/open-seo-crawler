@@ -84,8 +84,10 @@ def post(path, payload, timeout=120):
 
 
 rows, complete = [], None
-with post('/crawl', {'url': BASE + '/', 'max_pages': 60, 'delay': 0,
-                     'render_js': False}, timeout=300) as resp:
+# solve_challenges off: the fixture's bot checks never clear, and the headed
+# browser would only add its settle timeout to every one of them.
+with post('/crawl', {'url': BASE + '/', 'max_pages': 70, 'delay': 0,
+                     'render_js': False, 'solve_challenges': False}, timeout=300) as resp:
     for raw in resp:
         line = raw.decode('utf-8', 'replace').strip()
         if not line.startswith('data: '):
@@ -408,6 +410,28 @@ check('nocache is reported', fires('/bot-ai-directives', 'nocache (bing copilot 
 check('a small max-snippet is reported', fires('/bot-ai-directives', 'max-snippet limits the text google can show'))
 check('data-nosnippet sections are counted', fires('/bot-ai-directives', 'data-nosnippet keeps sections out of snippets and ai answers (1 section(s))'))
 check('a noindex aimed at Googlebot is caught in the crawl', fires('/bot-noindex', 'noindex only for googlebot'))
+
+# Bot checks served as 2xx pages are blocked rows, not pages missing a title.
+check('a 200 bot check page is reported as a challenge',
+      fires('/challenge-200', 'bot challenge served instead of the page (http 200)'))
+check('a 200 bot check page gets no content findings',
+      quiet('/challenge-200', 'missing h1') and quiet('/challenge-200', 'thin content')
+      and quiet('/challenge-200', 'title too short'))
+check('a 202 sgcaptcha page is reported as a challenge',
+      fires('/challenge-202', 'bot challenge served instead of the page (http 202)'))
+check('a bot check row carries an error', bool((by_url.get(_key(BASE + '/challenge-200/')) or {}).get('error')))
+# A redirect loop is reported once, named, and not retried into the host.
+check('a redirect loop is reported', fires('/loop-a', 'redirect loop: '))
+check('the loop starts at the requested URL and names the one that repeats',
+      fires('/loop-a', f'redirect loop: {BASE}/loop-a/ -> {BASE}/loop-b/ -> {BASE}/loop-a/'))
+check(f'a redirect loop is not retried (loop GETs: {fixture_serve.LOOP_HITS[0]})',
+      0 < fixture_serve.LOOP_HITS[0] <= 2 * (crawler.CRAWL_MAX_REDIRECTS + 1))
+check('Shopify search parameters do not make a second row',
+      not any(('_pos=' in (r.get('url') or '') or '_sid=' in (r.get('url') or '')) for r in rows))
+import agent_tools as _at   # noqa: E402
+check('a bot check page is an error', _at.sev_of('Bot challenge served instead of the page (HTTP 200): x') == 'error')
+check('a redirect loop is an error', _at.sev_of('Redirect loop: a -> b -> a') == 'error')
+check('normal redirects stay warnings', _at.sev_of('Redirect (1 hop)') == 'warn')
 
 # ── report ────────────────────────────────────────────────────────────────────
 if FAILURES:

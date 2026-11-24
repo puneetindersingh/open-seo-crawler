@@ -973,6 +973,9 @@ _CRAWL_NOISE_PARAMS = frozenset({
     # Other common ecommerce/forum noise
     'replytocom', 'unapproved', 'moderation-hash',
     'share', 'sharesource',
+    # Shopify search and recommendation click tracking: the same product
+    # page under a new query string for every result position.
+    '_pos', '_sid', '_ss', '_kx',
 })
 
 # Match a bare email shape in an href that lacks the mailto: prefix.
@@ -1398,6 +1401,44 @@ def _detect_waf_block(resp):
     return None
 
 
+def _redirect_loop_issue(exc, start_url=None):
+    """Issue text for a URL whose redirects never reach a page.
+
+    Names the hops up to the first URL that repeats (a loop), or says the
+    chain ran past the redirect limit without repeating. requests leaves the
+    first response out of the error's history, so the requested URL is put
+    back in front."""
+    r = getattr(exc, 'response', None)
+    hops = []
+    if r is not None:
+        hops = [h.url for h in (r.history or [])] + [r.url]
+    if start_url and (not hops or hops[0] != start_url):
+        hops.insert(0, start_url)
+    seen, path = set(), []
+    for u in hops:
+        key = u.split('#', 1)[0]
+        path.append(u)
+        if key in seen:
+            shown = path if len(path) <= 6 else path[:2] + ['...'] + path[-3:]
+            return 'Redirect loop: ' + ' -> '.join(shown)
+        seen.add(key)
+    n = len(hops) - 1 if hops else CRAWL_MAX_REDIRECTS
+    return f'Redirect loop: no page after {n} redirects'
+
+
+# Redirect hops to follow before a URL counts as a loop (requests allows 30).
+CRAWL_MAX_REDIRECTS = 10
+
+
+def _is_challenge_2xx(status_code, body):
+    """True if a 2xx response is a bot check page (see challenge_browser)."""
+    try:
+        from challenge_browser import is_challenge_2xx
+        return is_challenge_2xx(status_code, body)
+    except Exception:
+        return False
+
+
 def _is_challenge_response(resp):
     """True if a 403/503 is a solvable bot interstitial (vs a hard WAF block)."""
     if resp is None:
@@ -1801,6 +1842,10 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
             except requests.exceptions.RequestException as e:
                 last_exc = e
                 resp = None
+            # A redirect loop never ends however often it is retried: each try
+            # was another 10+ requests against the host. Stop and report it.
+            if isinstance(last_exc, requests.exceptions.TooManyRedirects):
+                break
             # Decide whether to retry, fall back UA, or accept the response.
             if resp is not None:
                 if resp.status_code == 429:
@@ -2047,6 +2092,38 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
 
         # Limit body size
         raw_html = (challenge_html or _decoded_html(resp))[:5_000_000]
+        # A bot check served as a 2xx page (Imunify360 "One moment, please...",
+        # a Cloudflare interstitial, SiteGround's 202 sgcaptcha). Read as a
+        # page it fired missing title, missing H1 and thin content on every
+        # URL of the site. Try the challenge browser when it is on; otherwise
+        # record the row as blocked and skip the content checks.
+        if not challenge_html and _is_challenge_2xx(result['status_code'], raw_html):
+            result['cf_challenge'] = True
+            _ch_err = None
+            if challenge_browser is not None:
+                _ch_html, _ch_status, _ch_err = challenge_browser.fetch(url)
+                if _ch_html and not _ch_err and not _is_challenge_2xx(_ch_status or 200, _ch_html):
+                    challenge_html = _ch_html
+                    raw_html = _ch_html[:5_000_000]
+                    result['status_code'] = _ch_status or 200
+                    result['challenge_solved'] = True
+                    # Past the check the server can still answer 404 or 500.
+                    if result['status_code'] >= 400:
+                        result['error'] = f"HTTP {result['status_code']}"
+                        result['issues'].append(f"HTTP {result['status_code']} error")
+                        resp.close()
+                        return result
+                elif not _ch_err:
+                    _ch_err = 'the browser still got the check page'
+            if not challenge_html:
+                _st = result['status_code']
+                result['error'] = f'Bot challenge (HTTP {_st})'
+                result['issues'].append(
+                    f'Bot challenge served instead of the page (HTTP {_st}): '
+                    + (f'could not be solved, {_ch_err}' if challenge_browser is not None
+                       else 'enable "Solve bot challenges" to crawl this site'))
+                resp.close()
+                return result
         # Keep pre-JS HTML for the JS-vs-non-JS diff (cheap; one extra ref).
         pre_js_html = raw_html
         result['js_rendered'] = False
@@ -2781,6 +2858,9 @@ def _crawl_page(url, session, domain, pw_renderer=None, ignore_noindex=False, ca
             except Exception as e:
                 result.setdefault('render_errors', []).append(f'no-js diff: {str(e)[:160]}')
 
+    except requests.exceptions.TooManyRedirects as e:
+        result['error'] = 'Redirect loop'
+        result['issues'].append(_redirect_loop_issue(e, url))
     except requests.exceptions.Timeout:
         result['error'] = 'Timeout'
         result['issues'].append('Timeout')
@@ -4298,6 +4378,7 @@ def crawl_site():
             yield f"data: {json.dumps({'type':'info','msg':f'robots.txt unreachable ({str(e)[:80]}), continuing without'})}\n\n"
 
         session = requests.Session()
+        session.max_redirects = CRAWL_MAX_REDIRECTS
         # Realistic Chrome header set. Default python-requests UA + empty
         # Accept-Language triggers 403 on Shopify/Cloudflare-fronted stores.
         # Sec-Fetch-Site=same-origin is correct for crawl traffic (we follow
